@@ -1,0 +1,50 @@
+name: rust-web-fullstack
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: rwf-postgres
+    environment:
+      POSTGRES_USER: rwf
+      POSTGRES_PASSWORD: rwf_dev_password
+      POSTGRES_DB: rwf_demo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwf -d rwf_demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  live-search:
+    build:
+      context: .
+      dockerfile: live-search.Dockerfile
+    container_name: rwf-live-search
+    environment:
+      DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
+      RUST_LOG: info
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway.Dockerfile
+    container_name: rwf-gateway
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      live-search:
+        condition: service_started
+
+volumes:
+  postgres-data:

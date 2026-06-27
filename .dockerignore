@@ -1,0 +1,7 @@
+target/
+.git/
+.docker-data/
+node_modules/
+.playwright/
+*.log
+tmp/

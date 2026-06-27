@@ -1,0 +1,58 @@
+when:
+  - event: push
+  - event: pull_request
+
+steps:
+  check-workspace:
+    image: rust:1.94-bookworm
+    commands:
+      - cargo check --workspace --all-targets
+      - cargo check -p live-search --features ssr --all-targets
+      - rustup target add wasm32-unknown-unknown
+      - cargo check -p live-search --target wasm32-unknown-unknown --features hydrate --lib
+    depends_on: []
+
+  unit-tests:
+    image: rust:1.94-bookworm
+    commands:
+      - cargo test --workspace --lib
+    depends_on: []
+
+  clippy:
+    image: rust:1.94-bookworm
+    commands:
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo clippy -p live-search --features ssr --all-targets -- -D warnings
+    depends_on: []
+
+  fmt:
+    image: rust:1.94-bookworm
+    commands:
+      - cargo fmt --all -- --check
+    depends_on: []
+
+  # E2E tests run on self-hosted runner with docker
+  e2e-tests:
+    image: rust:1.94-bookworm
+    services:
+      postgres:
+        image: postgres:17-alpine
+        environment:
+          POSTGRES_USER: rwf
+          POSTGRES_PASSWORD: rwf_dev_password
+          POSTGRES_DB: rwf_demo
+        ports:
+          - 5432
+    commands:
+      - apt-get update && apt-get install -y --no-install-recommends postgresql-client chromium
+      - cargo build --release -p live-search --features ssr
+      - cargo build --release -p gateway-example
+      - PGPASSWORD=rwf_dev_password psql -h postgres -U rwf -d rwf_demo -f scripts/init-db.sql
+      - ./scripts/seed-db.sh "postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo"
+      - DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo ./target/release/live-search &
+      - ./target/release/gateway-example &
+      - sleep 5
+      - CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release -p e2e-tests --features integration --test live_search_test -- --test-threads=1
+      - CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release -p e2e-tests --features integration --test sse_test -- --test-threads=1
+      - CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3001 cargo test --release -p e2e-tests --features integration --test gateway_test -- --test-threads=1
+    depends_on: []

@@ -5,11 +5,38 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 
 # Rust Web Fullstack — Leptos + PostgreSQL + Axum
 
+## Canonical Reference Implementation
+
+This skill ships with a complete, runnable reference workspace next to it. Every pattern in this skill is implemented and verified in that code.
+
+| Path | What it shows |
+|------|---------------|
+| `./live-search/src/main.rs` | Pattern 15 (full triad): `CancellationToken` + `JoinSet` + signal handler + `tokio::select!` for `axum::serve` shutdown |
+| `./live-search/src/db.rs::run_pg_listener` | Critical Rule 10 + Pitfall 14: `PgListener::recv()` raced against cancellation, with cancellable backoff sleep |
+| `./gateway/src/main.rs` | Same Pattern 15 triad (no `JoinSet` needed — single-task shutdown) |
+| `./gateway/src/module.rs::ServiceHealthError` | `#[non_exhaustive]` + `#[must_use]` + doc comment design pattern |
+| `./gateway.Dockerfile` + `./live-search.Dockerfile` + `./docker-compose.yml` | Multi-stage Leptos build with `cargo-leptos`, runtime slim image, Postgres + pgAdmin + Chromium |
+| `./e2e-tests/` | chromiumoxide-based Playwright replacement for browser-driven E2E |
+| `./.woodpecker.yml` | Edition 2024 + Rust 1.94 + `--all-targets` + strict clippy with `-D warnings` |
+| `./Cargo.toml` | Workspace Edition 2024 with strict `[workspace.lints]` table |
+
+Build it yourself:
+
+```bash
+cd ~/.config/opencode/skills/rust-web-fullstack   # canonical location
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --lib
+cargo leptos build                              # SSR + hydrate
+```
+
+Or via the symlink at `~/projects/rust-web-fullstack` (alias for the same directory).
+
 ## Quick Reference
 
 ### Crate Versions (June 2026)
 
-Last verified against the `rust-web-fullstack` demo Cargo.lock on 2026-06-27.
+Last verified against the canonical `Cargo.lock` in this directory on 2026-06-27.
 
 | Crate | Version | Features | Notes |
 |-------|---------|----------|-------|

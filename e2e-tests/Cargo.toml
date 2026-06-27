@@ -1,0 +1,31 @@
+[package]
+name = "e2e-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints.rust]
+rust_2024_compatibility = { level = "deny", priority = -1 }
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+# Test code legitimately needs fail-fast assertions.
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+pedantic = { level = "deny", priority = -1 }
+todo = "deny"
+unimplemented = "deny"
+too_long_first_doc_paragraph = "allow"
+nursery = { level = "warn", priority = -1 }
+
+[features]
+default = []
+integration = []
+
+[dependencies]
+chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }

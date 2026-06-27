@@ -1,0 +1,28 @@
+# Rust
+/target/
+/pkg/             # cargo leptos build output (WASM + JS bundles)
+/**/pkg/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Docker
+.docker-data/
+
+# Environment
+.env
+.env.local
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Node (for playwright-rs drivers)
+/node_modules/
+.playwright/
+
+# Logs
+*.log
+/tmp/
