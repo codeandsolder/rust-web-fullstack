@@ -50,6 +50,7 @@ Starting a Rust web project?
 7. **Static files for hydration**: SSR pages load WASM via `/pkg/{crate}.js` and `/pkg/{crate}_bg.wasm`. You MUST mount `tower_http::services::ServeDir::new("./pkg")` (relative to server CWD) before hydration works. The Leptos build writes these to `./pkg` next to your `Cargo.toml` during `cargo leptos build`.
 8. **chromiumoxide SingletonLock**: Every test that spawns a browser MUST use a unique `user_data_dir` (e.g. `<pid>-<nanos>`). Default `~/.cache/chromiumoxide-runner/SingletonLock` collides when tests run in parallel.
 9. **Integration tests must fail visibly**: if a required service, browser, database, fixture, or SSE event is missing, panic/assert with the actual status or error. Use `#[ignore]` for intentionally optional slow tests; do not return early and report success.
+10. **Background tasks need structured-concurrency wiring**: `pg_listener_task` and any other long-running `tokio::spawn`'d task MUST accept a `CancellationToken` and race its primary await against `shutdown.cancelled()` via `tokio::select!`. Dropping a `JoinHandle` does not cancel — only `token.cancel()` cooperatively stops the task. See Pattern 15.
 
 ---
 
@@ -152,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
 use tokio::sync::broadcast;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use sqlx::postgres::PgListener;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 struct AppState {
@@ -168,7 +170,11 @@ async fn sse_handler(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn pg_listener_task(pool: sqlx::PgPool, tx: broadcast::Sender<Event>) {
+async fn pg_listener_task(
+    pool: sqlx::PgPool,
+    tx: broadcast::Sender<Event>,
+    shutdown: CancellationToken,
+) {
     let mut listener = match PgListener::connect_with(&pool).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -182,18 +188,26 @@ async fn pg_listener_task(pool: sqlx::PgPool, tx: broadcast::Sender<Event>) {
     }
 
     loop {
-        let notification = match listener.recv().await {
-            Ok(notification) => notification,
-            Err(e) => {
-                tracing::error!("PostgreSQL listener receive failed: {e}");
+        tokio::select! {
+            notification = listener.recv() => {
+                let notification = match notification {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::error!("PostgreSQL listener receive failed: {e}");
+                        break;
+                    }
+                };
+                let event = Event::default()
+                    .event(notification.channel())
+                    .data(notification.payload());
+                if let Err(e) = tx.send(event) {
+                    tracing::debug!("notification had no SSE receivers: {e}");
+                }
+            }
+            _ = shutdown.cancelled() => {
+                tracing::info!("PgListener shutting down");
                 break;
             }
-        };
-        let event = Event::default()
-            .event(notification.channel())
-            .data(notification.payload());
-        if let Err(e) = tx.send(event) {
-            tracing::debug!("notification had no SSE receivers: {e}");
         }
     }
 }
@@ -285,7 +299,10 @@ async fn test_sse_live_update() {
     // that collides when tests run in parallel.
     let profile_dir = format!("/tmp/chromiumoxide-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock must be after Unix epoch")
+            .as_nanos());
     std::fs::create_dir_all(&profile_dir).expect("failed to create Chromium profile dir");
 
     let (browser, mut handler) = Browser::launch(
@@ -375,9 +392,10 @@ let rows = sqlx::query_as!(
 use futures::future::{BoxFuture, FutureExt};
 
 #[derive(Debug, thiserror::Error)]
-#[error("service unhealthy: {reason}")]
+#[error("service unhealthy")]
 struct ServiceHealthError {
-    reason: String,
+    #[source]
+    source: sqlx::Error,
 }
 
 // Each service implements this trait
@@ -406,8 +424,7 @@ impl ServiceModule for SearxRs2 {
             sqlx::query("SELECT 1")
                 .execute(pool)
                 .await
-                .map(|_| ())
-                .map_err(|e| ServiceHealthError { reason: e.to_string() })
+                .map_err(ServiceHealthError::from)
         }
         .boxed()
     }
@@ -606,33 +623,50 @@ view! {
 // tests/common.rs — shared helpers
 
 use chromiumoxide::{Browser, BrowserConfig, Page};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub fn unique_profile_dir() -> std::path::PathBuf {
-    let dir = format!("/tmp/chromiumoxide-{}-{}",
-        std::process::id(),
-        Instant::now().elapsed().as_nanos());
+    // Per-process counter combined with nanos-since-epoch guarantees uniqueness
+    // even when two threads/tests call this at the same monotonic instant.
+    // (Plain `Instant::now().elapsed()` would return ~0 because the Instant
+    // was just created — a real correctness bug.)
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after Unix epoch")
+        .as_nanos();
+    let dir = format!("/tmp/chromiumoxide-{pid}-{nanos}-{n}", pid = std::process::id());
     std::path::PathBuf::from(dir)
 }
 
 pub async fn setup() -> TestContext {
     let dir = unique_profile_dir();
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&dir).expect("failed to create Chromium profile dir");
 
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .user_data_dir(dir.clone())
             .build()
-    ).await.unwrap();
+    ).await.expect("failed to launch Chromium");
 
+    // Pump CDP events in the background — without this the browser hangs.
+    // (Verified against chromiumoxide 0.9 README pattern; no CancellationToken
+    // needed — the handler lifecycle is driven by the Browser handle via
+    // `browser.close()`, which signals the handler channel.)
     tokio::spawn(async move { while handler.next().await.is_some() {} });
 
-    let page = browser.new_page("about:blank").await.unwrap();
+    let page = browser.new_page("about:blank").await
+        .expect("failed to create Chromium page");
 
     TestContext { browser, page, profile_dir: dir, base_url: base_url() }
 }
 
 pub async fn teardown(ctx: TestContext) {
+    // eprintln! is intentional: the Rust test harness captures stderr per-test
+    // and only displays it on failure. A tracing subscriber is not initialized
+    // in tests, so tracing::warn! would be silently dropped.
     if let Err(e) = ctx.browser.close().await {
         eprintln!("failed to close Chromium browser: {e}");
     }
@@ -704,6 +738,82 @@ let payload = r#"data: {"query":"__QUERY__","results":[]}"#
 
 Apply same rule to test JS strings — never `format!` JS source code.
 
+### Pattern 15: Structured Concurrency Triad (CancellationToken + JoinSet + select!)
+
+Wire `axum::serve`, `pg_listener_task`, and any other long-lived spawned task into a single shutdown signal so SIGINT/SIGTERM cleans up cooperatively. This satisfies the `async-cancellation-token` + `async-structured-concurrency` + `async-joinset-structured` rules from rust-skills.
+
+```rust
+// Cargo.toml
+//   tokio-util = "0.7"
+
+use std::time::Duration;
+use tokio::{signal, task::JoinSet};
+use tokio_util::sync::CancellationToken;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // ... pool setup, app router build as in Pattern 1 ...
+
+    let shutdown = CancellationToken::new();
+
+    // Spawn a signal handler that fires the shutdown token on Ctrl+C / SIGTERM
+    let signal_token = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = async {
+            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+        };
+        #[cfg(unix)]
+        let terminate = async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler")
+                .recv()
+                .await;
+        };
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
+        tracing::info!("shutdown signal received");
+        signal_token.cancel();
+    });
+
+    // Spawn pg_listener_task in a JoinSet with a child token
+    let mut tasks = JoinSet::new();
+    let listener_token = shutdown.child_token();
+    tasks.spawn(pg_listener_task(pool.clone(), tx.clone(), listener_token));
+
+    // Run axum::serve, racing against shutdown
+    let listener = tokio::net::TcpListener::bind(&addr).await
+        .with_context(|| format!("failed to bind listener on {addr}"))?;
+    let server_token = shutdown.clone();
+    let server = axum::serve(listener, app.into_make_service());
+    tokio::select! {
+        result = server => {
+            result.context("axum server exited with an error")?;
+        }
+        _ = server_token.cancelled() => {
+            tracing::info!("axum shutdown requested");
+        }
+    }
+
+    // Drain remaining tasks with a grace period
+    shutdown.cancel();
+    let _ = tokio::time::timeout(
+        Duration::from_secs(10),
+        async { while tasks.join_next().await.is_some() {} }
+    ).await;
+
+    Ok(())
+}
+```
+
+**Why this works**:
+- `CancellationToken::cancel()` is observed by every clone and child token — `pg_listener_task`'s `tokio::select!` wakes up and breaks its loop.
+- `JoinSet::join_next()` awaits task completion; tasks spawned on the set are aborted on drop (but we drain first via `timeout`).
+- A second `shutdown.cancel()` after `axum::serve` returns is idempotent — safe to call even if the signal handler already fired.
+
 ---
 
 ## Common Pitfalls
@@ -721,6 +831,7 @@ Apply same rule to test JS strings — never `format!` JS source code.
 11. **Silent test skips via `check_server_or_skip()`**: Do not use helpers that return `false` and let tests `return`. Required dependencies should panic/assert with the actual status or error; optional slow tests should use `#[ignore]`.
 12. **Stale `target/debug/deps/` fingerprints**: Every Cargo.toml change creates new `.rlib` hashes (e.g. `libplaywright-*.rlib`, `libchromiumoxide-{hash}.rlib`). Cargo never garbage-collects. Use `cargo clean` periodically or `cargo-sweep` to reclaim disk. Sccache eliminates compile time but does NOT shrink `target/`.
 13. **`sccache` is local-disk by default**: No `SCCACHE_*` env vars or `~/.config/sccache/config.toml` means `~/.cache/sccache` (local). For remote/distributed caching, set `SCCACHE_BUCKET` (S3) or `SCCACHE_REDIS` (Redis) explicitly.
+14. **Background tasks missing CancellationToken wiring**: `tokio::spawn(pg_listener_task(pool, tx))` without a `CancellationToken` parameter cannot be cancelled — the task runs forever even when the server is shutting down. The `recv().await` future IS cancel-safe (sqlx 0.9 PgListener drops the TCP read cleanly), so wrap the loop in `tokio::select!` against `token.cancelled()`, then fire the token from a Ctrl+C/SIGTERM handler in `main()`. See Pattern 15.
 
 ---
 

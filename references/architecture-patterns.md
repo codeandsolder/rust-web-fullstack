@@ -281,30 +281,43 @@ FOR EACH ROW EXECUTE FUNCTION notify_proxy_status();
 ### Gateway Listener Task
 
 ```rust
-async fn run_listener(pool: PgPool, tx: broadcast::Sender<Event>) {
-    let mut listener = PgListener::connect_with(&pool).await.unwrap();
+async fn run_listener(
+    pool: PgPool,
+    tx: broadcast::Sender<Event>,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    let mut listener = PgListener::connect_with(&pool).await
+        .expect("failed to connect PostgreSQL listener");
 
     // Subscribe to all relevant channels
     listener.listen_all(vec![
         "search_results",
         "proxy_status",
         "warpproxy_health",
-    ]).await.unwrap();
+    ]).await.expect("failed to subscribe PostgreSQL channels");
 
     loop {
-        match listener.recv().await {
-            Ok(notification) => {
-                let event = Event::default()
-                    .event(notification.channel().to_string())
-                    .data(notification.payload().to_string());
-                if let Err(e) = tx.send(event) {
-                    tracing::debug!("notification had no SSE receivers: {e}");
+        tokio::select! {
+            recv = listener.recv() => {
+                match recv {
+                    Ok(notification) => {
+                        let event = Event::default()
+                            .event(notification.channel().to_string())
+                            .data(notification.payload().to_string());
+                        if let Err(e) = tx.send(event) {
+                            tracing::debug!("notification had no SSE receivers: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("PgListener error: {}, reconnecting...", e);
+                        // PgListener auto-reconnects; recv() will work on next call
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::error!("PgListener error: {}, reconnecting...", e);
-                // PgListener auto-reconnects; recv() will work on next call
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            _ = shutdown.cancelled() => {
+                tracing::info!("PgListener shutting down");
+                break;
             }
         }
     }

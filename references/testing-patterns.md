@@ -134,37 +134,50 @@ npx playwright install chromium
 ```rust
 use chromiumoxide::{Browser, BrowserConfig};
 use futures::StreamExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 // CRITICAL: unique user_data_dir per test — see Pitfall #1
 fn unique_profile_dir() -> std::path::PathBuf {
-    let dir = format!("/tmp/chromiumoxide-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap()
-            .as_nanos());
+    // Per-process counter + nanos-since-epoch ensures uniqueness even when
+    // two threads/tests call this at the same monotonic instant.
+    // (Plain `Instant::now().elapsed()` would return ~0 because the Instant
+    // was just created — a real correctness bug.)
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after Unix epoch")
+        .as_nanos();
+    let dir = format!("/tmp/chromiumoxide-{pid}-{nanos}-{n}", pid = std::process::id());
     std::path::PathBuf::from(dir)
 }
 
 #[tokio::test]
 async fn test_ssr_page_renders() {
     let profile_dir = unique_profile_dir();
-    std::fs::create_dir_all(&profile_dir).unwrap();
+    std::fs::create_dir_all(&profile_dir)
+        .expect("failed to create Chromium profile dir");
 
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .user_data_dir(profile_dir.clone())
             .headless_mode(chromiumoxide::browser::HeadlessMode::True)
             .build()
-    ).await.unwrap();
+    ).await.expect("failed to launch Chromium");
 
-    // Pump CDP events in background — without this, the browser hangs
+    // Pump CDP events in background — without this, the browser hangs.
+    // (Verified against chromiumoxide 0.9 README; lifecycle driven by
+    // `Browser::close()` signaling the handler channel — no CancellationToken
+    // needed here.)
     tokio::spawn(async move { while handler.next().await.is_some() {} });
 
-    let page = browser.new_page("about:blank").await.unwrap();
+    let page = browser.new_page("about:blank").await
+        .expect("failed to create Chromium page");
 
     // Step 1: Navigate
-    page.goto("http://localhost:3020/search").await.unwrap();
+    page.goto("http://localhost:3020/search").await
+        .expect("failed to navigate to /search");
 
     // Step 2: Wait for hydration (poll for JS condition)
     let title_set = wait_for_js_true(
