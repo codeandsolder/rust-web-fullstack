@@ -18,10 +18,15 @@
 //! BASE_URL=http://localhost:3000 \
 //!   cargo test -p e2e-tests --features integration -- --test-threads=1 --nocapture
 //! ```
+//!
+//! Helper functions that do NOT require a browser (`base_url`, `join_url`) live
+//! in the `e2e_tests` lib crate.  Browser-bound helpers (`setup`, `teardown`,
+//! `require_server`) live in `common::*`.
 
 mod common;
 
-use common::{base_url, require_server, setup, teardown};
+use common::{require_server, setup, teardown};
+use e2e_tests::base_url;
 
 /// Example integration test that waits for a server and performs a basic
 /// browser navigation.
@@ -40,11 +45,21 @@ async fn integration_example() {
     // ── 2. Test logic ─────────────────────────────────────────────
     let ctx = setup().await;
 
-    // Navigate, interact, assert …
-    // e.g.
-    //   ctx.page.goto(&ctx.base_url).await.unwrap();
-    //   let title = ctx.page.get_title().await.unwrap();
-    //   assert!(!title.is_empty());
+    // Verify the server is still reachable and navigate to the homepage.
+    require_server(&ctx.base_url).await;
+    ctx.page
+        .goto(&ctx.base_url)
+        .await
+        .expect("Failed to navigate to base_url");
+
+    // Assert the homepage actually loaded (title is non-empty).
+    let title = ctx
+        .page
+        .get_title()
+        .await
+        .expect("Failed to read page title")
+        .unwrap_or_default();
+    assert!(!title.is_empty(), "Page title should not be empty");
 
     teardown(ctx).await;
 }
@@ -53,7 +68,7 @@ async fn integration_example() {
 // #[tokio::test]
 // #[cfg_attr(not(feature = "integration"), ignore = "requires --features integration")]
 // async fn integration_another_test() {
-//     require_server(&base_url()).await;
+//     require_server(&base_url(None)).await;
 //     let ctx = setup().await;
 //     // …
 //     teardown(ctx).await;

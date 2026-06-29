@@ -4,7 +4,9 @@ when:
 
 steps:
   check-workspace:
-    image: rust:1.94-bookworm  # TODO: pin by digest
+    # Pinned by digest for reproducible builds (matches gateway.Dockerfile
+    # and live-search.Dockerfile).
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo check --workspace --all-targets
       - cargo check -p live-search --features ssr --all-targets
@@ -13,30 +15,30 @@ steps:
     depends_on: []
 
   unit-tests:
-    image: rust:1.94-bookworm  # TODO: pin by digest
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo test --workspace --lib
     depends_on: []
 
   clippy:
-    image: rust:1.94-bookworm  # TODO: pin by digest
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo clippy --workspace --all-targets -- -D warnings
       - cargo clippy -p live-search --features ssr --all-targets -- -D warnings
     depends_on: []
 
   fmt:
-    image: rust:1.94-bookworm  # TODO: pin by digest
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo fmt --all -- --check
     depends_on: []
 
   # E2E tests run on self-hosted runner with docker
   e2e-tests:
-    image: rust:1.94-bookworm  # TODO: pin by digest
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     services:
       postgres:
-        image: postgres:17-alpine  # TODO: pin by digest — e.g. postgres:17-alpine@sha256:...
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
         environment:
           POSTGRES_USER: rwf
           POSTGRES_PASSWORD: rwf_dev_password
@@ -52,7 +54,7 @@ steps:
       - |
         bash -c '
         set -euo pipefail
-        apt-get update && apt-get install -y --no-install-recommends postgresql-client chromium
+        apt-get update && apt-get install -y --no-install-recommends postgresql-client chromium=149.0.7827.196-1~deb12u1
         rustup target add wasm32-unknown-unknown
         cargo install wasm-bindgen-cli --version 0.2.126 --locked
         cargo build --release --locked -p live-search --lib --target wasm32-unknown-unknown --features hydrate
@@ -61,13 +63,24 @@ steps:
         cargo build --release --locked -p live-search --features ssr
         cargo build --release --locked -p gateway-example
         PGPASSWORD=rwf_dev_password psql -h postgres -U rwf -d rwf_demo -f scripts/init-db.sql
+        echo "==> Applying database migrations..."
+        cargo install sqlx-cli --version 0.8.4 --no-default-features --features postgres,rustls --locked
+        DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo sqlx migrate run --source live-search/migrations
         ./scripts/seed-db.sh "postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo"
         DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo ./target/release/live-search &
         LS_PID=$!
         DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo ./target/release/gateway-example &
         GW_PID=$!
         trap "kill $LS_PID $GW_PID 2>/dev/null || true" EXIT
-        sleep 5
+        echo "==> Waiting for services to be ready..."
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:3000/ > /dev/null 2>&1 && curl -sf http://localhost:3001/health > /dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        curl -sf http://localhost:3000/ > /dev/null || { echo "live-search not ready after 60s"; exit 1; }
+        curl -sf http://localhost:3001/health > /dev/null || { echo "gateway not ready after 60s"; exit 1; }
         CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release --locked -p e2e-tests --features integration --test live_search_test -- --test-threads=1
         CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release --locked -p e2e-tests --features integration --test sse_test -- --test-threads=1
         CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3001 cargo test --release --locked -p e2e-tests --features integration --test gateway_test -- --test-threads=1

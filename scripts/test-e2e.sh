@@ -28,11 +28,14 @@ for i in {1..30}; do
   sleep 1
 done
 docker compose exec -T postgres pg_isready -U rwf -d rwf_demo
+echo "==> Building all binaries (one build, no cargo run)..."
+cargo build --release --locked -p live-search --features ssr
+cargo build --release --locked -p gateway-example
+echo "==> Applying database migrations..."
+cargo install sqlx-cli --version 0.8.4 --no-default-features --features postgres,rustls --locked
+DATABASE_URL="postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo" sqlx migrate run --source live-search/migrations
 echo "==> Seeding database..."
 ./scripts/seed-db.sh "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
-echo "==> Building all binaries (one build, no cargo run)..."
-cargo build --release -p live-search --features ssr
-cargo build --release -p gateway-example
 echo "==> Starting live-search..."
 DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
   ./target/release/live-search &
@@ -59,7 +62,7 @@ for i in {1..30}; do
 done
 curl -sf http://localhost:3001/health > /dev/null
 echo "==> Running E2E tests..."
-CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 cargo test -p e2e-tests --features integration --test live_search_test -- --test-threads=1 --nocapture
-CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 cargo test -p e2e-tests --features integration --test sse_test -- --test-threads=1 --nocapture
-CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3001 cargo test -p e2e-tests --features integration --test gateway_test -- --test-threads=1 --nocapture
+CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 cargo test --locked -p e2e-tests --features integration --test live_search_test -- --test-threads=1 --nocapture
+CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 cargo test --locked -p e2e-tests --features integration --test sse_test -- --test-threads=1 --nocapture
+CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3001 cargo test --locked -p e2e-tests --features integration --test gateway_test -- --test-threads=1 --nocapture
 echo "==> Tests complete."

@@ -135,10 +135,9 @@ pub fn build_gateway(pool: PgPool, tx: broadcast::Sender<SseEvent>) -> Router {
 
     for service in &services {
         if !service.enabled() { continue; }
-        router = router.nest(
-            &format!("/{}", service.path()),
-            service.router(),
-        );
+        // Router::nest accepts `impl AsRef<str>`, so pass the path directly
+        // instead of allocating a `String` via `format!`.
+        router = router.nest(service.path(), service.router());
     }
 
     router
@@ -179,42 +178,95 @@ pub struct GatewayState {
 
 ### PgListener Task
 
+Two important corrections to the naïve pattern:
+
+1. **Never `.expect()` on `PgListener::connect_with` or `listener.listen()`**
+   at startup. The DB may be briefly unreachable at boot; sqlx's
+   `PgListener` supports `eager_reconnect(true)` but only if you let it
+   return the error and reconnect, not panic.
+2. **Use a cancellation-aware retry loop** with `biased;` so that shutdown
+   wins when both an event and a cancel signal are ready simultaneously.
+
 ```rust
 async fn run_pg_listener(
     pool: PgPool,
     tx: broadcast::Sender<SseEvent>,
     shutdown: CancellationToken,
 ) {
-    let mut listener = PgListener::connect_with(&pool).await
-        .expect("failed to connect PostgreSQL listener");
+    let mut backoff = Duration::from_millis(250);
+    let max_backoff = Duration::from_secs(30);
 
-    listener.listen("search_results").await
-        .expect("failed to subscribe to search_results channel");
+    'connect: loop {
+        // Try to (re)connect. Cancellation takes priority.
+        let mut listener = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!("PgListener cancelled before connect");
+                return;
+            }
+            res = PgListener::connect_with(&pool) => match res {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::warn!(error = %e, backoff_ms = backoff.as_millis() as u64,
+                        "PgListener connect failed; retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                    continue 'connect;
+                }
+            },
+        };
 
-    loop {
-        tokio::select! {
-            notification = listener.recv() => {
-                match notification {
-                    Ok(n) => {
-                        let event = SseEvent { channel: n.channel().to_string(), payload: n.payload().to_string() };
-                        if let Err(e) = tx.send(event) {
-                            tracing::debug!("notification had no SSE receivers: {e}");
+        // Subscribe to channels.
+        if let Err(e) = listener.listen("search_results").await {
+            tracing::warn!(error = %e, "PgListener listen failed; reconnecting");
+            continue 'connect;
+        }
+
+        tracing::info!("PgListener connected and listening");
+        backoff = Duration::from_millis(250); // reset on success
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    tracing::info!("PgListener shutting down");
+                    return;
+                }
+                notification = listener.recv() => {
+                    match notification {
+                        Ok(n) => {
+                            let event = SseEvent {
+                                channel: Arc::from(n.channel()),
+                                payload: Arc::from(n.payload()),
+                            };
+                            if let Err(e) = tx.send(event) {
+                                tracing::debug!("notification had no SSE receivers: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            // Connection dropped — break inner loop and reconnect.
+                            tracing::warn!(error = %e, "PgListener recv failed; reconnecting");
+                            continue 'connect;
                         }
                     }
-                    Err(e) => {
-                        tracing::error!("PgListener error: {e}");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
                 }
-            }
-            _ = shutdown.cancelled() => {
-                tracing::info!("PgListener shutting down");
-                break;
             }
         }
     }
 }
 ```
+
+Notes:
+
+- `biased;` makes the `shutdown.cancelled()` branch always checked first
+  inside `tokio::select!`. Without it, when both a notification and a
+  cancel signal are ready, the random branch order may pick the notification
+  one more time before shutting down.
+- `Arc::from(&str)` keeps the broadcast payload allocation-free per
+  subscriber (per `mem-arc-str`). Use `Arc<str>` for `SseEvent`'s fields.
+- `backoff` doubles up to `max_backoff`, resets on each successful connect.
+- The connection is returned to the pool when `listener` is dropped
+  (sqlx 0.9 `PgListener::Drop`).
 
 ### NOTIFY Trigger
 

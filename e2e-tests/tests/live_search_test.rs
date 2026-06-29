@@ -17,9 +17,9 @@ mod common;
 
 use chromiumoxide::Page;
 use common::{
-    base_url, element_is_visible, require_server, setup, teardown, wait_for_element,
-    wait_for_js_true,
+    element_is_visible, require_server, setup, teardown, wait_for_element, wait_for_js_true,
 };
+use e2e_tests::base_url;
 
 // ---------------------------------------------------------------------------
 // Required integration tests (from spec)

@@ -6,6 +6,9 @@
 //! * Login is rate-limited per IP address (5 attempts per 60-second window).
 //! * JWT errors are mapped to distinct error variants (expired, invalid
 //!   signature, etc.) so callers can differentiate.
+//! * JWT validation checks `iss` and `aud` claims against `"gateway-example"`.
+//! * Timestamp overflow is treated as an internal error rather than silently
+//!   producing `exp = 0` (which jsonwebtoken treats as already-expired).
 //! * Secrets (passwords, tokens, JWT secrets) are never included in log output.
 
 use std::collections::HashMap;
@@ -29,6 +32,10 @@ use tracing::instrument;
 
 use crate::gateway::GatewayState;
 use crate::settings;
+
+/// JWT issuer and audience value — shared between encode and decode so they
+/// cannot drift.
+const JWT_ISS: &str = "gateway-example";
 
 // ---------------------------------------------------------------------------
 // Claims
@@ -101,11 +108,22 @@ impl LoginRateLimiter {
     /// Duration of the rate-limit window in seconds.
     const WINDOW: Duration = Duration::from_secs(60);
 
+    /// Maximum number of tracked IPs before an opportunistic prune is triggered.
+    ///
+    /// When the map exceeds this limit, the prune cycles through entries,
+    /// finds the median window-start, and drops everything older than it,
+    /// halving the map size.  This bounds memory usage during e.g. a
+    /// distributed brute-force attack.
+    const MAX_TRACKED_IPS: usize = 50_000;
+
     /// Check whether `ip` has exceeded the rate limit.
     ///
     /// Returns `Ok(())` if the request is allowed, `Err(AppError::AuthError)`
     /// if rate-limited.
-    #[allow(clippy::significant_drop_tightening)]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "intentional: holding guard across short branch"
+    )]
     async fn check(&self, ip: IpAddr) -> Result<(), AppError> {
         let now = Instant::now();
         let mut map = self.inner.lock().await;
@@ -124,6 +142,25 @@ impl LoginRateLimiter {
         }
 
         entry.count += 1;
+
+        // Opportunistic prune: drop stale entries and, when the map exceeds
+        // MAX_TRACKED_IPS, drop the older half so memory stays bounded.
+        if map.len() > Self::MAX_TRACKED_IPS {
+            let mut windows: Vec<(IpAddr, Instant)> = map
+                .iter()
+                .map(|(ip, bucket)| (*ip, bucket.window_start))
+                .collect();
+            windows.sort_by_key(|(_, start)| *start);
+            let median = windows[windows.len() / 2].1;
+            map.retain(|_, bucket| bucket.window_start >= median);
+        } else {
+            // SAFETY: Instant is monotonic, so subtracting a finite
+            // duration always succeeds.  We fall back to `now` (no
+            // cleanup) in the impossible-failure case.
+            let stale = now.checked_sub(Self::WINDOW).unwrap_or(now);
+            map.retain(|_, bucket| bucket.window_start >= stale);
+        }
+
         Ok(())
     }
 }
@@ -157,12 +194,27 @@ pub enum AppError {
     InvalidSignature(#[source] jsonwebtoken::errors::Error),
 
     /// Internal error that should not leak details to the client.
-    #[error("Internal error")]
+    #[error("Internal error: {context}")]
     Internal {
+        /// Human-readable context describing what operation failed.
+        context: String,
         /// The underlying error.
         #[source]
-        source: anyhow::Error,
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+impl AppError {
+    /// Construct an [`AppError::Internal`] without pulling in `anyhow`.
+    pub fn internal(
+        context: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Internal {
+            context: context.into(),
+            source: Box::new(source),
+        }
+    }
 }
 
 impl IntoResponse for AppError {
@@ -197,8 +249,8 @@ impl IntoResponse for AppError {
                 )
                     .into_response()
             }
-            Self::Internal { source } => {
-                tracing::error!(error = %source, "internal error");
+            Self::Internal { context, source } => {
+                tracing::error!(context = %context, error = %source, "internal error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": "internal error"})),
@@ -213,6 +265,12 @@ impl IntoResponse for AppError {
 // JWT helpers
 // ---------------------------------------------------------------------------
 
+/// Convert a [`DateTime<Utc>`] to a `u64` Unix timestamp, returning an
+/// [`AppError::Internal`] on overflow (e.g. dates before epoch).
+fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
+    u64::try_from(t.timestamp()).map_err(|e| AppError::internal("timestamp overflow", e))
+}
+
 /// Create a signed JWT for the given `user_id`.
 ///
 /// The token expires 24 hours from creation.
@@ -223,14 +281,14 @@ impl IntoResponse for AppError {
 #[instrument(skip(settings))]
 pub fn create_jwt(user_id: &str, settings: &settings::Settings) -> Result<String, AppError> {
     let now = Utc::now();
-    let exp = u64::try_from((now + chrono::Duration::hours(24)).timestamp()).unwrap_or(0);
+    let exp = unix_seconds(now + chrono::Duration::hours(24))?;
 
     let claims = Claims {
         sub: user_id.to_string(),
-        iat: u64::try_from(now.timestamp()).unwrap_or(0),
+        iat: unix_seconds(now)?,
         exp,
-        aud: "gateway-example".to_string(),
-        iss: "gateway-example".to_string(),
+        aud: JWT_ISS.to_string(),
+        iss: JWT_ISS.to_string(),
     };
 
     encode(
@@ -238,9 +296,7 @@ pub fn create_jwt(user_id: &str, settings: &settings::Settings) -> Result<String
         &claims,
         &EncodingKey::from_secret(settings.jwt_secret.as_bytes()),
     )
-    .map_err(|e| AppError::Internal {
-        source: anyhow::anyhow!("JWT encoding failed: {e}"),
-    })
+    .map_err(|e| AppError::internal("JWT encoding", e))
 }
 
 /// Validate a JWT and return its [`Claims`].
@@ -254,23 +310,20 @@ pub fn create_jwt(user_id: &str, settings: &settings::Settings) -> Result<String
 pub fn validate_jwt(token: &str, settings: &settings::Settings) -> Result<Claims, AppError> {
     use jsonwebtoken::errors::ErrorKind;
 
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&[JWT_ISS]);
+    validation.set_audience(&[JWT_ISS]);
+
     decode::<Claims>(
         token,
         &DecodingKey::from_secret(settings.jwt_secret.as_bytes()),
-        &Validation::new(Algorithm::HS256),
+        &validation,
     )
     .map(|data| data.claims)
-    .map_err(|e| {
-        use jsonwebtoken::errors::new_error;
-        match e.into_kind() {
-            ErrorKind::ExpiredSignature => {
-                AppError::TokenExpired(new_error(ErrorKind::ExpiredSignature))
-            }
-            ErrorKind::InvalidSignature => {
-                AppError::InvalidSignature(new_error(ErrorKind::InvalidSignature))
-            }
-            kind => AppError::Jwt(new_error(kind)),
-        }
+    .map_err(|e| match e.kind() {
+        ErrorKind::ExpiredSignature => AppError::TokenExpired(e),
+        ErrorKind::InvalidSignature => AppError::InvalidSignature(e),
+        _ => AppError::Jwt(e),
     })
 }
 
@@ -287,7 +340,7 @@ pub fn validate_jwt(token: &str, settings: &settings::Settings) -> Result<Claims
 ///
 /// Returns [`AppError::AuthError`] if the password is wrong or the IP is
 /// rate-limited.  Returns [`AppError::Internal`] if JWT signing fails.
-#[instrument(skip(state, req), fields(user_id = %req.user_id))]
+#[instrument(skip_all, fields(user_id = %req.user_id))]
 pub async fn login_handler(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     State(state): State<GatewayState>,

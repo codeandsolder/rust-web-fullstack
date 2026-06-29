@@ -16,7 +16,8 @@ use futures::StreamExt;
 
 mod common;
 
-use common::{base_url, require_server};
+use common::require_server;
+use e2e_tests::base_url;
 
 // ---------------------------------------------------------------------------
 // Required integration tests (from spec)

@@ -1,6 +1,6 @@
 ---
 name: rust-web-fullstack
-description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via sqlx, axum, SSE streaming, and LISTEN/NOTIFY live queries. Use this skill when building Rust web apps, connecting Leptos to databases, implementing live updates, working with SSR/CSR/hydration, setting up SSE endpoints, using sqlx PgListener, writing E2E tests with chromiumoxide, or doing visual testing with Chrome DevTools MCP. Trigger on mentions of Leptos, sqlx, axum, PostgreSQL, SSE, LISTEN/NOTIFY, live queries, SSR, CSR, hydration, cargo-leptos, LeptosRoutes, server functions, PgPool, PgListener, broadcast channel, EventSource, chromiumoxide, or full-stack Rust architecture.
+description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via sqlx, axum, SSE streaming, and LISTEN/NOTIFY live queries. Use this skill when building Rust web apps, connecting Leptos to databases, implementing live updates, working with SSR/CSR/hydration, setting up SSE endpoints, using sqlx PgListener, writing E2E tests with chromiumoxide, or doing visual testing with Chrome DevTools MCP. Trigger on mentions of Leptos, sqlx, axum, tower-http, tower, axum middleware, PostgreSQL, SSE, LISTEN/NOTIFY, live queries, pg_notify, SSR, CSR, hydration, cargo-leptos, LeptosRoutes, server functions, PgPool, PgListener, broadcast channel, EventSource, chromiumoxide, JWT, session, HttpOnly, WASM, wasm-bindgen, hydrate_body, Cargo workspace, [workspace.lints], Edition 2024, graceful shutdown, signal handling, SIGTERM, tracing_subscriber, RUST_LOG, EnvFilter, tracing spans, #[instrument], nextest, insta, rstest, mockall, criterion, proptest, CancellationToken, JoinSet, tokio::select!, or full-stack Rust architecture.
 ---
 
 # Rust Web Fullstack — Leptos + PostgreSQL + Axum
@@ -45,10 +45,15 @@ Last verified against the canonical `Cargo.lock` in this directory on 2026-06-27
 | `sqlx` | 0.9 | `postgres`, `runtime-tokio`, `tls-rustls`, `json`, `macros`, `migrate` | |
 | `axum` | 0.8 | `json` | |
 | `tokio` | 1 | `full` | |
+| `tokio-util` | 0.7 | `rt` | Brings `CancellationToken` for structured shutdown (Pattern 15) |
 | `tower-http` | 0.7 | `fs`, `trace` | `fs` is required for `ServeDir` |
 | `jsonwebtoken` | 10 | **MUST** set `features = ["rust_crypto"]` or `["aws_lc_rs"]` | 10.x panics without explicit crypto provider — see Pitfall 10 |
 | `reqwest` | 0.13 | `rustls`, `json`, `stream` | `stream` feature enables `bytes_stream()` for SSE reading |
 | `chromiumoxide` | 0.9 | Direct CDP, no Node.js | Replaces abandoned playwright-rs |
+| `gloo-net` | 0.7 | `eventsource` | Client-side SSE reader |
+| `gloo-timers` | 0.3 | (default) | `TimeoutFuture` for backoff/retry loops on the client (reconnect, retry) |
+| `tracing` | 0.1 | (default) | Structured logging — never `println!` or `log` |
+| `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` (Pattern 0) |
 
 ### Architecture Decision Tree
 
@@ -78,7 +83,7 @@ Starting a Rust web project?
 ### Critical Rules
 
 1. **Feature flags are mutually exclusive per build target**: `csr`, `ssr`, `hydrate` cannot coexist
-2. **Leptos 0.8 Action state**: use `action.value()` not `action.input()` — `input()` is `Some` only while pending; `value()` persists after completion. Required for "No results found." UI to display after submit.
+2. **Leptos 0.8 Action state**: use `action.value()` (the action's result) not `action.input()` (the dispatched input) when rendering post-action result UI ("No results found.", error banner, success state). Both `input()` and `value()` persist for the lifetime of the `Action`; they differ in what they hold, not in whether they survive completion. See Pattern 11.
 3. **PgListener consumes 1 connection from the pool**: Budget for it in `max_connections`
 4. **`render_app_to_stream_with_context` creates a fresh reactive tree per request**: Context injection is the standard way to share state
 5. **SSE auto-headers**: axum's `Sse::new(stream)` automatically sets `Content-Type: text/event-stream` and `Cache-Control: no-cache`
@@ -87,6 +92,115 @@ Starting a Rust web project?
 8. **chromiumoxide SingletonLock**: Every test that spawns a browser MUST use a unique `user_data_dir` (e.g. `<pid>-<nanos>`). Default `~/.cache/chromiumoxide-runner/SingletonLock` collides when tests run in parallel.
 9. **Integration tests must fail visibly**: if a required service, browser, database, fixture, or SSE event is missing, panic/assert with the actual status or error. Use `#[ignore]` for intentionally optional slow tests; do not return early and report success.
 10. **Background tasks need structured-concurrency wiring**: `pg_listener_task` and any other long-running `tokio::spawn`'d task MUST accept a `CancellationToken` and race its primary await against `shutdown.cancelled()` via `tokio::select!`. Dropping a `JoinHandle` does not cancel — only `token.cancel()` cooperatively stops the task. See Pattern 15.
+
+---
+
+## Workspace Setup
+
+### `[workspace.lints]` Table
+
+The skill advertises "strict clippy with `-D warnings`" (line 20). Here is the
+canonical table to copy into your root `Cargo.toml`. Every code sample in this
+skill compiles under these rules.
+
+```toml
+[workspace.lints.rust]
+unsafe_code = "deny"
+rust_2024_compatibility = { level = "deny", priority = -1 }
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+nursery = { level = "warn", priority = -1 }
+too_long_first_doc_paragraph = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 3   # compile dependencies with optimisations even in dev
+```
+
+Rules:
+- `#[expect(...)]` over `#[allow(...)]` so stale suppressions become visible when
+  the lint no longer fires (`err-expect-not-allow`).
+- Test crates override `unwrap_used = "allow"` and `expect_used = "allow"`
+  because tests legitimately fail-fast.
+- Never silence `panic`, `todo`, `unimplemented` — they are deliberately
+  banned in non-test code.
+
+### Tracing Subscriber Init
+
+Every `tracing::info!` / `warn!` / `error!` call in this skill is a **silent
+no-op** until a subscriber is installed. Add this at the top of every binary's
+`main` (before any logging call):
+
+```rust
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=info"));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(true).with_thread_ids(false))
+        .init();
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    init_tracing();    // FIRST — before anything that can log
+    // ... rest of main
+}
+```
+
+Enable with `RUST_LOG=debug` (or `RUST_LOG=sqlx=debug,info`) at runtime. For
+JSON output (downstream observability pipelines), swap `fmt::layer()` for
+`fmt::layer().json()`.
+
+### Structured Fields, Not Interpolation
+
+Always record structured key-value fields, never string-interpolated values
+(`obs-structured-fields`):
+
+```rust
+// RIGHT — fields are queryable in tracing-subscriber JSON / log aggregators
+tracing::error!(error = %e, channel = "search_results",
+    "PgListener recv failed; reconnecting");
+
+// WRONG — the error message is buried in the formatted string
+tracing::error!("PgListener recv failed: {e}");
+```
+
+Use `#[tracing::instrument]` for request-scoped context, and `skip` every
+argument you don't want recorded (large pools, request bodies, secrets):
+
+```rust
+#[tracing::instrument(
+    skip_all,
+    fields(req_id = %Uuid::new_v4(), user_id = %req.user_id),
+)]
+pub async fn login_handler(
+    State(state): State<GatewayState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, AppError> {
+    // `state` and `req` are NOT recorded — no Settings dump, no password leak
+    state.rate_limiter.check(addr.ip()).await?;
+    // ...
+}
+```
+
+`skip_all` is the safe default. If you must record a field, list it explicitly:
+`skip(state, req, fields(user_id = %req.user_id))`.
 
 ---
 
@@ -207,38 +321,68 @@ async fn pg_listener_task(
     tx: broadcast::Sender<Event>,
     shutdown: CancellationToken,
 ) {
-    let mut listener = match PgListener::connect_with(&pool).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!("failed to connect PostgreSQL listener: {e}");
-            return;
-        }
-    };
-    if let Err(e) = listener.listen_all(vec!["search_results", "proxy_status"]).await {
-        tracing::error!("failed to subscribe PostgreSQL listener: {e}");
-        return;
-    }
+    // Retry-with-backoff loop: never panic on transient DB unavailability.
+    // See Pattern 15 (Structured Concurrency) for the wider shutdown triad.
+    let mut backoff = Duration::from_millis(250);
+    let max_backoff = Duration::from_secs(30);
 
-    loop {
-        tokio::select! {
-            notification = listener.recv() => {
-                let notification = match notification {
-                    Ok(n) => n,
-                    Err(e) => {
-                        tracing::error!("PostgreSQL listener receive failed: {e}");
-                        break;
-                    }
-                };
-                let event = Event::default()
-                    .event(notification.channel())
-                    .data(notification.payload());
-                if let Err(e) = tx.send(event) {
-                    tracing::debug!("notification had no SSE receivers: {e}");
-                }
-            }
+    'connect: loop {
+        let mut listener = tokio::select! {
+            biased;
             _ = shutdown.cancelled() => {
-                tracing::info!("PgListener shutting down");
-                break;
+                tracing::info!(component = "pg_listener", "cancelled before connect");
+                return;
+            }
+            res = PgListener::connect_with(&pool) => match res {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::warn!(error = %e, backoff_ms = backoff.as_millis() as u64,
+                        component = "pg_listener",
+                        "PgListener connect failed; retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                    continue 'connect;
+                }
+            },
+        };
+
+        if let Err(e) = listener
+            .listen_all(vec!["search_results", "proxy_status"])
+            .await
+        {
+            tracing::warn!(error = %e, component = "pg_listener",
+                "PgListener listen_all failed; reconnecting");
+            continue 'connect;
+        }
+
+        tracing::info!(component = "pg_listener", "connected and listening");
+        backoff = Duration::from_millis(250); // reset on success
+
+        loop {
+            tokio::select! {
+                biased;                    // shutdown wins ties
+                _ = shutdown.cancelled() => {
+                    tracing::info!(component = "pg_listener", "shutting down");
+                    return;
+                }
+                notification = listener.recv() => {
+                    match notification {
+                        Ok(n) => {
+                            let event = Event::default()
+                                .event(n.channel())
+                                .data(n.payload());
+                            if let Err(e) = tx.send(event) {
+                                tracing::debug!(error = %e,
+                                    "notification had no SSE receivers");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, component = "pg_listener",
+                                "recv failed; reconnecting");
+                            continue 'connect;
+                        }
+                    }
+                }
             }
         }
     }
@@ -255,8 +399,8 @@ use futures::StreamExt;
 fn live_feed() -> impl IntoView {
     let (data, set_data) = signal(String::new());
 
-    // SSE subscription (CSR/hydrate only)
-    #[cfg(not(feature = "ssr"))]
+    // SSE subscription (WASM-only — gloo_net::eventsource has no SSR impl)
+    #[cfg(target_arch = "wasm32")]
     {
         match EventSource::new("/api/events") {
             Ok(mut es) => {
@@ -463,10 +607,9 @@ fn build_gateway(state: GatewayState) -> Router {
 
     for service in &services {
         if !service.enabled() { continue; }
-        router = router.nest(
-            &format!("/{}", service.path()),
-            service.router(),
-        );
+        // Router::nest accepts `impl AsRef<str>`; pass the path directly
+        // instead of allocating via `format!`.
+        router = router.nest(service.path(), service.router());
     }
 
     router
@@ -629,22 +772,21 @@ pub mod server {
 
 ### Pattern 11: Action.value() vs Action.input()
 
-`Action::input()` returns `Option<Input>` — `Some` only while the action is
-in-flight. Once it completes, `input()` returns `None` and any reactive
-view that reads it disappears.
+Both `Action::input()` and `Action::value()` are reactive signals that
+**persist for the lifetime of the `Action`** (i.e. for as long as the
+component that created it is mounted). They differ in what they hold, not
+in whether they survive completion:
 
-`Action::value()` returns `Option<Output>` — `Some` once the action
-**completes** (success or error), persists for the lifetime of the action.
+- `action.input()` — `Option<Input>` — the input that was dispatched to the
+  action. Useful for "Showing results for: *&lt;query&gt;*".
+- `action.value()` — `Option<Output>` — the action's result.
+  - `None` while the action is in-flight
+  - `Some(Ok(_))` on success
+  - `Some(Err(_))` on error
+  Useful for "Found N results", "No results found.", error banner.
 
 ```rust
-// WRONG: "No results found." vanishes the moment the request returns
-view! {
-    {move || search_action.input()
-        .map(|_| "No results found.")
-    }
-}
-
-// RIGHT: persists after action completes
+// Use value() for post-action result UI (errors, empty results, success)
 view! {
     {move || match search_action.value() {
         Some(Ok(results)) if results.is_empty() => view! { <p>"No results found."</p> }.into_any(),
@@ -653,7 +795,17 @@ view! {
         None => view! { <p>"Type a query and submit"</p> }.into_any(),
     }}
 }
+
+// Use input() when you want to echo back what the user submitted
+view! {
+    <p>{move || search_action.input()
+        .map(|q| format!("Showing results for: {q}"))}</p>
+}
 ```
+
+A common mistake is to believe `input()` "becomes `None` after completion"
+— it does not. The reason to prefer `value()` for result UI is that you
+want the action's **output**, not its input.
 
 ### Pattern 12: chromiumoxide E2E Helpers
 
@@ -866,6 +1018,168 @@ async fn main() -> anyhow::Result<()> {
 - `CancellationToken::cancel()` is observed by every clone and child token — `pg_listener_task`'s `tokio::select!` wakes up and breaks its loop.
 - `JoinSet::join_next()` awaits task completion; tasks spawned on the set are aborted on drop (but we drain first via `timeout`).
 - A second `shutdown.cancel()` after `axum::serve` returns is idempotent — safe to call even if the signal handler already fired.
+
+#### `biased;` — shutdown wins ties
+
+When a notification arrives at the same instant as a cancel signal, `tokio::select!`
+picks branches in a non-deterministic order by default. Add `biased;` so the
+shutdown branch is **always** checked first:
+
+```rust
+loop {
+    tokio::select! {
+        biased;                     // <-- shutdown wins ties
+        _ = shutdown.cancelled() => { break; }
+        notification = listener.recv() => { /* ... */ }
+    }
+}
+```
+
+Without `biased;`, the listener may drain one more notification after
+shutdown was requested, which can hold the connection open briefly and
+produce a non-graceful exit. This is the `async-structured-concurrency`
+rule from rust-skills.
+
+#### `Send + 'static` for spawned futures
+
+Every `tokio::spawn(...)` requires the future to be `Send + 'static`. That
+means:
+
+- Captured data must be `Send` and owned (no `&'a` borrows of stack data).
+- `PgNotification`, `axum::response::sse::Event`, and your event types
+  must be `Send`. `String` is `Send`; `Rc<T>` is not.
+- `serde_json::Value` is `Send` but cannot represent NaN/Inf floats
+  safely (a downstream decoder may reject them). Prefer concrete types
+  in broadcast payloads.
+- `tokio::sync::Mutex` is `Send`; `std::sync::Mutex` is `Send` but **must
+  never be held across `.await`** (`async-no-lock-await`).
+
+#### Cancellation safety
+
+Inside `tokio::select!`, a branch that loses the race is dropped. Some
+operations are safe to drop; others are not:
+
+| Operation | Cancel-safe? | Notes |
+|-----------|--------------|-------|
+| `broadcast::Receiver::recv()` | yes | drops the pending read |
+| `CancellationToken::cancelled()` | yes | already-future is itself the poll |
+| `PgListener::recv()` | yes | sqlx 0.9 drops the TCP read cleanly |
+| `tokio::net::TcpListener::accept()` | yes | drops the pending accept |
+| `tokio::sync::oneshot::Receiver` | yes | drops the pending receive |
+| `tokio::time::sleep` | yes | drops the timer |
+| `tokio::io::AsyncReadExt::read_to_end` | **no** | drops the buffer mid-read |
+| `tokio::io::AsyncReadExt::read_exact` | **no** | partial read is lost |
+| Accumulators (`vec.extend(stream)`) | **no** | partial state lost |
+
+For non-cancel-safe operations, use `tokio::pin!` or move them to a
+dedicated task that pushes results into a `mpsc` channel.
+
+### Pattern 16: Newtype IDs for Type-Safe Web Params
+
+Web handlers receive IDs as strings (path params, query params, JSON body
+fields). Wrap them in newtypes so the type system prevents mixing a
+`UserId` with an `OrgId` (`type-newtype-ids`):
+
+```rust
+use std::fmt;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash,
+         Serialize, Deserialize)]
+#[serde(try_from = "Uuid", into = "Uuid")]
+#[repr(transparent)]
+pub struct UserId(pub Uuid);
+
+impl TryFrom<Uuid> for UserId {
+    type Error = UserIdError;
+    fn try_from(value: Uuid) -> Result<Self, Self::Error> {
+        if value.is_nil() { Err(UserIdError::Nil) } else { Ok(Self(value)) }
+    }
+}
+
+impl From<UserId> for Uuid {
+    fn from(value: UserId) -> Uuid { value.0 }
+}
+
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum UserIdError {
+    #[error("user id must not be the nil UUID")]
+    Nil,
+}
+```
+
+Then in axum handlers:
+
+```rust
+async fn get_user(
+    Path(user_id): Path<UserId>,    // axum deserializes via TryFrom
+) -> Result<Json<User>, AppError> {
+    // ...
+}
+```
+
+This catches at compile time: passing an `OrgId` where a `UserId` is
+expected, swapping path param order in a route, etc.
+
+### Pattern 17: Leptos 0.8.x Knowledge Patch
+
+Three Leptos 0.8.x features added after most training cutoffs. Use them
+when applicable.
+
+#### `Show` accepts signals directly
+
+Since 0.8.6, `<Show>` accepts the condition as a `Signal`:
+
+```rust
+// Pre-0.8.6: wrap in a closure
+<Show when=move || user.get().is_some() fallback=|| view! { <Login/> }>
+
+// 0.8.6+: pass the signal directly
+<Show when=user is_some fallback=|| view! { <Login/> }>
+```
+
+#### `ShowLet` component
+
+`<ShowLet>` is a single-bind shorthand:
+
+```rust
+// Equivalent:
+<Show when=move || user.get() let=user>
+    <p>{move || user.name.to_string()}</p>
+</Show>
+
+<ShowLet when=move || user.get() let=user>
+    <p>{move || user.name.to_string()}</p>
+</ShowLet>
+```
+
+#### Bitcode server-function encoding
+
+For binary-heavy server fns, `Bitcode` encoding is faster than the default
+JSON. Enable per-fn:
+
+```rust
+use leptos::server_fn::codec::Bitcode;
+
+#[server(
+    output = Bitcode,
+    input = Bitcode,
+    endpoint = "/api/large_payload"
+)]
+pub async fn large_payload() -> Result<Vec<u8>, ServerFnError> {
+    // ...
+}
+```
+
+The client and server must agree on the codec. Bitcode requires
+`bitcode = "0.6"` in both `Cargo.toml`s.
 
 ---
 

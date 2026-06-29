@@ -239,7 +239,9 @@ view! {
         <input type="text" name="title" required/>
         <button type="submit">"Add"</button>
     </ActionForm>
-    <p>{move || add_todo.value().map(|r| format!("Added: {:?}", r))}</p>
+    // Use `Display` (`{}`) for user-facing text, not `Debug` (`{:?}`).
+    // Add a `impl std::fmt::Display for AddTodoResult` so this compiles.
+    <p>{move || add_todo.value().map(|r| format!("Added: {r}"))}</p>
 }
 ```
 
@@ -247,22 +249,33 @@ With JS: form submits via fetch, no page reload. Without JS: form POSTs directly
 
 ### Custom Error Types
 
+Use `thiserror` with `#[from]` to preserve error chains. Do not wrap the
+inner error in `String` — that loses the source chain and breaks `?`.
+
 ```rust
 #[derive(Debug, thiserror::Error, Clone, Serialize, Deserialize)]
 pub enum MyErrors {
     #[error("not found")]
     NotFound,
+    /// Preserve the original sqlx error via `#[from]` so `?` works and the
+    /// source chain is reachable from `std::error::Error::source()`.
     #[error("database error: {0}")]
-    Db(String),
+    Db(#[from] sqlx::Error),
 }
 
 impl FromServerFnError for MyErrors {
     type Encoder = JsonEncoding;
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
+        // For generic server-fn errors (network, decode, etc.) we serialize
+        // the display string because ServerFnErrorErr isn't a structured type.
         MyErrors::ServerFnError(value.to_string())
     }
 }
 ```
+
+When the inner error is foreign (e.g. `sqlx::Error`, `reqwest::Error`,
+`serde_json::Error`), prefer `#[from]` so callers can use `?` and downstream
+observability can walk the source chain via `tracing::error!(error = %e, "…")`.
 
 ---
 
@@ -289,21 +302,59 @@ async fn sse_handler(State(state): State<AppState>) -> Sse<impl Stream<Item = Re
 
 ### Client-Side: EventSource → Signal
 
-```rust
-#[cfg(not(feature = "ssr"))]  // client-only code
-{
-    let (data, set_data) = signal("".to_string());
-    let mut es = gloo_net::eventsource::futures::EventSource::new("/api/events").unwrap();
-    let mut stream = es.subscribe("search_results").unwrap();
+EventSource construction can fail (URL parsing, server unreachable) and
+`subscribe` can fail (named event may already exist). Surface errors via
+`leptos::logging::warn!` or to an `ErrorBoundary` rather than `unwrap` —
+this is **client production code**, not a test.
 
-    spawn_local(async move {
-        while let Some(Ok(msg)) = stream.next().await {
-            set_data.set(msg.data().as_string().unwrap_or_default());
+```rust
+#[cfg(target_arch = "wasm32")]  // client-only code (WASM only)
+{
+    let (data, set_data) = signal(String::new());
+    let on_error: WriteSignal<Option<String>> = signal(None);
+
+    match EventSource::new("/api/events") {
+        Ok(mut es) => match es.subscribe("search_results") {
+            Ok(mut stream) => {
+                spawn_local(async move {
+                    while let Some(msg) = stream.next().await {
+                        match msg {
+                            Ok(msg) => {
+                                if let Some(text) = msg.data().as_string() {
+                                    set_data.set(text);
+                                } else {
+                                    leptos::logging::warn!("SSE message had non-string data");
+                                }
+                            }
+                            Err(e) => leptos::logging::error!("SSE stream error: {e:?}"),
+                        }
+                    }
+                });
+                on_cleanup(move || es.close());
+            }
+            Err(e) => {
+                leptos::logging::error!("failed to subscribe to SSE: {e:?}");
+                on_error.set(Some(format!("subscribe failed: {e}")));
+            }
+        },
+        Err(e) => {
+            leptos::logging::error!("failed to open SSE connection: {e:?}");
+            on_error.set(Some(format!("connection failed: {e}")));
+        }
+    }
+
+    // Render the error banner if either EventSource::new or subscribe failed
+    Effect::new(move |_| {
+        if let Some(msg) = on_error.get() {
+            // surface to <ErrorBoundary> or visible banner
         }
     });
-    on_cleanup(move || es.close());
 }
 ```
+
+For network retry, wrap with `gloo_timers::future::TimeoutFuture` and
+backoff on `onerror`. Liveness reconnection is built into the browser
+`EventSource` (it reconnects automatically after 3 s default).
 
 ### StreamingText — Server-Sent Strings
 

@@ -262,9 +262,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                                                 r.remove(0);
                                                             }
                                                             r.push(LiveResult {
-                                                                title,
-                                                                url,
-                                                                snippet,
+                                                                title: title.to_string(),
+                                                                url: url.to_string(),
+                                                                snippet: snippet.to_string(),
                                                             });
                                                         });
                                                     }

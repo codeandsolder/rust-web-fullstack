@@ -1,5 +1,5 @@
-# TODO: pin by digest — e.g. rust:1.94-bookworm@sha256:...
-FROM rust:1.94-bookworm AS builder
+# Pinned by digest for reproducible builds.
+FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS builder
 WORKDIR /build
 RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.126 --locked
@@ -27,8 +27,8 @@ RUN cargo build --locked --release -p live-search --lib --target wasm32-unknown-
     touch /build/pkg/live-search.css
 RUN cargo build --locked --release -p live-search --features ssr
 
-# TODO: pin by digest — e.g. debian:bookworm-slim@sha256:...
-FROM debian:bookworm-slim
+# Pinned by digest for reproducible builds.
+FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app && chown -R app:app /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*

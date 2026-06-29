@@ -242,12 +242,14 @@ pub async fn wait_for_js_true(page: &Page, expr: &str, timeout: Duration) -> boo
 
 /// Require a service to be reachable before continuing a test.
 pub async fn require_server(url: &str) {
+    // `.expect()` is clearer than `.unwrap_or_else(|e| panic!(...))` and is
+    // recognised by the workspace's `expect_used` lint policy.
     let response = reqwest::Client::new()
         .get(url)
         .timeout(Duration::from_secs(2))
         .send()
         .await
-        .unwrap_or_else(|e| panic!("required server at {url} is not reachable: {e}"));
+        .expect("required server at {url} is not reachable");
     assert!(
         response.status().is_success(),
         "required server at {url} returned {}",

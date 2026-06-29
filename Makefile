@@ -9,7 +9,7 @@ db: ## Start PostgreSQL via docker compose
 up: ## Start all services
 	docker compose up --build -d
 
-down: ## Stop all services
+down: ## Stop all services and remove volumes (deletes DB data)
 	docker compose down -v
 
 logs: ## Tail logs from all services

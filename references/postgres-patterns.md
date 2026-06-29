@@ -255,10 +255,13 @@ while let Some(notification) = stream.try_next().await? {
 ### Send Notifications
 
 ```rust
-// From any connection:
+// From any connection — propagate the serialize error instead of unwrapping.
+// `serde_json::to_string` can fail for non-UTF-8 map keys, NaN/Inf floats,
+// and exotic serializer edge cases; silently unwrapping crashes the calling
+// request handler with no useful diagnostic.
 sqlx::query("SELECT pg_notify($1, $2)")
     .bind("search_results")
-    .bind(serde_json::to_string(&payload).unwrap())
+    .bind(serde_json::to_string(&payload).map_err(NotifyError::Serialize)?)
     .execute(&pool).await?;
 
 // From a trigger function:
@@ -278,6 +281,9 @@ sqlx::query(
      FOR EACH ROW EXECUTE FUNCTION notify_new_result()"
 ).execute(&pool).await?;
 ```
+
+`NotifyError::Serialize` should be a `#[from] serde_json::Error` variant on
+your application's error type so the source chain is preserved.
 
 ### Production Config
 

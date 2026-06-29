@@ -5,13 +5,16 @@
 //! channel closure into end-of-stream (`None`); only the `Lagged` error is
 //! surfaced (and logged) so slow consumers gracefully drop messages.
 
+use std::convert::Infallible;
+use std::sync::Arc;
+
 use axum::{
     extract::State,
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::stream::Stream;
+use serde::Serialize;
 use serde_json::Value;
-use std::convert::Infallible;
 use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -32,24 +35,78 @@ pub enum GatewayEvent {
     /// A service has stopped.
     ServiceStopped(&'static str),
     /// A service's health status changed.
-    HealthChanged(&'static str, String),
+    HealthChanged(&'static str, Arc<str>),
     /// A custom event with a type tag and JSON payload.
     Custom(&'static str, Value),
+}
+
+/// Serializable view of a [`GatewayEvent`] for SSE JSON serialization.
+///
+/// This avoids allocating intermediate `String` buffers in the hot (SSE)
+/// path by borrowing directly from the [`GatewayEvent`] variants.
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum GatewayEventView<'a> {
+    ServiceStarted { name: &'a str },
+    ServiceStopped { name: &'a str },
+    HealthChanged { name: &'a str, status: &'a str },
 }
 
 impl From<GatewayEvent> for Event {
     fn from(event: GatewayEvent) -> Self {
         match event {
             GatewayEvent::ServiceStarted(name) => {
-                Self::default().event("service_started").data(name)
+                let view = GatewayEventView::ServiceStarted { name };
+                let event = Self::default().event("service_started");
+                match event.json_data(&view) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to serialize GatewayEvent::ServiceStarted");
+                        Self::default()
+                            .event("service_started")
+                            .data("serialization error")
+                    }
+                }
             }
             GatewayEvent::ServiceStopped(name) => {
-                Self::default().event("service_stopped").data(name)
+                let view = GatewayEventView::ServiceStopped { name };
+                let event = Self::default().event("service_stopped");
+                match event.json_data(&view) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to serialize GatewayEvent::ServiceStopped");
+                        Self::default()
+                            .event("service_stopped")
+                            .data("serialization error")
+                    }
+                }
             }
-            GatewayEvent::HealthChanged(name, status) => Self::default()
-                .event("health_changed")
-                .data(format!("{name}: {status}")),
-            GatewayEvent::Custom(typ, data) => Self::default().event(typ).data(data.to_string()),
+            GatewayEvent::HealthChanged(name, status) => {
+                let view = GatewayEventView::HealthChanged {
+                    name,
+                    status: status.as_ref(),
+                };
+                let event = Self::default().event("health_changed");
+                match event.json_data(&view) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to serialize GatewayEvent::HealthChanged");
+                        Self::default()
+                            .event("health_changed")
+                            .data("serialization error")
+                    }
+                }
+            }
+            GatewayEvent::Custom(typ, data) => {
+                let event = Self::default().event(typ);
+                match event.json_data(&data) {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to serialize GatewayEvent::Custom");
+                        Self::default().event(typ).data("serialization error")
+                    }
+                }
+            }
         }
     }
 }
@@ -64,7 +121,7 @@ impl From<GatewayEvent> for Event {
 /// SSE handler.
 pub fn publish_event(tx: &broadcast::Sender<GatewayEvent>, event: GatewayEvent) {
     if let Err(e) = tx.send(event) {
-        tracing::debug!("gateway event had no SSE receivers: {e}");
+        tracing::debug!(error = %e, "gateway event had no SSE receivers");
     }
 }
 
@@ -85,7 +142,7 @@ pub async fn sse_handler(
     let stream = BroadcastStream::new(rx).filter_map(|result| match result {
         Ok(event) => Some(Ok(Event::from(event))),
         Err(BroadcastStreamRecvError::Lagged(n)) => {
-            tracing::warn!("SSE client lagged by {n} messages");
+            tracing::warn!(count = %n, "SSE client lagged");
             None
         }
     });

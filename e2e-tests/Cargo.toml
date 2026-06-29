@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lib]
+
 [lints.rust]
 rust_2024_compatibility = { level = "deny", priority = -1 }
 missing_debug_implementations = "warn"
@@ -24,11 +26,12 @@ default = []
 integration = []
 
 [dependencies]
+
+[dev-dependencies]
+# default-features = false is fine — local CDP uses plain HTTP, no TLS needed
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
-
-[dev-dependencies]
 sqlx = { workspace = true }

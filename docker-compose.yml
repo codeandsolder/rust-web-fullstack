@@ -47,6 +47,13 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    healthcheck:
+      # Gateway exposes /health (aggregates service-module health).
+      test: ["CMD", "curl", "-sf", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy

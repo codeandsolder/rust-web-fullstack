@@ -1,15 +1,19 @@
-//! Test helpers, browser setup, and teardown for chromiumoxide E2E tests.
+//! Integration-test-only helpers — browser setup, teardown, element waits.
 //!
-//! Each test creates an isolated [`TestContext`] via [`setup`], runs assertions,
-//! then cleans up via [`teardown`]. Browsers run headless. The `base_url` points
-//! to the example server under test (defaults to `http://localhost:3000`).
+//! Each integration test creates an isolated [`TestContext`] via [`setup`],
+//! runs assertions, then cleans up via [`teardown`]. Browsers run headless.
+//! The `base_url` points to the example server under test (defaults to
+//! `http://localhost:3000`).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
+
+use e2e_tests::base_url;
 
 /// Holds the browser, page, base URL, and profile directory for a single test.
 ///
@@ -24,17 +28,22 @@ pub struct TestContext {
     pub profile_dir: PathBuf,
 }
 
-/// Resolve the base URL — use `BASE_URL` env var or fall back to `http://localhost:3000`.
-///
-/// When `override_url` is `Some`, that value is used directly instead of
-/// consulting the environment.  This is useful in unit tests to avoid unsafe
-/// `env::set_var` / `env::remove_var` calls.
-#[must_use]
-pub fn base_url(override_url: Option<&str>) -> String {
-    override_url
-        .map(String::from)
-        .or_else(|| std::env::var("BASE_URL").ok())
-        .unwrap_or_else(|| "http://localhost:3000".to_string())
+/// Generate a unique Chromium user-data-dir path using PID, nanos-since-epoch,
+/// and an atomic counter.  The counter ensures uniqueness even when two threads
+/// call this at the same monotonic instant.
+#[allow(dead_code)]
+fn unique_profile_dir() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after Unix epoch")
+        .as_nanos();
+    let dir = format!(
+        "/tmp/chromiumoxide-{pid}-{nanos}-{n}",
+        pid = std::process::id(),
+    );
+    PathBuf::from(dir)
 }
 
 /// Poll a server until it responds with an HTTP 2xx / 3xx status, or the timeout
@@ -58,7 +67,7 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 ///
 /// # Panics
 /// Panics if the browser cannot launch or the page cannot be created.
-#[allow(dead_code)] // not every test binary exercises the browser path
+#[allow(dead_code)]
 pub async fn setup() -> TestContext {
     let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
         let playwright_path = format!(
@@ -71,15 +80,8 @@ pub async fn setup() -> TestContext {
             .then_some(playwright_path)
     });
 
-    // Use a unique user-data-dir per test to avoid SingletonLock conflicts
-    // when cargo test runs in parallel.
-    let profile_dir = std::env::temp_dir().join(format!(
-        "chromiumoxide-test-{pid}-{ts}",
-        pid = std::process::id(),
-        ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    let profile_dir = unique_profile_dir();
+    std::fs::create_dir_all(&profile_dir).expect("failed to create Chromium profile dir");
 
     let mut builder = BrowserConfig::builder()
         .user_data_dir(profile_dir.clone())
@@ -113,7 +115,7 @@ pub async fn setup() -> TestContext {
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
 /// creation order. Cleanup errors are printed for diagnostics but do not mask
 /// the test assertion that already ran.
-#[allow(dead_code)] // not every test binary exercises the browser path
+#[allow(dead_code)]
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
         mut browser,
@@ -141,16 +143,15 @@ pub async fn teardown(ctx: TestContext) {
 /// # Panics
 /// Panics if the server does not respond with a 2xx or 3xx status before the
 /// timeout expires.
-///
-/// ```ignore
-/// require_server(&base_url(None)).await;
-/// ```
+#[allow(dead_code)]
 pub async fn require_server(url: &str) {
     assert!(
         wait_for_server(url, Duration::from_secs(5)).await,
         "server at {url} is not reachable"
     );
 }
+
+// ──────  Element wait helpers  ──────
 
 /// Poll `page.evaluate(expression)` until it returns `true` (as a boolean)
 /// or the timeout elapses. Replacement for browser-framework wait helpers.
@@ -254,18 +255,4 @@ pub async fn element_attribute(page: &Page, selector: &str, attr: &str) -> Optio
         .ok()
         .and_then(|v| v.into_value::<serde_json::Value>().ok())
         .and_then(|v| v.as_str().map(String::from))
-}
-
-// ──────  Unit-testable helpers (no browser required)  ──────
-
-/// Build a URL from a base and a path segment.  Handles leading slashes on
-/// `path` and trailing slashes on `base`.
-///
-/// Used by `unit_tests.rs` (may appear unused in other test binaries).
-#[allow(dead_code)]
-#[must_use]
-pub fn join_url(base: &str, path: &str) -> String {
-    let base = base.trim_end_matches('/');
-    let path = path.trim_start_matches('/');
-    format!("{base}/{path}")
 }

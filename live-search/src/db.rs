@@ -27,7 +27,7 @@ pub struct SearchResult {
 
 #[cfg(feature = "ssr")]
 mod server {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
     use std::time::Duration;
 
     use serde::Deserialize;
@@ -103,26 +103,31 @@ mod server {
     }
 
     /// Forward a single `NOTIFY` payload to the broadcast channel.
-    #[tracing::instrument(skip_all, fields(channel, payload_len))]
+    ///
+    /// Intentionally **not** `#[tracing::instrument]` — the record-via-current-span
+    /// pattern is fragile because fmt layers **append** field values instead of
+    /// replacing them; a single `tracing::debug!` at the call site avoids that.
     fn forward_notification(
         tx: &broadcast::Sender<SseEvent>,
         notification: &sqlx::postgres::PgNotification,
     ) {
         let payload = notification.payload();
-        let span = tracing::Span::current();
-        span.record("channel", notification.channel());
-        span.record("payload_len", payload.len());
 
         match serde_json::from_str::<SearchResultNotification>(payload) {
             Ok(row) => {
                 let event = SseEvent::SearchResult {
-                    title: row.title,
-                    url: row.url,
-                    snippet: row.snippet,
+                    title: Arc::from(row.title),
+                    url: Arc::from(row.url),
+                    snippet: Arc::from(row.snippet),
                 };
                 match tx.send(event) {
                     Ok(receivers) => {
-                        tracing::debug!(receivers, "forwarded search result notification");
+                        tracing::debug!(
+                            channel = notification.channel(),
+                            payload_len = payload.len(),
+                            receivers,
+                            "forwarded search result notification"
+                        );
                     }
                     Err(e) => {
                         tracing::warn!("search result notification had no SSE receivers: {e}");
