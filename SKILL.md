@@ -13,7 +13,7 @@ This skill ships with a complete, runnable reference workspace next to it. Every
 |------|---------------|
 | `./live-search/src/main.rs` | Pattern 15 (full triad): `CancellationToken` + `JoinSet` + signal handler + `tokio::select!` for `axum::serve` shutdown |
 | `./live-search/src/db.rs::run_pg_listener` | Critical Rule 10 + Pitfall 14: `PgListener::recv()` raced against cancellation, with cancellable backoff sleep |
-| `./gateway/src/main.rs` | Same Pattern 15 triad (no `JoinSet` needed — single-task shutdown) |
+| `./gateway/src/main.rs` | Pattern 15's shutdown primitive only (no spawned tasks → no `JoinSet` / `CancellationToken` required) |
 | `./gateway/src/module.rs::ServiceHealthError` | `#[non_exhaustive]` + `#[must_use]` + doc comment design pattern |
 | `./gateway.Dockerfile` + `./live-search.Dockerfile` + `./docker-compose.yml` | Multi-stage Leptos build with `cargo-leptos`, runtime slim image, Postgres + pgAdmin + Chromium |
 | `./e2e-tests/` | chromiumoxide-based Playwright replacement for browser-driven E2E |
@@ -36,22 +36,22 @@ Or via the symlink at `~/projects/rust-web-fullstack` (alias for the same direct
 
 ### Crate Versions (June 2026)
 
-Last verified against the canonical `Cargo.lock` in this directory on 2026-06-27.
+Last verified against the canonical `Cargo.lock` in this directory on 2026-06-29.
 
 | Crate | Version | Features | Notes |
 |-------|---------|----------|-------|
 | `leptos` | 0.8 | `csr`, `ssr`, `hydrate` — mutually exclusive per build target | 0.9 is alpha; stay on 0.8.x |
 | `leptos_axum` | 0.8 | SSR integration with axum | Doubles `/api` prefix on server fns — see Pitfall 9 |
-| `sqlx` | 0.9 | `postgres`, `runtime-tokio`, `tls-rustls`, `json`, `macros`, `migrate` | |
+| `sqlx` | 0.9 | `postgres`, `runtime-tokio`, `tls-rustls`, `json`, `macros`, `migrate` | Canonical workspace uses *runtime* queries only (`sqlx::query_as::<_, T>(…)`); compile-time `query!` requires `cargo sqlx prepare` + `.sqlx/` cache |
 | `axum` | 0.8 | `json` | |
-| `tokio` | 1 | `full` | |
-| `tokio-util` | 0.7 | `rt` | Brings `CancellationToken` for structured shutdown (Pattern 15) |
-| `tower-http` | 0.7 | `fs`, `trace` | `fs` is required for `ServeDir` |
+| `tokio` | 1 | `full` | `JoinSet` and `tokio::time::Instant` come from `tokio` directly |
+| `tokio-util` | 0.7 | (no feature needed) | `CancellationToken` lives in `tokio_util::sync` and is reachable without any feature gate |
+| `tower-http` | 0.7 | per-crate: `trace` is workspace-default; live-search adds `fs` (for `ServeDir`); gateway adds `cors` | `fs` is required only by crates that mount `ServeDir` |
 | `jsonwebtoken` | 10 | **MUST** set `features = ["rust_crypto"]` or `["aws_lc_rs"]` | 10.x panics without explicit crypto provider — see Pitfall 10 |
-| `reqwest` | 0.13 | `rustls`, `json`, `stream` | `stream` feature enables `bytes_stream()` for SSE reading |
-| `chromiumoxide` | 0.9 | Direct CDP, no Node.js | Replaces abandoned playwright-rs |
+| `reqwest` | 0.13 | `default-features = false`, `rustls`, `json`, `stream` | `default-features = false` avoids the `native-tls` conflict with `rustls`; `stream` enables `bytes_stream()` for SSE reading |
+| `chromiumoxide` | 0.9 | `default-features = false`, `bytes` | `default-features = false` keeps the tokio version compatible with the workspace pin; `bytes` is required for `Browser::launch(...)` |
 | `gloo-net` | 0.7 | `eventsource` | Client-side SSE reader |
-| `gloo-timers` | 0.3 | (default) | `TimeoutFuture` for backoff/retry loops on the client (reconnect, retry) |
+| `gloo-timers` | 0.3 | `futures` | `gloo_timers::future::sleep` requires the `futures` feature |
 | `tracing` | 0.1 | (default) | Structured logging — never `println!` or `log` |
 | `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` (Pattern 0) |
 
@@ -92,6 +92,7 @@ Starting a Rust web project?
 8. **chromiumoxide SingletonLock**: Every test that spawns a browser MUST use a unique `user_data_dir` (e.g. `<pid>-<nanos>`). Default `~/.cache/chromiumoxide-runner/SingletonLock` collides when tests run in parallel.
 9. **Integration tests must fail visibly**: if a required service, browser, database, fixture, or SSE event is missing, panic/assert with the actual status or error. Use `#[ignore]` for intentionally optional slow tests; do not return early and report success.
 10. **Background tasks need structured-concurrency wiring**: `pg_listener_task` and any other long-running `tokio::spawn`'d task MUST accept a `CancellationToken` and race its primary await against `shutdown.cancelled()` via `tokio::select!`. Dropping a `JoinHandle` does not cancel — only `token.cancel()` cooperatively stops the task. See Pattern 15.
+    *If your binary has no `tokio::spawn` calls (the gateway, for example), `with_graceful_shutdown(graceful_shutdown_signal())` is sufficient and no `CancellationToken` is needed — `Pattern 15` is still relevant as a reference, but only its shutdown primitive applies.*
 
 ---
 
@@ -210,7 +211,7 @@ Load these as needed for deep patterns:
 
 | File | When to Load | Content |
 |------|-------------|---------|
-| `references/leptos-patterns.md` | Writing Leptos components, SSR setup, forms, auth | Full Leptos 0.8.x cookbook (170 rules) |
+| `references/leptos-patterns.md` | Writing Leptos components, SSR setup, forms, auth | Leptos 0.8.x cookbook (~50 rules across 10 sections) |
 | `references/postgres-patterns.md` | Database schema, sqlx usage, LISTEN/NOTIFY | PostgreSQL + sqlx patterns |
 | `references/axum-patterns.md` | Routing, SSE, middleware | Axum 0.8 patterns |
 | `references/testing-patterns.md` | Writing tests, visual testing, CI | Chrome MCP + chromiumoxide workflows |
@@ -461,7 +462,7 @@ sqlx::query_as::<_, SearchResult>(
 
 ```rust
 // Cargo.toml deps (e2e-tests crate only):
-//   chromiumoxide = "0.9"
+//   chromiumoxide = { version = "0.9", default-features = false, features = ["bytes"] }
 //   reqwest = { version = "0.13", features = ["rustls", "json"] }
 //   futures = "0.3"
 //   tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -486,13 +487,18 @@ async fn test_sse_live_update() {
             .user_data_dir(std::path::PathBuf::from(&profile_dir))
             .headless_mode(chromiumoxide::browser::HeadlessMode::True)
             .build()
-    ).await.unwrap();
+    )
+    .await
+    .expect("failed to launch Chromium for SSE test");
 
-    // Pump CDP events in the background
-    tokio::spawn(async move { while let Some(_) = handler.next().await {} });
+    // Pump CDP events in the background. The handler terminates when
+    // browser.close() drops the underlying websocket.
+    tokio::spawn(async move { while handler.next().await.is_some() {} });
 
-    let page = browser.new_page("about:blank").await.unwrap();
-    page.goto("http://localhost:3000").await.unwrap();
+    let page = browser.new_page("about:blank").await
+        .expect("failed to create Chromium page");
+    page.goto("http://localhost:3000").await
+        .expect("failed to navigate to live-search");
 
     // Wait for SSE to populate the DOM via JS evaluation
     let populated = wait_for_js_true(
@@ -512,9 +518,21 @@ async fn test_sse_live_update() {
     assert!(!text.is_empty(), "Expected non-empty SSE content");
 
     if let Err(e) = std::fs::remove_dir_all(&profile_dir) {
-        eprintln!("failed to remove Chromium profile dir {profile_dir}: {e}");
+        tracing::warn!(
+            profile_dir = %profile_dir,
+            error = %e,
+            "failed to remove Chromium profile dir"
+        );
     }
 }
+```
+
+> **Lint compatibility:** the canonical workspace sets
+> `clippy::unwrap_used = "deny"` and `clippy::expect_used = "deny"` for
+> production crates. Test crates relax these (`unwrap_used = "allow"`,
+> `expect_used = "allow"` in `e2e-tests/Cargo.toml`) so `.unwrap()` /
+> `.expect()` for fail-fast test setup are acceptable there. Never copy
+> these patterns into production code.
 
 // Helper: poll a JS expression until true or timeout
 async fn wait_for_js_true(
@@ -562,9 +580,17 @@ let rows = sqlx::query_as!(
 .fetch_all(&pool).await?;
 ```
 
+> **Workspace choice:** the canonical `live-search` project uses
+> *runtime* queries (`sqlx::query_as::<_, SearchResult>(…)`,
+> `sqlx::query(…)`) instead of the `sqlx::query!()` / `sqlx::query_as!()`
+> macros shown above. The macros require `cargo sqlx prepare` to maintain
+> a `.sqlx/` cache (offline mode) or a live `DATABASE_URL` at compile time
+> (online mode). Pick one path per crate and document the choice.
+
 ### Pattern 6: Gateway with ServiceModule Trait
 
 ```rust
+use std::sync::Arc;
 use axum::Router;
 use futures::future::{BoxFuture, FutureExt};
 
@@ -595,10 +621,14 @@ pub trait ServiceModule: Send + Sync {
     }
 }
 
-// Compose all services
+// Compose all services.
+//
+// Use `Arc<dyn ServiceModule>` (not `Box<dyn>`) so `GatewayState: Clone`
+// stays cheap: cloning the state must not require cloning each registered
+// service's heap allocation.
 fn build_gateway(state: GatewayState) -> Router {
-    let services: Vec<Box<dyn ServiceModule>> = vec![
-        Box::new(LiveSearchService),
+    let services: Vec<Arc<dyn ServiceModule>> = vec![
+        Arc::new(LiveSearchService),
     ];
 
     let mut router = Router::new()
@@ -607,9 +637,10 @@ fn build_gateway(state: GatewayState) -> Router {
 
     for service in &services {
         if !service.enabled() { continue; }
-        // Router::nest accepts `impl AsRef<str>`; pass the path directly
-        // instead of allocating via `format!`.
-        router = router.nest(service.path(), service.router());
+        // `Router::nest` requires a leading "/" — `/` + path is a tiny
+        // allocation but we can avoid it by building the prefix once.
+        let prefix = format!("/{}", service.path());
+        router = router.nest(&prefix, service.router());
     }
 
     router
@@ -617,6 +648,11 @@ fn build_gateway(state: GatewayState) -> Router {
         .with_state(state)
 }
 ```
+
+> The skill's reference implementation in `references/architecture-patterns.md`
+> shows a *simplified* version of this trait. For the real gateway with
+> `Jwt`, `Settings`, `LoginRateLimiter`, and aggregated health checks see
+> `./gateway/src/gateway.rs` and `./gateway/src/auth.rs`.
 
 ### Pattern 7: JavaScript-Driven SSE Detection (for Chrome DevTools MCP)
 
@@ -697,11 +733,19 @@ async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
 }
 ```
 
-Mount it with `any` (accepts both GET and POST):
+Mount it with `any` (accepts both GET and POST). For belt-and-braces
+compatibility with the Leptos 0.8 macro, register **both** prefixes:
 
 ```rust
-.route("/api/{*fn_name}", any(server_fn_handler))
+.route("/api/{*fn_name}",      any(server_fn_handler))
+.route("/api/api/{*fn_name}",  any(server_fn_handler))
 ```
+
+The `server_fn_handler`'s internal probe via
+`leptos::server_fn::axum::get_server_fn_service` short-circuits to the
+exact registered path, so registering both routes is harmless and avoids
+relying on the probe-fallback path alone. This is the form used in
+`./live-search/src/main.rs`.
 
 ### Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)
 
@@ -775,37 +819,54 @@ pub mod server {
 Both `Action::input()` and `Action::value()` are reactive signals that
 **persist for the lifetime of the `Action`** (i.e. for as long as the
 component that created it is mounted). They differ in what they hold, not
-in whether they survive completion:
+in whether they survive completion.
 
-- `action.input()` — `Option<Input>` — the input that was dispatched to the
-  action. Useful for "Showing results for: *&lt;query&gt;*".
-- `action.value()` — `Option<Output>` — the action's result.
+> **Important (Leptos 0.8.x):** `Action::value()` returns
+> `ArcMappedSignal<Option<O>>` (a reactive signal wrapper), not a plain
+> `Option`. Call `.get()` to read its current value, then pattern-match the
+> inner `Option<Result<Output, ServerFnError>>`.
+
+- `action.input().get()` → `Option<Input>` — the input that was dispatched
+  to the action. Useful for "Showing results for: *&lt;query&gt;*".
+- `action.value().get()` → `Option<Result<Output, _>>` — the action's result.
   - `None` while the action is in-flight
   - `Some(Ok(_))` on success
   - `Some(Err(_))` on error
   Useful for "Found N results", "No results found.", error banner.
 
 ```rust
-// Use value() for post-action result UI (errors, empty results, success)
+// Use value() for post-action result UI (errors, empty results, success).
+// Read `.value().get()` ONCE per render frame, then split the inner
+// Result — calling .value() twice creates two reactive subscriptions.
+let value = move || search_action.value().get();
+let results = move || value().and_then(Result::ok);
+let error   = move || value().and_then(Result::err);
+
 view! {
-    {move || match search_action.value() {
-        Some(Ok(results)) if results.is_empty() => view! { <p>"No results found."</p> }.into_any(),
-        Some(Ok(results)) => view! { <ul>{results}</ul> }.into_any(),
-        Some(Err(e)) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-        None => view! { <p>"Type a query and submit"</p> }.into_any(),
-    }}
+    <div id="results">
+        {move || match (results(), error()) {
+            (None, None) =>
+                view! { <p>"Type a query and submit"</p> }.into_any(),
+            (_, Some(e)) =>
+                view! { <p class="error">{e.to_string()}</p> }.into_any(),
+            (Some(items), None) if items.is_empty() =>
+                view! { <p>"No results found."</p> }.into_any(),
+            (Some(items), None) =>
+                view! { <ul>{items}</ul> }.into_any(),
+        }}
+    </div>
 }
 
-// Use input() when you want to echo back what the user submitted
+// Use input() when you want to echo back what the user submitted.
 view! {
-    <p>{move || search_action.input()
+    <p>{move || search_action.input().get()
         .map(|q| format!("Showing results for: {q}"))}</p>
 }
 ```
 
-A common mistake is to believe `input()` "becomes `None` after completion"
-— it does not. The reason to prefer `value()` for result UI is that you
-want the action's **output**, not its input.
+A common mistake is to `match action.value()` directly — that produces a
+compile error in Leptos 0.8.x because `value()` returns a signal, not an
+`Option`. Always call `.get()` first.
 
 ### Pattern 12: chromiumoxide E2E Helpers
 
@@ -1019,7 +1080,7 @@ async fn main() -> anyhow::Result<()> {
 - `JoinSet::join_next()` awaits task completion; tasks spawned on the set are aborted on drop (but we drain first via `timeout`).
 - A second `shutdown.cancel()` after `axum::serve` returns is idempotent — safe to call even if the signal handler already fired.
 
-#### `biased;` — shutdown wins ties
+#### `biased;` — shutdown wins ties (recommended)
 
 When a notification arrives at the same instant as a cancel signal, `tokio::select!`
 picks branches in a non-deterministic order by default. Add `biased;` so the
@@ -1039,6 +1100,11 @@ Without `biased;`, the listener may drain one more notification after
 shutdown was requested, which can hold the connection open briefly and
 produce a non-graceful exit. This is the `async-structured-concurrency`
 rule from rust-skills.
+
+> The canonical `live-search/src/db.rs::run_pg_listener` uses `biased;` in
+> its inner `select!`. The outer `connect`/`sleep` loop does not, because
+> cancellation must always win there too — for which `sleep_or_shutdown`
+> is the right idiom.
 
 #### `Send + 'static` for spawned futures
 

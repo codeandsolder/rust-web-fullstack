@@ -92,12 +92,23 @@ pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>>
 
 /// Convert an [`SseEvent`] into an SSE [`Event`], setting the event type per
 /// variant so clients can subscribe selectively.
+///
+/// Serialization should never fail for these well-typed enums; if it does,
+/// the client receives a generic fallback event AND the failure is logged
+/// so the operator notices (no silent swallowing).
 fn event_to_sse(event: &SseEvent) -> Event {
     let name = match event {
         SseEvent::Connected => "connected",
         SseEvent::SearchResult { .. } => "search_result",
         SseEvent::StreamLagged { .. } => "stream_lagged",
     };
-    let json = serde_json::to_string(event).unwrap_or_else(|_| r#"{"type":"error"}"#.into());
+    let json = serde_json::to_string(event).unwrap_or_else(|err| {
+        tracing::error!(
+            error = %err,
+            event_name = %name,
+            "failed to serialize SseEvent — emitting fallback error payload"
+        );
+        r#"{"type":"error"}"#.to_owned()
+    });
     Event::default().event(name).data(json)
 }

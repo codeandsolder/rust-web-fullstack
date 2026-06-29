@@ -87,6 +87,7 @@ hydrate = ["leptos/hydrate"]
 ### ServiceModule Trait
 
 ```rust
+use std::sync::Arc;
 use axum::Router;
 use futures::future::{BoxFuture, FutureExt};
 
@@ -117,16 +118,18 @@ pub trait ServiceModule: Send + Sync {
 Key design decisions:
 - `health_check` takes no arguments — the service knows how to reach its dependencies
 - `ServiceHealthError` is `#[non_exhaustive]` + `#[must_use]` + string-based reason
-- The trait is object-safe (no `async_trait`), storing `Box<dyn ServiceModule>`
+- The trait is object-safe (no `async_trait`), stored as `Arc<dyn ServiceModule>`
+  (NOT `Box<dyn ServiceModule>`) so the `Clone`-able `GatewayState` stays cheap
+  to clone per request.
 
 ### Gateway Composition
 
 ```rust
-pub fn build_gateway(pool: PgPool, tx: broadcast::Sender<SseEvent>) -> Router {
-    let state = GatewayState { pool: pool.clone(), tx };
+pub fn build_gateway() -> Router {
+    let state = GatewayState::default();
 
-    let services: Vec<Box<dyn ServiceModule>> = vec![
-        Box::new(live_search::Service),
+    let services: Vec<Arc<dyn ServiceModule>> = vec![
+        Arc::new(live_search::Service),
     ];
 
     let mut router = Router::new()
@@ -135,9 +138,9 @@ pub fn build_gateway(pool: PgPool, tx: broadcast::Sender<SseEvent>) -> Router {
 
     for service in &services {
         if !service.enabled() { continue; }
-        // Router::nest accepts `impl AsRef<str>`, so pass the path directly
-        // instead of allocating a `String` via `format!`.
-        router = router.nest(service.path(), service.router());
+        // `Router::nest` requires a leading "/" — small `format!` allocation.
+        let prefix = format!("/{}", service.path());
+        router = router.nest(&prefix, service.router());
     }
 
     router
@@ -146,15 +149,29 @@ pub fn build_gateway(pool: PgPool, tx: broadcast::Sender<SseEvent>) -> Router {
 }
 ```
 
-### GatewayState
+### GatewayState (canonical)
+
+The real `GatewayState` holds **more** than the simplified version above
+because the gateway aggregates health, auth, settings, and rate-limiting
+across all services:
 
 ```rust
 #[derive(Clone)]
 pub struct GatewayState {
-    pub pool: PgPool,
-    pub tx: broadcast::Sender<SseEvent>,
+    /// Broadcast channel for SSE events.
+    pub tx: broadcast::Sender<GatewayEvent>,
+    /// Read-only service descriptors (for API discovery).
+    pub services: Vec<ServiceInfo>,
+    /// Module trait objects kept alive for health aggregation.
+    pub modules: Vec<Arc<dyn ServiceModule>>,
+    /// Application settings loaded from environment variables at startup.
+    pub settings: settings::Settings,
+    /// Per-IP login rate limiter.
+    pub rate_limiter: LoginRateLimiter,
 }
 ```
+
+For the actual implementation see `./gateway/src/gateway.rs`.
 
 ---
 
@@ -184,8 +201,9 @@ Two important corrections to the naïve pattern:
    at startup. The DB may be briefly unreachable at boot; sqlx's
    `PgListener` supports `eager_reconnect(true)` but only if you let it
    return the error and reconnect, not panic.
-2. **Use a cancellation-aware retry loop** with `biased;` so that shutdown
-   wins when both an event and a cancel signal are ready simultaneously.
+2. **Use a cancellation-aware retry loop** with exponential backoff
+   and `biased;` in the inner `select!` so that shutdown wins when both
+   an event and a cancel signal are ready simultaneously.
 
 ```rust
 async fn run_pg_listener(
@@ -196,34 +214,31 @@ async fn run_pg_listener(
     let mut backoff = Duration::from_millis(250);
     let max_backoff = Duration::from_secs(30);
 
-    'connect: loop {
-        // Try to (re)connect. Cancellation takes priority.
-        let mut listener = tokio::select! {
+    while !shutdown.is_cancelled() {
+        // (Re)connect; cancellation can race and pre-empts the reconnect.
+        let mut listener = match tokio::select! {
             biased;
-            _ = shutdown.cancelled() => {
-                tracing::info!("PgListener cancelled before connect");
-                return;
+            _ = shutdown.cancelled() => return,
+            res = PgListener::connect_with(&pool) => res,
+        } {
+            Ok(l) => {
+                tracing::info!("PgListener connected");
+                backoff = Duration::from_millis(250);
+                l
             }
-            res = PgListener::connect_with(&pool) => match res {
-                Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!(error = %e, backoff_ms = backoff.as_millis() as u64,
-                        "PgListener connect failed; retrying");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(max_backoff);
-                    continue 'connect;
-                }
-            },
+            Err(e) => {
+                tracing::warn!(error = %e, backoff_ms = backoff.as_millis(),
+                    "PgListener connect failed; retrying after backoff");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
         };
 
-        // Subscribe to channels.
         if let Err(e) = listener.listen("search_results").await {
             tracing::warn!(error = %e, "PgListener listen failed; reconnecting");
-            continue 'connect;
+            continue;
         }
-
-        tracing::info!("PgListener connected and listening");
-        backoff = Duration::from_millis(250); // reset on success
 
         loop {
             tokio::select! {
@@ -235,6 +250,7 @@ async fn run_pg_listener(
                 notification = listener.recv() => {
                     match notification {
                         Ok(n) => {
+                            backoff = Duration::from_millis(250);
                             let event = SseEvent {
                                 channel: Arc::from(n.channel()),
                                 payload: Arc::from(n.payload()),
@@ -244,9 +260,11 @@ async fn run_pg_listener(
                             }
                         }
                         Err(e) => {
-                            // Connection dropped — break inner loop and reconnect.
-                            tracing::warn!(error = %e, "PgListener recv failed; reconnecting");
-                            continue 'connect;
+                            tracing::warn!(error = %e,
+                                "PgListener recv failed; reconnecting after backoff");
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(max_backoff);
+                            continue;  // outer loop reconnects
                         }
                     }
                 }
@@ -288,17 +306,54 @@ CREATE TRIGGER on_search_result_insert
 
 ## 4. Database Schema (live-search)
 
-### search_results
+The canonical migration
+(`./live-search/migrations/001_create_search_results.up.sql`) populates
+the FTS index via a `BEFORE INSERT/UPDATE` trigger rather than a
+generated column, so the same migration runs on PostgreSQL 11+ (whereas
+`GENERATED ALWAYS AS ... STORED` needs PostgreSQL 12+). Either form is
+correct; pick based on the oldest PG version you support.
+
+### search_results (canonical migration)
+
+```sql
+CREATE TABLE search_results (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title       TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    snippet     TEXT NOT NULL DEFAULT '',
+    fts         TSVECTOR,                            -- populated by trigger
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_search_results_fts ON search_results USING GIN(fts);
+
+-- Trigger auto-populates the FTS tsvector from title + snippet.
+CREATE OR REPLACE FUNCTION auto_update_fts() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.fts := to_tsvector('english',
+        COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.snippet, ''));
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_search_result_fts
+    BEFORE INSERT OR UPDATE OF title, snippet ON search_results
+    FOR EACH ROW EXECUTE FUNCTION auto_update_fts();
+```
+
+### search_results (PostgreSQL 12+ alternative)
+
+If you only target PG 12+, the generated-column form is simpler — no
+trigger to maintain:
 
 ```sql
 CREATE TABLE search_results (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
-    url TEXT NOT NULL,
-    snippet TEXT NOT NULL,
+    body TEXT NOT NULL,
     fts tsvector GENERATED ALWAYS AS (
         setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-        setweight(to_tsvector('english', coalesce(snippet, '')), 'B')
+        setweight(to_tsvector('english', coalesce(body, '')), 'B')
     ) STORED,
     created_at TIMESTAMPTZ DEFAULT now()
 );

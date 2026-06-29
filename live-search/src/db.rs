@@ -53,6 +53,11 @@ mod server {
 
     /// Sets the global database pool.
     ///
+    /// `PgPool` is an `Arc`-backed handle — cloning it is a cheap refcount
+    /// bump, so a single pool can be handed to [`set_pool`] (which stashes
+    /// the handle in a [`OnceLock`]) and simultaneously driven by a long-lived
+    /// task like [`run_pg_listener`] without owning contention.
+    ///
     /// # Errors
     /// Returns [`PoolInitError::AlreadyInitialized`] if startup tries to set
     /// the pool more than once.
@@ -102,6 +107,12 @@ mod server {
         Ok(listener)
     }
 
+    /// Maximum number of bytes of an unparseable NOTIFY payload we will echo
+    /// into error logs. The full payload is user-supplied content (titles, URLs,
+    /// snippets); it may be PII under GDPR, and a single multi-MB row can
+    /// produce a multi-MB log line. Truncate aggressively.
+    const PAYLOAD_LOG_PREVIEW_BYTES: usize = 200;
+
     /// Forward a single `NOTIFY` payload to the broadcast channel.
     ///
     /// Intentionally **not** `#[tracing::instrument]` — the record-via-current-span
@@ -123,19 +134,32 @@ mod server {
                 match tx.send(event) {
                     Ok(receivers) => {
                         tracing::debug!(
-                            channel = notification.channel(),
+                            channel = %notification.channel(),
                             payload_len = payload.len(),
                             receivers,
                             "forwarded search result notification"
                         );
                     }
                     Err(e) => {
-                        tracing::warn!("search result notification had no SSE receivers: {e}");
+                        tracing::warn!(
+                            channel = %notification.channel(),
+                            error = %e,
+                            "search result notification had no SSE receivers"
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::error!(payload, "invalid search_results notification payload: {e}");
+                // Do NOT log the full payload: it is unbounded user content and
+                // may be PII. Record only length and a bounded preview.
+                let preview: String = payload.chars().take(PAYLOAD_LOG_PREVIEW_BYTES).collect();
+                tracing::error!(
+                    channel = %notification.channel(),
+                    payload_len = payload.len(),
+                    payload_preview = %preview,
+                    error = %e,
+                    "invalid search_results notification payload"
+                );
             }
         }
     }
@@ -153,44 +177,68 @@ mod server {
     ///
     /// The task cooperatively exits when `shutdown` is cancelled, satisfying
     /// the `async-cancellation-token` and `async-structured-concurrency` rules.
-    /// sqlx 0.9 `PgListener::recv()` is cancel-safe (drops the TCP read cleanly
-    /// on future drop), so racing it against `shutdown.cancelled()` is sound.
+    /// Uses **exponential backoff** with reset-on-success for both connect and
+    /// recv failures, and `biased;` in the inner `select!` so shutdown always
+    /// wins ties against an incoming NOTIFY.
     #[tracing::instrument(skip_all)]
     pub async fn run_pg_listener(
         pool: PgPool,
         tx: broadcast::Sender<SseEvent>,
         shutdown: CancellationToken,
     ) {
+        // Exponential backoff: 250 ms → 30 s, doubling on each consecutive
+        // failure, reset to the floor on a successful connect/recv.
+        let mut backoff = Duration::from_millis(250);
+        let max_backoff = Duration::from_secs(30);
+        const BACKOFF_FLOOR_MS: u64 = 250;
+
         while !shutdown.is_cancelled() {
             let mut listener = match connect_and_listen(&pool).await {
                 Ok(l) => {
                     tracing::info!("Listening on search_results channel");
+                    backoff = Duration::from_millis(BACKOFF_FLOOR_MS);
                     l
                 }
                 Err(e) => {
-                    tracing::error!("PG listener setup failed: {e}");
-                    if sleep_or_shutdown(Duration::from_secs(5), &shutdown).await {
+                    tracing::error!(
+                        backoff_ms = backoff.as_millis(),
+                        error = %e,
+                        "PG listener setup failed; will retry after backoff"
+                    );
+                    if sleep_or_shutdown(backoff, &shutdown).await {
                         return;
                     }
+                    backoff = (backoff * 2).min(max_backoff);
                     continue;
                 }
             };
 
             loop {
+                // `biased;` ensures shutdown is checked first when both branches
+                // are simultaneously ready, removing the branch-pick race that
+                // can otherwise delay shutdown by one notification cycle.
                 tokio::select! {
+                    biased;
                     () = shutdown.cancelled() => {
                         tracing::info!("PgListener shutting down");
                         return;
                     }
                     recv = listener.recv() => {
                         match recv {
-                            Ok(notification) => forward_notification(&tx, &notification),
+                            Ok(notification) => {
+                                backoff = Duration::from_millis(BACKOFF_FLOOR_MS);
+                                forward_notification(&tx, &notification);
+                            }
                             Err(e) => {
-                                tracing::error!("PG listener receive failed: {e}");
-                                // Reconnect after a backoff (or exit on shutdown)
-                                if sleep_or_shutdown(Duration::from_secs(5), &shutdown).await {
+                                tracing::error!(
+                                    backoff_ms = backoff.as_millis(),
+                                    error = %e,
+                                    "PG listener receive failed; will reconnect after backoff"
+                                );
+                                if sleep_or_shutdown(backoff, &shutdown).await {
                                     return;
                                 }
+                                backoff = (backoff * 2).min(max_backoff);
                                 break; // breaks inner loop → reconnect
                             }
                         }

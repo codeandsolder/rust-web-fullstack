@@ -12,6 +12,7 @@ use std::time::Duration;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use e2e_tests::base_url;
 
@@ -26,6 +27,8 @@ pub struct TestContext {
     pub page: Page,
     pub base_url: String,
     pub profile_dir: PathBuf,
+    /// Token fired by [`teardown`] to stop the chromiumoxide handler task.
+    pub shutdown: CancellationToken,
 }
 
 /// Generate a unique Chromium user-data-dir path using PID, nanos-since-epoch,
@@ -65,6 +68,11 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 /// Initialise chromiumoxide, launch a headless Chromium browser, create a page,
 /// and return a [`TestContext`].
 ///
+/// The chromiumoxide handler runs in a background [`tokio::task`] that races
+/// against `ctx.shutdown`. [`teardown`] fires the token so the task exits
+/// promptly instead of leaking for the rest of the test process when the
+/// browser fails to close cleanly.
+///
 /// # Panics
 /// Panics if the browser cannot launch or the page cannot be created.
 #[allow(dead_code)]
@@ -96,7 +104,21 @@ pub async fn setup() -> TestContext {
         .expect("Failed to launch Chromium browser");
 
     // Spawn the handler task — REQUIRED, otherwise the browser hangs.
-    tokio::spawn(async move { while handler.next().await.is_some() {} });
+    // Bound by `shutdown` so a failed `browser.close()` does not leak the
+    // task for the rest of the test process.
+    let shutdown = CancellationToken::new();
+    let handler_token = shutdown.child_token();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                () = handler_token.cancelled() => break,
+                event = handler.next() => {
+                    if event.is_none() { break; }
+                }
+            }
+        }
+    });
 
     // Create a page with about:blank then navigate in each test.
     let page = browser
@@ -109,31 +131,40 @@ pub async fn setup() -> TestContext {
         page,
         base_url: base_url(None),
         profile_dir,
+        shutdown,
     }
 }
 
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
-/// creation order. Cleanup errors are printed for diagnostics but do not mask
-/// the test assertion that already ran.
+/// creation order. Cleanup errors are logged via `tracing::warn!` (structured)
+/// but never mask the test assertion that already ran.
 #[allow(dead_code)]
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
         mut browser,
         page,
         profile_dir,
+        shutdown,
         ..
     } = ctx;
     if let Err(e) = page.close().await {
-        eprintln!("Failed to close Chromium page during teardown: {e}");
+        tracing::warn!(error = %e, "failed to close Chromium page during teardown");
     }
     if let Err(e) = browser.close().await {
-        eprintln!("Failed to close Chromium browser during teardown: {e}");
+        tracing::warn!(
+            error = %e,
+            "failed to close Chromium browser during teardown; signalling handler shutdown"
+        );
     }
+    // Always fire the shutdown token so the handler task exits even if
+    // `browser.close()` did not (e.g. the websocket is wedged).
+    shutdown.cancel();
     // Remove the temporary profile directory.
     if let Err(e) = std::fs::remove_dir_all(&profile_dir) {
-        eprintln!(
-            "Failed to remove profile dir {}: {e}",
-            profile_dir.display()
+        tracing::warn!(
+            profile_dir = %profile_dir.display(),
+            error = %e,
+            "failed to remove Chromium profile dir"
         );
     }
 }

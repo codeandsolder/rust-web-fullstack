@@ -1,15 +1,24 @@
 //! Shared configuration for the gateway example.
 //!
 //! Settings are loaded from environment variables at startup.
-//! Secret fields are redacted in [`Debug`] output.
+//! Secret fields are stored as [`Arc<str>`] (cheap to clone, share-on-write,
+//! no per-clone heap allocation) and redacted in [`Debug`] output.
+
+use std::sync::Arc;
 
 /// Shared configuration loaded from environment variables.
 ///
-/// All secret fields are redacted in [`Debug`] output.
+/// Secrets are stored as [`Arc<str>`] so cloning [`Settings`] (which
+/// [`axum::extract::State`] does on every request) is a refcount bump rather
+/// than a deep `String` clone. All secret fields are redacted in
+/// [`Debug`] output.
 #[derive(Clone)]
 pub struct Settings {
-    pub jwt_secret: String,
-    pub default_admin_password: String,
+    /// HMAC secret used to sign and verify JWTs.
+    pub jwt_secret: Arc<str>,
+    /// Shared password that any `user_id` may submit to obtain a token.
+    /// Replace with a real user database in production.
+    pub default_admin_password: Arc<str>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -59,8 +68,8 @@ impl Settings {
         }
 
         Ok(Self {
-            jwt_secret,
-            default_admin_password,
+            jwt_secret: Arc::from(jwt_secret.as_str()),
+            default_admin_password: Arc::from(default_admin_password.as_str()),
         })
     }
 }

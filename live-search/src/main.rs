@@ -26,6 +26,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use tracing::Instrument;
 use tracing_subscriber::EnvFilter;
 
 use live_search::app;
@@ -163,7 +164,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mut tasks = JoinSet::new();
     let listener_token = shutdown.child_token();
-    tasks.spawn(db::run_pg_listener(pool, tx, listener_token));
+    // Attach the span before spawning so logs inside `run_pg_listener` carry
+    // the `pg_listener` span (rust-tracing §1.1 — `#[instrument]` alone does
+    // not propagate across `JoinSet::spawn`).
+    let listener_span = tracing::info_span!("pg_listener");
+    tasks.spawn(
+        async move { db::run_pg_listener(pool, tx, listener_token).await }
+            .instrument(listener_span),
+    );
 
     // ---- Leptos configuration & routes ------------------------------------
 
@@ -230,16 +238,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Drain background tasks with a grace period so in-flight notifications
     // can flush. A second `cancel()` is idempotent and safe if the signal
-    // handler already fired.
+    // handler already fired. Inspect each `JoinError` so a panic is logged
+    // rather than silently swallowed.
     shutdown.cancel();
-    if tokio::time::timeout(Duration::from_secs(10), async {
-        while tasks.join_next().await.is_some() {}
+    match tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(err) = joined {
+                tracing::error!(
+                    error = ?err,
+                    is_panic = err.is_panic(),
+                    "background task did not complete cleanly"
+                );
+            }
+        }
     })
     .await
-    .is_err()
     {
-        tracing::warn!("background tasks did not drain within 10s; aborting");
-        tasks.abort_all();
+        Ok(()) => {}
+        Err(_elapsed) => {
+            tracing::warn!("background tasks did not drain within 10s; aborting");
+            tasks.abort_all();
+        }
     }
 
     Ok(())

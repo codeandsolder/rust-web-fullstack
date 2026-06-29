@@ -52,61 +52,42 @@ enum GatewayEventView<'a> {
     HealthChanged { name: &'a str, status: &'a str },
 }
 
+/// Build an SSE `Event` with the given type and JSON payload, falling back to
+/// a safe placeholder on serialization failure (which never happens for our
+/// well-typed variants but is logged for visibility).
+fn build_event(event_name: &'static str, data: impl Serialize) -> Event {
+    Event::default()
+        .event(event_name)
+        .json_data(&data)
+        .unwrap_or_else(|err| {
+            tracing::error!(
+                error = %err,
+                event_name = %event_name,
+                "failed to serialize gateway event payload"
+            );
+            Event::default()
+                .event(event_name)
+                .data("serialization error")
+        })
+}
+
 impl From<GatewayEvent> for Event {
     fn from(event: GatewayEvent) -> Self {
         match event {
             GatewayEvent::ServiceStarted(name) => {
-                let view = GatewayEventView::ServiceStarted { name };
-                let event = Self::default().event("service_started");
-                match event.json_data(&view) {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to serialize GatewayEvent::ServiceStarted");
-                        Self::default()
-                            .event("service_started")
-                            .data("serialization error")
-                    }
-                }
+                build_event("service_started", GatewayEventView::ServiceStarted { name })
             }
             GatewayEvent::ServiceStopped(name) => {
-                let view = GatewayEventView::ServiceStopped { name };
-                let event = Self::default().event("service_stopped");
-                match event.json_data(&view) {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to serialize GatewayEvent::ServiceStopped");
-                        Self::default()
-                            .event("service_stopped")
-                            .data("serialization error")
-                    }
-                }
+                build_event("service_stopped", GatewayEventView::ServiceStopped { name })
             }
-            GatewayEvent::HealthChanged(name, status) => {
-                let view = GatewayEventView::HealthChanged {
+            GatewayEvent::HealthChanged(name, status) => build_event(
+                "health_changed",
+                GatewayEventView::HealthChanged {
                     name,
                     status: status.as_ref(),
-                };
-                let event = Self::default().event("health_changed");
-                match event.json_data(&view) {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to serialize GatewayEvent::HealthChanged");
-                        Self::default()
-                            .event("health_changed")
-                            .data("serialization error")
-                    }
-                }
-            }
-            GatewayEvent::Custom(typ, data) => {
-                let event = Self::default().event(typ);
-                match event.json_data(&data) {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to serialize GatewayEvent::Custom");
-                        Self::default().event(typ).data("serialization error")
-                    }
-                }
-            }
+                },
+            ),
+            GatewayEvent::Custom(typ, data) => build_event(typ, data),
         }
     }
 }

@@ -119,45 +119,57 @@ impl LoginRateLimiter {
     /// Check whether `ip` has exceeded the rate limit.
     ///
     /// Returns `Ok(())` if the request is allowed, `Err(AppError::AuthError)`
-    /// if rate-limited.
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "intentional: holding guard across short branch"
-    )]
+    /// if rate-limited. The counter is incremented **before** the password
+    /// check, so a legitimate user with 5 typos in a 60 s window is locked out
+    /// along with a real attacker.
     async fn check(&self, ip: IpAddr) -> Result<(), AppError> {
-        let now = Instant::now();
-        let mut map = self.inner.lock().await;
-        let entry = map.entry(ip).or_insert(RateLimitBucket {
-            count: 0,
-            window_start: now,
-        });
+        // Phase 1: short critical section — bump the bucket, optionally
+        // record how many entries to drop. The actual collect/sort/retain
+        // happens **outside** the lock to keep the critical section O(1)
+        // even when the map is at `MAX_TRACKED_IPS`.
+        let cutoff = {
+            let now = Instant::now();
+            let mut map = self.inner.lock().await;
+            let entry = map.entry(ip).or_insert(RateLimitBucket {
+                count: 0,
+                window_start: now,
+            });
 
-        if now.duration_since(entry.window_start) > Self::WINDOW {
-            entry.count = 0;
-            entry.window_start = now;
-        }
+            if now.duration_since(entry.window_start) > Self::WINDOW {
+                entry.count = 0;
+                entry.window_start = now;
+            }
 
-        if entry.count >= Self::MAX_ATTEMPTS {
-            return Err(AppError::AuthError);
-        }
+            if entry.count >= Self::MAX_ATTEMPTS {
+                return Err(AppError::AuthError);
+            }
 
-        entry.count += 1;
+            entry.count += 1;
 
-        // Opportunistic prune: drop stale entries and, when the map exceeds
-        // MAX_TRACKED_IPS, drop the older half so memory stays bounded.
-        if map.len() > Self::MAX_TRACKED_IPS {
-            let mut windows: Vec<(IpAddr, Instant)> = map
-                .iter()
-                .map(|(ip, bucket)| (*ip, bucket.window_start))
-                .collect();
-            windows.sort_by_key(|(_, start)| *start);
-            let median = windows[windows.len() / 2].1;
-            map.retain(|_, bucket| bucket.window_start >= median);
-        } else {
-            // SAFETY: Instant is monotonic, so subtracting a finite
-            // duration always succeeds.  We fall back to `now` (no
-            // cleanup) in the impossible-failure case.
-            let stale = now.checked_sub(Self::WINDOW).unwrap_or(now);
+            if map.len() > Self::MAX_TRACKED_IPS {
+                // Find the median window_start under the lock, then drop the
+                // older half in a second short critical section. This bounds
+                // memory under brute-force probing without serialising every
+                // login attempt on an O(N log N) sort.
+                let mut starts: Vec<Instant> = map.values().map(|b| b.window_start).collect();
+                starts.sort_unstable();
+                let median = starts[starts.len() / 2];
+                drop(map);
+                Some(median)
+            } else {
+                // Opportunistic stale-entry prune: keep only entries whose
+                // window has not fully elapsed. `Instant` is monotonic, so
+                // `checked_sub` only fails if `now` predates the epoch —
+                // fall back to `now` (no cleanup) in that impossible case.
+                let stale = now.checked_sub(Self::WINDOW).unwrap_or(now);
+                drop(map);
+                Some(stale)
+            }
+        };
+
+        // Phase 2: a second short lock just for the retain.
+        if let Some(stale) = cutoff {
+            let mut map = self.inner.lock().await;
             map.retain(|_, bucket| bucket.window_start >= stale);
         }
 
@@ -176,25 +188,26 @@ impl LoginRateLimiter {
 /// messages are sent to the client.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
+#[must_use = "an AppError must be observed; consider logging or returning it to the caller"]
 pub enum AppError {
     /// Authentication failed (bad password, rate-limited, etc.).
-    #[error("Authentication failed")]
+    #[error("authentication failed")]
     AuthError,
 
     /// Generic JWT error.
-    #[error("JWT error")]
+    #[error("jwt error")]
     Jwt(#[source] jsonwebtoken::errors::Error),
 
     /// The JWT has expired.
-    #[error("Token expired")]
+    #[error("token expired")]
     TokenExpired(#[source] jsonwebtoken::errors::Error),
 
     /// The JWT signature is invalid.
-    #[error("Invalid signature")]
+    #[error("invalid signature")]
     InvalidSignature(#[source] jsonwebtoken::errors::Error),
 
     /// Internal error that should not leak details to the client.
-    #[error("Internal error: {context}")]
+    #[error("internal error: {context}")]
     Internal {
         /// Human-readable context describing what operation failed.
         context: String,
@@ -217,6 +230,16 @@ impl AppError {
     }
 }
 
+/// Render a JWT `ErrorKind` for tracing **without** echoing the underlying
+/// message — some `ErrorKind` variants (notably `Json(_)` and `Base64(_)`)
+/// wrap `Display` impls that include slices of the offending token payload,
+/// which would exfiltrate JWT claims into the log stream.
+fn jwt_kind(e: &jsonwebtoken::errors::Error) -> String {
+    // `Debug` on `ErrorKind` produces a stable variant name without leaking
+    // the inner message bytes.
+    format!("{:?}", e.kind())
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
@@ -226,7 +249,9 @@ impl IntoResponse for AppError {
             )
                 .into_response(),
             Self::Jwt(e) => {
-                tracing::error!(error = %e, "JWT error");
+                // Routine attacker probing — keep at `debug!` to avoid drowning
+                // the alert channel; never echo the error message itself.
+                tracing::debug!(kind = %jwt_kind(&e), "jwt error");
                 (
                     StatusCode::UNAUTHORIZED,
                     Json(json!({"error": "Authentication failed"})),
@@ -234,7 +259,7 @@ impl IntoResponse for AppError {
                     .into_response()
             }
             Self::TokenExpired(e) => {
-                tracing::warn!(error = %e, "Token expired");
+                tracing::warn!(kind = %jwt_kind(&e), "token expired");
                 (
                     StatusCode::UNAUTHORIZED,
                     Json(json!({"error": "Token expired"})),
@@ -242,7 +267,7 @@ impl IntoResponse for AppError {
                     .into_response()
             }
             Self::InvalidSignature(e) => {
-                tracing::warn!(error = %e, "Invalid JWT signature");
+                tracing::warn!(kind = %jwt_kind(&e), "invalid JWT signature");
                 (
                     StatusCode::UNAUTHORIZED,
                     Json(json!({"error": "Invalid signature"})),
@@ -250,7 +275,15 @@ impl IntoResponse for AppError {
                     .into_response()
             }
             Self::Internal { context, source } => {
-                tracing::error!(context = %context, error = %source, "internal error");
+                // `?source` uses `Debug` and walks the chain via `tracing-error`
+                // if installed; without it we still see the top-level error.
+                // We do NOT include `source` chain contents that may contain
+                // secrets — context is the only operator-readable label here.
+                tracing::error!(
+                    context = %context,
+                    error = ?source,
+                    "internal error"
+                );
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({"error": "internal error"})),

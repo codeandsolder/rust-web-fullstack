@@ -65,6 +65,13 @@ pub trait ServiceModule: Send + Sync {
     /// The trait is object-safe so modules can be stored as `dyn ServiceModule`.
     /// Returning an explicit boxed future keeps the allocation visible instead
     /// of hiding it behind an async-trait macro.
+    ///
+    /// > **Note:** when this future is awaited from inside
+    /// > `tokio::task::JoinSet::spawn`, the boxed future must be `Send + 'static`.
+    /// > The current canonical caller (a synchronous `join_all` in the
+    /// > `/health` handler) does not require `Send`, so the default
+    /// > `BoxFuture<'_, _>` is fine. If you ever spawn a per-service health
+    /// > check into a `JoinSet` you must add an explicit `+ Send` bound.
     #[must_use = "a health check result should be observed or returned to the caller"]
     fn health_check(&self) -> BoxFuture<'_, Result<(), ServiceHealthError>> {
         future::ready(Ok(())).boxed()

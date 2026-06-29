@@ -122,15 +122,32 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// Per-module health probe timeout. A single hung module must not be able to
+/// stall the aggregated `/health` response indefinitely; load balancers will
+/// otherwise drain the gateway out of rotation on the slowest service.
+const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Aggregate health check — probes every registered service module in
-/// parallel.
+/// parallel, each capped at [`HEALTH_CHECK_TIMEOUT`].
 #[instrument(skip(state))]
 async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
     let results = join_all(state.modules.iter().map(|module| async {
-        let status = match module.health_check().await {
-            Ok(()) => "healthy",
-            Err(e) => {
-                tracing::warn!("health check failed for {}: {e}", module.name());
+        let status = match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
+            Ok(Ok(())) => "healthy",
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    name = module.name(),
+                    error = %e,
+                    "health check failed"
+                );
+                "unhealthy"
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    name = module.name(),
+                    timeout_ms = HEALTH_CHECK_TIMEOUT.as_millis(),
+                    "health check timed out"
+                );
                 "unhealthy"
             }
         };
@@ -153,7 +170,7 @@ async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
 async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
     Json(json!({
         "gateway": "Gateway Example",
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "services": state.services,
     }))
 }

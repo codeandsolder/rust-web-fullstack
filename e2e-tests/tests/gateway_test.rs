@@ -18,6 +18,14 @@ mod common;
 use common::require_server;
 use e2e_tests::base_url;
 
+/// Synthetic dev credential used by the integration tests.
+///
+/// The CI runner sets `ADMIN_PASSWORD=synthetic-gateway-test-password` in
+/// `e2e-tests/scripts/` (or the equivalent in `.woodpecker.yml`) so this
+/// constant does not collide with any production credential and is
+/// impossible to confuse with `admin`.
+const TEST_PASSWORD: &str = "synthetic-gateway-test-password-do-not-use-in-prod";
+
 // ---------------------------------------------------------------------------
 // Required integration tests (from spec)
 // ---------------------------------------------------------------------------
@@ -159,7 +167,10 @@ async fn auth_login_succeeds() {
         .expect("Failed to build reqwest client");
     let response = client
         .post(&url)
-        .json(&serde_json::json!({"user_id": "test", "password": "admin"}))
+        .json(&serde_json::json!({
+            "user_id": "test",
+            "password": TEST_PASSWORD,
+        }))
         .send()
         .await
         .unwrap_or_else(|e| panic!("Failed to POST {url}: {e}"));

@@ -9,6 +9,8 @@
 // Leptos #[server] generates client-side trait impl stubs without awaits
 // when compiled without ssr — the unused async is expected.
 
+use std::sync::Arc;
+
 use leptos::prelude::*;
 #[allow(
     clippy::wildcard_imports,
@@ -136,8 +138,11 @@ pub fn SearchPage() -> impl IntoView {
 
     // Track the last result's Ok and Err branches separately so the view
     // can render a distinct error branch instead of silently swallowing it.
-    let results = move || search_action.value().get().and_then(Result::ok);
-    let error = move || search_action.value().get().and_then(Result::err);
+    // Read `.value()` once per render frame; reading it twice would create
+    // two reactive subscriptions and run the body twice on every change.
+    let action_value = move || search_action.value().get();
+    let results = move || action_value().and_then(Result::ok);
+    let error = move || action_value().and_then(Result::err);
 
     view! {
         <h2>"Search"</h2>
@@ -171,13 +176,18 @@ pub fn SearchPage() -> impl IntoView {
                     items
                         .into_iter()
                         .map(|r| {
+                            // The `view!` macro requires owned text for `text` nodes
+                            // and `href`, so each `String` field is moved once into
+                            // its respective binding. Without the bind below we
+                            // would clone `r.url` twice (once for `href`, once for
+                            // the `<small>` text node).
                             let url = r.url.clone();
                             view! {
                                 <div class="result-item" style="margin-bottom: 0.8rem; padding: 0.5rem; border: 1px solid #eee; border-radius: 4px;">
                                     <h3 style="margin: 0 0 0.2rem;">
-                                        <a href={url}>{r.title.clone()}</a>
+                                        <a href={url}>{r.title}</a>
                                     </h3>
-                                    <p style="margin: 0 0 0.2rem;">{r.snippet.clone()}</p>
+                                    <p style="margin: 0 0 0.2rem;">{r.snippet}</p>
                                     <small style="color: #666;">{r.url}</small>
                                 </div>
                             }
@@ -193,12 +203,17 @@ pub fn SearchPage() -> impl IntoView {
 // Live-feed page – receives search results via SSE as they are inserted
 // ---------------------------------------------------------------------------
 
-/// A display-friendly result (subset of fields from `SearchResult`).
+/// Display-friendly result held in the live-feed reactive list.
+///
+/// Uses `Arc<str>` to extend the `mem-arc-str` optimisation already in
+/// `SseEvent::SearchResult` all the way to the rendering layer: the `Arc`
+/// from the broadcast payload is moved into the list and displayed by
+/// borrowing it. No per-event `String` allocation on the WASM side.
 #[derive(Debug, Clone)]
 struct LiveResult {
-    title: String,
-    url: String,
-    snippet: String,
+    title: Arc<str>,
+    url: Arc<str>,
+    snippet: Arc<str>,
 }
 
 #[expect(
@@ -262,9 +277,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                                                 r.remove(0);
                                                             }
                                                             r.push(LiveResult {
-                                                                title: title.to_string(),
-                                                                url: url.to_string(),
-                                                                snippet: snippet.to_string(),
+                                                                title,
+                                                                url,
+                                                                snippet,
                                                             });
                                                         });
                                                     }

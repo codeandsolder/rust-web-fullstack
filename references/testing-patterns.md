@@ -539,4 +539,4 @@ Same as GitHub Actions — the action runner images work for both.
 8. **Silent test skips via `check_server_or_skip()`**: Do not use helpers that return `false` and let tests `return`. Required dependencies should panic/assert with the actual status or error; optional slow tests should use `#[ignore]`.
 9. **Sccache does not shrink `target/`**: sccache caches rustc output to `~/.cache/sccache`, but `target/debug/deps/` still grows because cargo needs linked artifacts + incremental state. Use `cargo clean` periodically.
 10. **Chromium binary version drift**: Playwright 1.50 Chromium 1208 is stable on this host; newer Chromium 1223+ has crashed. Pin via `BrowserConfig::chrome_path()`.
-8. **Browser launch in CI**: Playwright browsers need system dependencies (`libnss3`, `libnspr4`, etc.). Use `--with-deps` flag in CI.
+11. **Browser launch in CI**: Playwright browsers need system dependencies (`libnss3`, `libnspr4`, etc.). Use `--with-deps` flag in CI.
