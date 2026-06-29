@@ -145,7 +145,8 @@ pub async fn setup() -> TestContext {
 }
 
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
-/// creation order. Cleanup errors are logged via `tracing::warn!` (structured)
+/// creation order. Cleanup errors are logged via `eprintln!` (stderr,
+/// captured by the test harness per-test and displayed only on failure).
 /// but never mask the test assertion that already ran.
 #[allow(
     dead_code,

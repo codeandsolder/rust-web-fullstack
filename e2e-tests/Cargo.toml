@@ -35,7 +35,5 @@ serde_json = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 sqlx = { workspace = true }
-# Used by common::teardown for structured logging (test helpers never use eprintln!).
-tracing = { workspace = true }
 # Used by common::setup / common::teardown to bound the chromiumoxide handler pump.
 tokio-util = { workspace = true }

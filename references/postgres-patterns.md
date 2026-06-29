@@ -287,16 +287,20 @@ your application's error type so the source chain is preserved.
 
 ### Production Config
 
-```rust
-let mut listener = PgListener::connect_with(&pool).await?;
-listener.set_channel_buffer_size(1024);  // buffer for unreceived notifications
+sqlx 0.9's `PgListener` does not expose `set_channel_buffer_size` — buffering
+is handled on the **consumer** side. `PgListener` does auto-reconnect on lost
+connections (`eager_reconnect(true)` is the default), but initial connect and
+`listen()` failures still need a retry loop:
 
-// Eager reconnect: immediately reconnect on connection loss
-listener.eager_reconnect(true);
-
-// Soft reconnect: wait for recv/recv_timeout to detect loss
-listener.eager_reconnect(false);
-```
+- **Buffering**: forward notifications from `listener.recv()` into a
+  `tokio::sync::broadcast::Sender`; each SSE client subscribes to the broadcast
+  channel (see the `pg_listener_task` pattern in SKILL.md Pattern 2).
+- **Reconnect**: implement retry-with-backoff around `PgListener::connect_with`
+  and `listener.listen(...)`, racing `recv()` against a `CancellationToken` so
+  the loop exits cleanly on shutdown (see `run_pg_listener` in
+  `live-search/src/db.rs`). `PgListener` auto-reconnects on lost connections
+  after the initial connect succeeds, but the retry loop handles the initial
+  connect failure and `listen()` failure cases.
 
 ### Budget: PgListener + Pool
 

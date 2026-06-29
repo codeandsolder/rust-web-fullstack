@@ -486,9 +486,9 @@ async fn test_sse_live_update() {
         BrowserConfig::builder()
             .user_data_dir(std::path::PathBuf::from(&profile_dir))
             // No `.headless_mode(...)` call needed: the chromiumoxide 0.9 default
-            // is already headless. Note that `HeadlessMode` itself is *not*
-            // publicly re-exported by chromiumoxide 0.9 (issue #317), so any
-            // explicit selector must use `.new_headless_mode()` instead.
+            // is already headless. `HeadlessMode` IS publicly exported at
+            // `chromiumoxide::browser::HeadlessMode`, but is only needed for
+            // non-default headless configurations.
             .build()
     )
     .await
@@ -521,11 +521,9 @@ async fn test_sse_live_update() {
     assert!(!text.is_empty(), "Expected non-empty SSE content");
 
     if let Err(e) = std::fs::remove_dir_all(&profile_dir) {
-        tracing::warn!(
-            profile_dir = %profile_dir,
-            error = %e,
-            "failed to remove Chromium profile dir"
-        );
+        // Use eprintln! (not tracing::warn!) — no tracing subscriber is
+        // initialised in E2E test binaries; see Pattern 12 for rationale.
+        eprintln!("failed to remove Chromium profile dir: {e}");
     }
 }
 ```
@@ -537,6 +535,7 @@ async fn test_sse_live_update() {
 > `.expect()` for fail-fast test setup are acceptable there. Never copy
 > these patterns into production code.
 
+```rust
 // Helper: poll a JS expression until true or timeout
 async fn wait_for_js_true(
     page: &chromiumoxide::Page,

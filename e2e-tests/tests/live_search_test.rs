@@ -6,6 +6,9 @@
 //! - Typing a query and submitting shows results.
 //! - Searching for nonsense yields a "no results" message.
 //! - An SSE live-feed indicator appears on the `/live` route.
+//! - The server function catch-all (Pattern 9) routes `/api/search` correctly.
+//! - Static WASM/JS assets are served from `/pkg/` (Critical Rule 7).
+//! - Unknown paths return 404 via the fallback handler.
 //!
 //! All tests are gated behind the `integration` feature and will be ignored
 //! when running plain `cargo test`.  Use `--features integration` to enable
@@ -397,4 +400,148 @@ async fn live_feed_receives_sse_event_in_browser() {
     pool.close().await;
 
     teardown(ctx).await;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP-level tests (no browser required)
+// ---------------------------------------------------------------------------
+
+/// 5. Server function catch-all (Pattern 9) — POST to `/api/search` with a
+///     URL-encoded body and verify the response is JSON containing search
+///     results.  Leptos 0.8's `#[server(endpoint = "/api/search")]` registers
+///     at the doubled path `/api/api/search`; the catch-all handler in
+///     `main.rs` rewrites the request so clients calling `/api/search` still
+///     reach the function.  This test verifies that rewrite directly, without
+///     relying on browser hydration.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn server_fn_search_returns_results_via_http() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/api/search", base_url(None));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+
+    // Leptos 0.8 server fns use URL encoding by default (not JSON).
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("query=rust")
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to POST {url}: {e}"));
+
+    assert_eq!(
+        response.status(),
+        200,
+        "Expected HTTP 200 from /api/search, got {}",
+        response.status()
+    );
+
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .expect("Server fn response is not valid JSON");
+
+    // The response is a JSON array of SearchResult objects.
+    let results = json
+        .as_array()
+        .expect("Server fn response should be a JSON array");
+
+    assert!(
+        !results.is_empty(),
+        "Expected at least one search result for query 'rust'"
+    );
+
+    // Verify the first result has the expected fields.
+    let first = &results[0];
+    assert!(
+        first.get("title").is_some(),
+        "Search result should have a 'title' field"
+    );
+    assert!(
+        first.get("url").is_some(),
+        "Search result should have a 'url' field"
+    );
+
+    println!(
+        "Server fn returned {} result(s); first title: {}",
+        results.len(),
+        first.get("title").and_then(|v| v.as_str()).unwrap_or("?")
+    );
+}
+
+/// 6. Static assets are served (Critical Rule 7) — GET `/pkg/live_search.js`
+///    and verify HTTP 200.  Without this, SSR pages render but WASM hydration
+///    never runs because the browser 404s on the JS module.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn static_assets_are_served() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/pkg/live_search.js", base_url(None));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
+
+    assert_eq!(
+        response.status(),
+        200,
+        "Expected HTTP 200 from /pkg/live_search.js, got {} — hydration will fail without this",
+        response.status()
+    );
+
+    // Verify it's actually JavaScript, not an error page.
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.contains("javascript") || content_type.contains("text/plain"),
+        "Expected JavaScript content-type, got '{content_type}'"
+    );
+}
+
+/// 7. Unknown path returns 404 — verifies the fallback handler in
+///    `live-search/src/main.rs` returns 404 for unmatched routes.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn unknown_path_returns_404() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/nonexistent-path-{}", base_url(None), std::process::id());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
+
+    assert_eq!(
+        response.status(),
+        404,
+        "Expected HTTP 404 for unknown path, got {}",
+        response.status()
+    );
 }

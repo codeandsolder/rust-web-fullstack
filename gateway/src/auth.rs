@@ -123,10 +123,10 @@ impl LoginRateLimiter {
     /// check, so a legitimate user with 5 typos in a 60 s window is locked out
     /// along with a real attacker.
     async fn check(&self, ip: IpAddr) -> Result<(), AppError> {
-        // Phase 1: short critical section — bump the bucket, optionally
-        // record how many entries to drop. The actual collect/sort/retain
-        // happens **outside** the lock to keep the critical section O(1)
-        // even when the map is at `MAX_TRACKED_IPS`.
+        // Phase 1: short critical section — bump the bucket, collect
+        // window-start values (O(N)), then drop the lock before the
+        // O(N log N) sort so the critical section stays linear even
+        // when the map is at `MAX_TRACKED_IPS`.
         let cutoff = {
             let now = Instant::now();
             let mut map = self.inner.lock().await;
@@ -147,15 +147,15 @@ impl LoginRateLimiter {
             entry.count += 1;
 
             if map.len() > Self::MAX_TRACKED_IPS {
-                // Find the median window_start under the lock, then drop the
-                // older half in a second short critical section. This bounds
-                // memory under brute-force probing without serialising every
-                // login attempt on an O(N log N) sort.
+                // Collect window-start values under the lock (O(N)), then
+                // drop the lock before sorting (O(N log N)) so the critical
+                // section stays linear. The median is used to drop the older
+                // half of entries in a second short critical section, bounding
+                // memory under brute-force probing.
                 let mut starts: Vec<Instant> = map.values().map(|b| b.window_start).collect();
-                starts.sort_unstable();
-                let median = starts[starts.len() / 2];
                 drop(map);
-                Some(median)
+                starts.sort_unstable();
+                Some(starts[starts.len() / 2])
             } else {
                 // Opportunistic stale-entry prune: keep only entries whose
                 // window has not fully elapsed. `Instant` is monotonic, so
@@ -230,13 +230,14 @@ impl AppError {
     }
 }
 
-/// Render a JWT `ErrorKind` for tracing **without** echoing the underlying
-/// message — some `ErrorKind` variants (notably `Json(_)` and `Base64(_)`)
-/// wrap `Display` impls that include slices of the offending token payload,
-/// which would exfiltrate JWT claims into the log stream.
+/// Render a JWT `ErrorKind` for tracing using the stable variant name only.
+///
+/// Using `Display` here would format the underlying message of variants like
+/// `Json(_)` / `Base64(_)` / `Utf8(_)`, which (depending on upstream
+/// versions) could echo slices of the offending token payload. `Debug` on
+/// `ErrorKind` produces just the variant name (`"InvalidToken"`,
+/// `"Base64"`, …) without leaking message bytes.
 fn jwt_kind(e: &jsonwebtoken::errors::Error) -> String {
-    // `Debug` on `ErrorKind` produces a stable variant name without leaking
-    // the inner message bytes.
     format!("{:?}", e.kind())
 }
 
@@ -429,7 +430,19 @@ pub async fn auth_middleware(
 
     let claims = auth_header
         .and_then(|v| v.strip_prefix("Bearer "))
-        .and_then(|token| validate_jwt(token, &state.settings).ok());
+        .and_then(|token| match validate_jwt(token, &state.settings) {
+            Ok(claims) => Some(claims),
+            Err(e) => {
+                // Log the validation failure at debug! — routine attacker
+                // probing with bad tokens would flood warn!. We use `%e`
+                // (Display) on `AppError` (constant strings, no token payload)
+                // rather than `?e` (Debug) to be defensive against upstream
+                // `jsonwebtoken::Error` formatting changes that might one day
+                // echo payload bytes.
+                tracing::debug!(error = %e, "JWT validation failed in middleware");
+                None
+            }
+        });
 
     let Some(claims) = claims else {
         return AppError::AuthError.into_response();

@@ -16,6 +16,7 @@ use axum::{
 use futures::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::instrument;
 
@@ -100,6 +101,15 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
     };
 
     // --- gateway-wide routes ---
+    //
+    // CORS is configured with `Any` origin/method/header for the showcase.
+    // In production, restrict `allow_origin` to the specific frontend origin
+    // (e.g. `allow_origin([Origin::exact("https://app.example.com".parse().unwrap())])`).
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app: Router = router
         .route("/health", get(health_handler))
         .route("/events", get(sse::sse_handler))
@@ -112,7 +122,11 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
             )),
         )
         .route("/", get(root_handler))
+        // CORS is the outermost layer so OPTIONS preflights short-circuit
+        // before they traverse unrelated middleware (auth, tracing, etc.) and
+        // don't generate spurious trace spans. TraceLayer is inner.
         .layer(TraceLayer::new_for_http())
+        .layer(cors)
         .with_state(state);
 
     Ok(app)

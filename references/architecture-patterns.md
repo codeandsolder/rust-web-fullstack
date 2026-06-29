@@ -198,9 +198,12 @@ For the actual implementation see `./gateway/src/gateway.rs`.
 Two important corrections to the naïve pattern:
 
 1. **Never `.expect()` on `PgListener::connect_with` or `listener.listen()`**
-   at startup. The DB may be briefly unreachable at boot; sqlx's
-   `PgListener` supports `eager_reconnect(true)` but only if you let it
-   return the error and reconnect, not panic.
+   at startup. The DB may be briefly unreachable at boot; implement a
+   retry-with-backoff loop that returns the error and reconnects, not
+   panics. sqlx 0.9's `PgListener` auto-reconnects on lost connections
+   (`eager_reconnect(true)` is the default — the connection is re-established
+   before `try_recv()` returns `Ok(None)`), but a retry loop is still needed
+   for the initial connect and for `listen()` failures.
 2. **Use a cancellation-aware retry loop** with exponential backoff
    and `biased;` in the inner `select!` so that shutdown wins when both
    an event and a cancel signal are ready simultaneously.
@@ -251,12 +254,20 @@ async fn run_pg_listener(
                     match notification {
                         Ok(n) => {
                             backoff = Duration::from_millis(250);
-                            let event = SseEvent {
-                                channel: Arc::from(n.channel()),
-                                payload: Arc::from(n.payload()),
-                            };
-                            if let Err(e) = tx.send(event) {
-                                tracing::debug!("notification had no SSE receivers: {e}");
+                            // Parse the JSON payload from the NOTIFY trigger
+                            // and construct the typed SseEvent variant.
+                            // The canonical implementation is in
+                            // `live-search/src/db.rs::forward_notification`.
+                            match serde_json::from_str::<SseEvent>(n.payload()) {
+                                Ok(event) => {
+                                    if let Err(e) = tx.send(event) {
+                                        tracing::debug!("notification had no SSE receivers: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e,
+                                        "invalid NOTIFY payload; skipping");
+                                }
                             }
                         }
                         Err(e) => {
@@ -281,7 +292,9 @@ Notes:
   cancel signal are ready, the random branch order may pick the notification
   one more time before shutting down.
 - `Arc::from(&str)` keeps the broadcast payload allocation-free per
-  subscriber (per `mem-arc-str`). Use `Arc<str>` for `SseEvent`'s fields.
+  subscriber (per `mem-arc-str`). Use `Arc<str>` for string fields inside
+  `SseEvent` variants — the canonical `live-search/src/events.rs` does
+  this for `SearchResult { title, url, snippet }`.
 - `backoff` doubles up to `max_backoff`, resets on each successful connect.
 - The connection is returned to the pool when `listener` is dropped
   (sqlx 0.9 `PgListener::Drop`).

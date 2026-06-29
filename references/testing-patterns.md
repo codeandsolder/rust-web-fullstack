@@ -118,7 +118,9 @@ The two available Rust ports of Playwright are both broken:
 ```toml
 # Cargo.toml (e2e-tests crate only — never add to prod crates)
 [dependencies]
-chromiumoxide = "0.9"
+# `default-features = false` keeps the tokio version compatible with the
+# workspace pin; `bytes` is required for `Browser::launch(...)`.
+chromiumoxide = { version = "0.9", default-features = false, features = ["bytes"] }
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -126,7 +128,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```bash
 # Install Chromium via Playwright (chromiumoxide reuses these binaries)
 npx playwright install chromium
-# Or point chromiumoxide at any Chrome binary via BrowserConfig::chrome_path()
+# Or set `CHROME_PATH` in your shell — `setup()` reads it and passes the
+# path to `BrowserConfig::chrome_executable(...)`. (chromiumoxide's own
+# fallback `CHROME` env var is not used by this helper.)
 ```
 
 ### Browser Launch (with unique profile dir)
@@ -163,9 +167,9 @@ async fn test_ssr_page_renders() {
         BrowserConfig::builder()
             .user_data_dir(profile_dir.clone())
             // No `.headless_mode(...)` needed — chromiumoxide 0.9 default
-            // is already headless. Note that `HeadlessMode` is NOT publicly
-            // re-exported by chromiumoxide 0.9 (issue #317); use
-            // `.new_headless_mode()` for explicit selection.
+            // is already headless. `HeadlessMode` IS exported at
+            // `chromiumoxide::browser::HeadlessMode`, but is only needed
+            // for non-default headless configurations.
             .build()
     ).await.expect("failed to launch Chromium");
 
@@ -196,10 +200,25 @@ async fn test_ssr_page_renders() {
     ).await.unwrap().into_value().unwrap();
     assert!(title.contains("Search"));
 
-    // Step 4: Fill form (use page.fill for input values)
-    page.find_element("input[type='text']").await.unwrap()
-        .click().await.unwrap()
-        .type_str("rust proxy").await.unwrap();
+    // Step 4: Fill form. `WebElement::type_str` does NOT reliably fire
+    // the `input` event for Leptos's `bind:value` — use the IIFE pattern
+    // that sets the value via the native setter and dispatches a single
+    // bubbleable `input` event. See `e2e-tests/tests/live_search_test.rs`
+    // `fill_search_input` for the canonical implementation.
+    let query = "rust proxy";
+    let value_json = serde_json::to_string(query).expect("query is always valid JSON");
+    let script = format!(
+        r#"(() => {{
+            const el = document.querySelector('input[type="text"]');
+            if (!el) throw new Error('search input not found');
+            const setter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            setter.call(el, {value_json});
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        }})()"#
+    );
+    page.evaluate(script.as_str()).await.expect("failed to set input value");
 
     // Step 5: Click submit
     page.find_element("button[type='submit']").await.unwrap()
@@ -245,14 +264,15 @@ pub async fn wait_for_js_true(page: &Page, expr: &str, timeout: Duration) -> boo
 
 /// Require a service to be reachable before continuing a test.
 pub async fn require_server(url: &str) {
-    // `.expect()` is clearer than `.unwrap_or_else(|e| panic!(...))` and is
-    // recognised by the workspace's `expect_used` lint policy.
+    // `.expect()` takes a `&'static str` — it does NOT interpolate format
+    // args. Use `.unwrap_or_else(|e| panic!(...))` when you need the URL
+    // in the error message.
     let response = reqwest::Client::new()
         .get(url)
         .timeout(Duration::from_secs(2))
         .send()
         .await
-        .expect("required server at {url} is not reachable");
+        .unwrap_or_else(|e| panic!("required server at {url} is not reachable: {e}"));
     assert!(
         response.status().is_success(),
         "required server at {url} returned {}",

@@ -5,6 +5,8 @@
 //! - The root `/` returns a JSON list of available services.
 //! - Each service route is reachable.
 //! - The `/auth/login` endpoint accepts a POST and returns a JWT token.
+//! - The `/events` SSE endpoint returns `text/event-stream`.
+//! - CORS preflight requests are handled with appropriate headers.
 //!
 //! All tests are gated behind the `integration` feature and will be ignored
 //! when running plain `cargo test`.  Use `--features integration` to enable
@@ -347,5 +349,96 @@ async fn auth_login_rejects_invalid_password() {
     assert_eq!(
         status, 401,
         "Expected HTTP 401 from /auth/login with invalid password, got {status}",
+    );
+}
+
+/// 15. Gateway SSE endpoint returns event stream — GET `/events` and verify
+///     HTTP 200 and `Content-Type: text/event-stream`.  The gateway forwards
+///     `GatewayEvent`s via a `broadcast::Sender` consumed by this endpoint.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn gateway_sse_endpoint_returns_event_stream() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/events", base_url(None));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
+
+    assert_eq!(
+        response.status(),
+        200,
+        "Expected HTTP 200 from gateway /events, got {}",
+        response.status()
+    );
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .expect("SSE response must have Content-Type header");
+    assert!(
+        content_type.contains("text/event-stream"),
+        "Expected Content-Type containing 'text/event-stream', got '{content_type}'"
+    );
+
+    println!("Gateway SSE endpoint at {url} -> HTTP 200, Content-Type: {content_type}");
+}
+
+/// 16. Gateway CORS preflight is handled — send an OPTIONS preflight request
+///     with an `Origin` header and verify the gateway responds with
+///     `Access-Control-Allow-Origin` and appropriate CORS headers.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn gateway_cors_preflight_is_handled() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/health", base_url(None));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+    let response = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .header("Origin", "http://example.com")
+        .header("Access-Control-Request-Method", "GET")
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to OPTIONS {url}: {e}"));
+
+    // CORS preflight should return 200 (tower-http CorsLayer responds to
+    // preflight requests with 200, not 204).
+    assert!(
+        response.status().is_success(),
+        "Expected success from CORS preflight, got {}",
+        response.status()
+    );
+
+    // Verify the CORS header is present.
+    let allow_origin = response
+        .headers()
+        .get("access-control-allow-origin")
+        .and_then(|v| v.to_str().ok());
+    assert!(
+        allow_origin.is_some(),
+        "Expected Access-Control-Allow-Origin header in CORS preflight response"
+    );
+
+    println!(
+        "Gateway CORS preflight -> {}, Allow-Origin: {}",
+        response.status(),
+        allow_origin.unwrap_or("(missing)")
     );
 }
