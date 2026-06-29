@@ -1,51 +1,11 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::signal;
-use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
-mod auth;
-mod gateway;
-mod module;
-mod services;
-mod settings;
-mod sse;
-
-/// Spawn a task that fires the shutdown token on Ctrl+C (all platforms) or
-/// SIGTERM (Unix). The token is observed by every clone, propagating shutdown
-/// to all long-running tasks.
-fn spawn_signal_handler(shutdown: CancellationToken) {
-    tokio::spawn(async move {
-        #[expect(
-            clippy::expect_used,
-            reason = "signal handler installation can only fail in unrecoverable runtime states"
-        )]
-        let ctrl_c = async {
-            signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
-        };
-        #[cfg(unix)]
-        let terminate = async {
-            #[expect(
-                clippy::expect_used,
-                reason = "signal handler installation can only fail in unrecoverable runtime states"
-            )]
-            let mut sig = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-            sig.recv().await;
-        };
-        #[cfg(not(unix))]
-        let terminate = std::future::pending::<()>();
-
-        tokio::select! {
-            () = ctrl_c => tracing::info!("Ctrl+C received, initiating shutdown"),
-            () = terminate => tracing::info!("SIGTERM received, initiating shutdown"),
-        }
-        shutdown.cancel();
-    });
-}
+use gateway_example::{gateway, module, services};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,16 +16,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let _settings = settings::Settings::load();
-
-    // Register every service module.
-    let service_modules: Vec<Box<dyn module::ServiceModule>> = vec![
-        Box::new(services::search::SearchService),
-        Box::new(services::proxy::ProxyService),
-        Box::new(services::monitor::MonitorService),
+    // Register every service module as an `Arc<dyn ServiceModule>`.
+    let service_modules: Vec<Arc<dyn module::ServiceModule>> = vec![
+        Arc::new(services::search::SearchService),
+        Arc::new(services::proxy::ProxyService),
+        Arc::new(services::monitor::MonitorService),
     ];
 
-    let app = gateway::build_gateway(service_modules);
+    let app = gateway::build_gateway(service_modules)?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
 
@@ -78,22 +36,44 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
 
-    // Race axum::serve against the shutdown token. No JoinSet needed — the
-    // gateway has no long-lived background tasks beyond the request handlers
-    // themselves, which axum drains gracefully when the listener drops.
-    let shutdown = CancellationToken::new();
-    spawn_signal_handler(shutdown.clone());
-
-    let server_token = shutdown.clone();
-    let server = axum::serve(listener, app);
-    tokio::select! {
-        result = server => {
-            result.context("gateway server exited with an error")?;
-        }
-        () = server_token.cancelled() => {
-            tracing::info!("gateway shutdown requested");
-        }
-    }
+    // Catch Ctrl+C and SIGTERM gracefully.  We use `with_graceful_shutdown`
+    // so axum drains in-flight requests before the process exits.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("gateway server exited with an error")?;
 
     Ok(())
+}
+
+/// Return a future that resolves when a shutdown signal is received.
+///
+/// Listens for Ctrl+C (all platforms) and SIGTERM (Unix).  Errors during
+/// signal installation are logged but do not prevent startup.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::error!("failed to install Ctrl+C handler: {e}");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) else {
+            tracing::error!("failed to install SIGTERM handler");
+            return;
+        };
+        sig.recv().await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("Ctrl+C received, shutting down"),
+        () = terminate => tracing::info!("SIGTERM received, shutting down"),
+    }
 }

@@ -1,3 +1,4 @@
+# TODO: pin by digest — e.g. rust:1.94-bookworm@sha256:...
 FROM rust:1.94-bookworm AS builder
 WORKDIR /build
 
@@ -14,12 +15,15 @@ RUN mkdir -p gateway/src live-search/src e2e-tests/src && \
 
 # Build gateway only
 COPY . .
-RUN cargo build --release -p gateway-example
+RUN cargo build --locked --release -p gateway-example
 
+# TODO: pin by digest — e.g. debian:bookworm-slim@sha256:...
 FROM debian:bookworm-slim
+RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app && chown -R app:app /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /build/target/release/gateway-example /app/
 EXPOSE 3001
+USER app
 CMD ["/app/gateway-example"]

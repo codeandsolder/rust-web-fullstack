@@ -1,3 +1,10 @@
+//! Server-Sent Events handler and broadcast channel setup.
+//!
+//! A single [`broadcast::Sender<SseEvent>`] is initialised at startup and
+//! shared between the `PgListener` task (producer) and all SSE client
+//! connections (consumers).  The [`sse_handler`] function is the axum route
+//! handler that streams events to HTTP clients.
+
 use std::convert::Infallible;
 use std::sync::OnceLock;
 
@@ -17,6 +24,7 @@ static BROADCAST: OnceLock<broadcast::Sender<SseEvent>> = OnceLock::new();
 
 /// Error returned when the global broadcast sender cannot be initialized.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum BroadcastInitError {
     /// The sender was already set earlier in the process lifetime.
     #[error("broadcast sender already initialized")]
@@ -40,8 +48,14 @@ pub fn get_broadcast() -> Option<&'static broadcast::Sender<SseEvent>> {
     BROADCAST.get()
 }
 
+/// Emit a `"configuration_error"` event when the broadcast sender is unset.
+fn config_error_event() -> Event {
+    Event::default()
+        .event("configuration_error")
+        .data(r#"{"type":"ConfigurationError","message":"broadcast sender is not initialized"}"#)
+}
+
 /// SSE handler: streams events from the broadcast channel to the client.
-///
 #[expect(
     clippy::unused_async,
     reason = "Axum 0.8 requires async fn for Handler trait"
@@ -53,12 +67,7 @@ pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>>
     let stream: BoxStream<'static, Result<Event, Infallible>> = get_broadcast().map_or_else(
         || {
             tracing::error!("SSE broadcast sender is not initialized");
-            stream::once(future::ready(Ok(Event::default()
-                .event("configuration_error")
-                .data(
-                    r#"{"type":"ConfigurationError","message":"broadcast sender is not initialized"}"#,
-                ))))
-            .boxed()
+            stream::once(future::ready(Ok(config_error_event()))).boxed()
         },
         |tx| {
             let rx = tx.subscribe();
@@ -81,14 +90,14 @@ pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>>
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// Convert an [`SseEvent`] into an SSE [`Event`], setting the event type per
+/// variant so clients can subscribe selectively.
 fn event_to_sse(event: &SseEvent) -> Event {
-    match serde_json::to_string(event) {
-        Ok(data) => Event::default().data(data),
-        Err(e) => {
-            tracing::error!("failed to serialize SSE event: {e}");
-            Event::default()
-                .event("serialization_error")
-                .data(r#"{"type":"SerializationError"}"#)
-        }
-    }
+    let name = match event {
+        SseEvent::Connected => "connected",
+        SseEvent::SearchResult { .. } => "search_result",
+        SseEvent::StreamLagged { .. } => "stream_lagged",
+    };
+    let json = serde_json::to_string(event).unwrap_or_else(|_| r#"{"type":"error"}"#.into());
+    Event::default().event(name).data(json)
 }

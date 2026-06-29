@@ -1,4 +1,4 @@
-.PHONY: help db up down logs test test-e2e build clean fmt clippy check seed
+.PHONY: help db up down logs test test-e2e build clean nuke fmt clippy check seed
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -27,8 +27,10 @@ test-e2e: ## Run full E2E test suite (requires running services)
 build: ## Build all binaries in release mode
 	cargo build --release --workspace
 
-clean: ## Clean build artifacts
+clean: ## Clean Rust build artifacts
 	cargo clean
+
+nuke: clean ## Full cleanup including Docker volumes
 	docker compose down -v
 
 fmt: ## Format all Rust code

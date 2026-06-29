@@ -1,9 +1,14 @@
+//! Shared types and module declarations for the `live-search` crate.
+//!
+//! This crate provides a full-stack live-search application with:
+//! - SSR server binary (axum + Leptos)
+//! - WASM hydration client
+//! - `PostgreSQL` full-text search with LISTEN/NOTIFY SSE streaming
+
 pub mod app;
 pub mod db;
 pub mod events;
 
-#[cfg(feature = "ssr")]
-pub mod error;
 #[cfg(feature = "ssr")]
 pub mod sse;
 

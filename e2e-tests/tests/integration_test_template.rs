@@ -26,8 +26,7 @@ use common::{base_url, require_server, setup, teardown};
 /// Example integration test that waits for a server and performs a basic
 /// browser navigation.
 ///
-/// Replace `description_here` with a meaningful name.  The `integration_`
-/// prefix makes it easy to filter with `cargo test integration_`.
+/// Replace the function name with a meaningful name.
 #[tokio::test]
 #[cfg_attr(
     not(feature = "integration"),
@@ -36,15 +35,15 @@ use common::{base_url, require_server, setup, teardown};
 async fn integration_example() {
     // ── 1. Server availability check ──────────────────────────────
     // If the server isn't running, fail immediately.
-    require_server(&base_url()).await;
+    require_server(&base_url(None)).await;
 
     // ── 2. Test logic ─────────────────────────────────────────────
     let ctx = setup().await;
 
     // Navigate, interact, assert …
     // e.g.
-    //   ctx.page.goto_builder(&ctx.base_url).goto().await.unwrap();
-    //   let title = ctx.page.title().await.unwrap();
+    //   ctx.page.goto(&ctx.base_url).await.unwrap();
+    //   let title = ctx.page.get_title().await.unwrap();
     //   assert!(!title.is_empty());
 
     teardown(ctx).await;

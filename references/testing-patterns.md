@@ -292,13 +292,21 @@ std::fs::write("/tmp/screenshot.png", bytes)?;
 ### Chrome Binary Selection (Playwright cache)
 
 ```rust
+// Prefer the CHROME_PATH env var to avoid hardcoding paths
+if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+    builder = builder.chrome_executable(chrome_path);
+}
+
+// Or inline:
 BrowserConfig::builder()
-    .chrome_path(std::path::PathBuf::from(
-        "/home/jan/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome"
+    .chrome_executable(std::path::PathBuf::from(
+        "/path/to/chrome"
     ))
     .build()
 ```
 
+Use `CHROME_PATH` env var rather than hardcoding. Common locations: Playwright cache,
+system `/usr/bin/chromium`, or local download.
 Verified stable: Chromium **1208** (Playwright 1.50 era). Chromium 1223+ has crashed on this host.
 
 ### Limitations

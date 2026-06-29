@@ -22,4 +22,5 @@ jsonwebtoken = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 futures = { workspace = true }
+subtle = { workspace = true }
 tokio-stream = { workspace = true }

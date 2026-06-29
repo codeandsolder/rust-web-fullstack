@@ -1,10 +1,17 @@
+//! Mock proxy / VPN check service.
+//!
+//! Simulates IP proxy checks and publishes SSE events with RFC3339
+//! timestamps for live dashboards.
+
 use axum::{Router, extract::State, response::Json, routing::get};
+use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
 use crate::sse::{self, GatewayEvent};
 
+#[derive(Debug)]
 pub struct ProxyService;
 
 impl ServiceModule for ProxyService {
@@ -31,7 +38,7 @@ async fn check_handler(State(state): State<GatewayState>) -> Json<Value> {
         GatewayEvent::Custom(
             "proxy_check",
             json!({
-                "timestamp": "now",
+                "timestamp": Utc::now().to_rfc3339(),
                 "status": "ok",
             }),
         ),

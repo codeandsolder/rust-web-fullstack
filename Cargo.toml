@@ -6,6 +6,9 @@ members = ["gateway", "live-search", "e2e-tests"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+# Edition 2024 requires Rust 1.85+. We pin to 1.94 in `rust-toolchain.toml`
+# so all contributors build with the same toolchain (and wasm32 target).
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1.0.103"
@@ -23,6 +26,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "r
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
+subtle = "2.6"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }

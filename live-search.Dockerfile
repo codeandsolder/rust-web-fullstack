@@ -1,3 +1,4 @@
+# TODO: pin by digest — e.g. rust:1.94-bookworm@sha256:...
 FROM rust:1.94-bookworm AS builder
 WORKDIR /build
 RUN rustup target add wasm32-unknown-unknown && \
@@ -16,7 +17,7 @@ RUN mkdir -p gateway/src live-search/src e2e-tests/src && \
 
 # Build live-search only
 COPY . .
-RUN cargo build --release -p live-search --lib --target wasm32-unknown-unknown --features hydrate && \
+RUN cargo build --locked --release -p live-search --lib --target wasm32-unknown-unknown --features hydrate && \
     mkdir -p /build/pkg && \
     wasm-bindgen \
       --target web \
@@ -24,9 +25,11 @@ RUN cargo build --release -p live-search --lib --target wasm32-unknown-unknown -
       --out-name live_search \
       /build/target/wasm32-unknown-unknown/release/live_search.wasm && \
     touch /build/pkg/live-search.css
-RUN cargo build --release -p live-search --features ssr
+RUN cargo build --locked --release -p live-search --features ssr
 
+# TODO: pin by digest — e.g. debian:bookworm-slim@sha256:...
 FROM debian:bookworm-slim
+RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app && chown -R app:app /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -34,4 +37,5 @@ COPY --from=builder /build/target/release/live-search /app/
 COPY --from=builder /build/pkg /app/pkg
 COPY live-search/migrations /app/migrations
 EXPOSE 3000
+USER app
 CMD ["/app/live-search"]

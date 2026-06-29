@@ -4,15 +4,14 @@
 //! then cleans up via [`teardown`]. Browsers run headless. The `base_url` points
 //! to the example server under test (defaults to `http://localhost:3000`).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
-/// Holds the browser, page, and base URL for a single test.
+/// Holds the browser, page, base URL, and profile directory for a single test.
 ///
 /// Fields may appear unused in some test binaries (each `tests/*.rs` file
 /// compiles its own copy of this module); suppress the warning.
@@ -22,53 +21,34 @@ pub struct TestContext {
     pub browser: Browser,
     pub page: Page,
     pub base_url: String,
+    pub profile_dir: PathBuf,
 }
 
 /// Resolve the base URL — use `BASE_URL` env var or fall back to `http://localhost:3000`.
+///
+/// When `override_url` is `Some`, that value is used directly instead of
+/// consulting the environment.  This is useful in unit tests to avoid unsafe
+/// `env::set_var` / `env::remove_var` calls.
 #[must_use]
-pub fn base_url() -> String {
-    std::env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
+pub fn base_url(override_url: Option<&str>) -> String {
+    override_url
+        .map(String::from)
+        .or_else(|| std::env::var("BASE_URL").ok())
+        .unwrap_or_else(|| "http://localhost:3000".to_string())
 }
 
 /// Poll a server until it responds with an HTTP 2xx / 3xx status, or the timeout
 /// elapses.  Returns `true` if the server became healthy, `false` if the timeout
 /// was reached.
-///
-/// The URL should be in `http://host:port/path` form.  The function sends a raw
-/// HTTP/1.1 GET request via `TcpStream` (no extra dependencies).
 pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
-
-    let url = url.trim_end_matches('/');
-    let addr = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or("localhost:3000");
-    let host = addr.split(':').next().unwrap_or("localhost");
-
-    let request = format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-
     while tokio::time::Instant::now() < deadline {
-        if let Ok(mut stream) = TcpStream::connect(addr).await
-            && stream.write_all(request.as_bytes()).await.is_ok()
+        if let Ok(resp) = reqwest::get(url).await
+            && (resp.status().is_success() || resp.status().is_redirection())
         {
-            let mut buf = [0u8; 256];
-            if stream.read(&mut buf).await.is_ok() {
-                let response = String::from_utf8_lossy(&buf);
-                // Accept any 2xx or 3xx status.
-                if response.starts_with("HTTP/1.1 2")
-                    || response.starts_with("HTTP/1.0 2")
-                    || response.starts_with("HTTP/1.1 3")
-                    || response.starts_with("HTTP/1.0 3")
-                {
-                    return true;
-                }
-            }
+            return true;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
     false
 }
@@ -78,6 +58,7 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 ///
 /// # Panics
 /// Panics if the browser cannot launch or the page cannot be created.
+#[allow(dead_code)] // not every test binary exercises the browser path
 pub async fn setup() -> TestContext {
     let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
         let playwright_path = format!(
@@ -124,22 +105,34 @@ pub async fn setup() -> TestContext {
     TestContext {
         browser,
         page,
-        base_url: base_url(),
+        base_url: base_url(None),
+        profile_dir,
     }
 }
 
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
 /// creation order. Cleanup errors are printed for diagnostics but do not mask
 /// the test assertion that already ran.
+#[allow(dead_code)] // not every test binary exercises the browser path
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
-        mut browser, page, ..
+        mut browser,
+        page,
+        profile_dir,
+        ..
     } = ctx;
     if let Err(e) = page.close().await {
         eprintln!("Failed to close Chromium page during teardown: {e}");
     }
     if let Err(e) = browser.close().await {
         eprintln!("Failed to close Chromium browser during teardown: {e}");
+    }
+    // Remove the temporary profile directory.
+    if let Err(e) = std::fs::remove_dir_all(&profile_dir) {
+        eprintln!(
+            "Failed to remove profile dir {}: {e}",
+            profile_dir.display()
+        );
     }
 }
 
@@ -150,7 +143,7 @@ pub async fn teardown(ctx: TestContext) {
 /// timeout expires.
 ///
 /// ```ignore
-/// require_server(&base_url()).await;
+/// require_server(&base_url(None)).await;
 /// ```
 pub async fn require_server(url: &str) {
     assert!(
@@ -186,6 +179,27 @@ pub async fn wait_for_element(
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
         if let Ok(el) = page.find_element(selector).await {
+            return Some(el);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
+}
+
+/// Poll `page.find_element(selector)` until the element is both present AND
+/// visible (per [`element_is_visible`]), or the timeout elapses.  Returns the
+/// element if found and visible.
+#[allow(dead_code)]
+pub async fn wait_for_visible_element(
+    page: &Page,
+    selector: &str,
+    timeout: Duration,
+) -> Option<chromiumoxide::element::Element> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(el) = page.find_element(selector).await
+            && element_is_visible(page, selector).await
+        {
             return Some(el);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

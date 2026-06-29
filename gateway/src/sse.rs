@@ -1,3 +1,10 @@
+//! Server-Sent Events (SSE) streaming for gateway events.
+//!
+//! Events are published via a [`broadcast::Sender`] and streamed to connected
+//! clients through an SSE endpoint.  The [`BroadcastStream`] wrapper converts
+//! channel closure into end-of-stream (`None`); only the `Lagged` error is
+//! surfaced (and logged) so slow consumers gracefully drop messages.
+
 use axum::{
     extract::State,
     response::sse::{Event, KeepAlive, Sse},
@@ -16,11 +23,17 @@ use crate::gateway::GatewayState;
 // Event model
 // ---------------------------------------------------------------------------
 
+/// Gateway event published over the SSE channel.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum GatewayEvent {
+    /// A service has started.
     ServiceStarted(&'static str),
+    /// A service has stopped.
     ServiceStopped(&'static str),
+    /// A service's health status changed.
     HealthChanged(&'static str, String),
+    /// A custom event with a type tag and JSON payload.
     Custom(&'static str, Value),
 }
 
@@ -45,8 +58,10 @@ impl From<GatewayEvent> for Event {
 // Publishing helper
 // ---------------------------------------------------------------------------
 
-/// Send an event on the shared broadcast channel.  Receivers that are too
-/// slow are reported by the stream wrapper in the SSE handler.
+/// Send an event on the shared broadcast channel.
+///
+/// Receivers that are too slow are reported by the stream wrapper in the
+/// SSE handler.
 pub fn publish_event(tx: &broadcast::Sender<GatewayEvent>, event: GatewayEvent) {
     if let Err(e) = tx.send(event) {
         tracing::debug!("gateway event had no SSE receivers: {e}");
@@ -58,6 +73,11 @@ pub fn publish_event(tx: &broadcast::Sender<GatewayEvent>, event: GatewayEvent) 
 // ---------------------------------------------------------------------------
 
 /// SSE endpoint that streams all [`GatewayEvent`]s to connected clients.
+///
+/// The [`BroadcastStream`] wrapper natively converts channel closure into
+/// end-of-stream (`Poll::Ready(None)`), so no explicit `Closed` handler is
+/// needed here.  The only recoverable error is [`BroadcastStreamRecvError::Lagged`],
+/// which is logged and filtered out.
 pub async fn sse_handler(
     State(state): State<GatewayState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {

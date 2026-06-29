@@ -1,6 +1,9 @@
-// ---------------------------------------------------------------------------
-// Shared types — compiled for both SSR and WASM targets.
-// ---------------------------------------------------------------------------
+//! Database types, pool management, and `PostgreSQL` LISTEN/NOTIFY integration.
+//!
+//! The SSR binary uses a global [`PgPool`] (guarded by [`OnceLock`]) and a
+//! background listener task that subscribes to the `search_results` channel
+//! and forwards notifications into a [`broadcast::Sender`] consumed by the SSE
+//! handler.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,6 +12,7 @@ use uuid::Uuid;
 /// A search result as stored in the database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
+#[must_use]
 pub struct SearchResult {
     pub id: Uuid,
     pub title: String,
@@ -29,6 +33,7 @@ mod server {
     use serde::Deserialize;
     use sqlx::PgPool;
     use sqlx::postgres::PgListener;
+    use sqlx::postgres::PgPoolOptions;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
@@ -39,6 +44,7 @@ mod server {
 
     /// Error returned when the global database pool cannot be initialized.
     #[derive(Debug, thiserror::Error)]
+    #[non_exhaustive]
     pub enum PoolInitError {
         /// The pool was already set earlier in the process lifetime.
         #[error("database pool already initialized")]
@@ -63,11 +69,20 @@ mod server {
 
     /// Create a new connection pool from the given database URL.
     ///
+    /// One connection is permanently reserved for the [`PgListener`] task, so
+    /// the effective pool size available to request handlers is
+    /// `max_connections - 1`.
+    ///
     /// # Errors
     /// Returns the underlying [`sqlx::Error`] if connecting to `PostgreSQL`
     /// fails.
     pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
-        PgPool::connect(database_url).await
+        PgPoolOptions::new()
+            .max_connections(20)
+            .min_connections(2)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(database_url)
+            .await
     }
 
     #[derive(Debug, Deserialize)]
@@ -77,7 +92,7 @@ mod server {
         snippet: String,
     }
 
-    /// Connect to PostgreSQL and subscribe to the `search_results` channel.
+    /// Connect to `PostgreSQL` and subscribe to the `search_results` channel.
     ///
     /// # Errors
     /// Returns the underlying [`sqlx::Error`] if connecting or `LISTEN` fails.
@@ -88,11 +103,16 @@ mod server {
     }
 
     /// Forward a single `NOTIFY` payload to the broadcast channel.
+    #[tracing::instrument(skip_all, fields(channel, payload_len))]
     fn forward_notification(
         tx: &broadcast::Sender<SseEvent>,
         notification: &sqlx::postgres::PgNotification,
     ) {
         let payload = notification.payload();
+        let span = tracing::Span::current();
+        span.record("channel", notification.channel());
+        span.record("payload_len", payload.len());
+
         match serde_json::from_str::<SearchResultNotification>(payload) {
             Ok(row) => {
                 let event = SseEvent::SearchResult {
@@ -105,7 +125,7 @@ mod server {
                         tracing::debug!(receivers, "forwarded search result notification");
                     }
                     Err(e) => {
-                        tracing::debug!("search result notification had no SSE receivers: {e}");
+                        tracing::warn!("search result notification had no SSE receivers: {e}");
                     }
                 }
             }
@@ -130,6 +150,7 @@ mod server {
     /// the `async-cancellation-token` and `async-structured-concurrency` rules.
     /// sqlx 0.9 `PgListener::recv()` is cancel-safe (drops the TCP read cleanly
     /// on future drop), so racing it against `shutdown.cancelled()` is sound.
+    #[tracing::instrument(skip_all)]
     pub async fn run_pg_listener(
         pool: PgPool,
         tx: broadcast::Sender<SseEvent>,

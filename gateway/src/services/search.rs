@@ -1,9 +1,12 @@
+//! Mock search service simulating a SearXRS2-style API endpoint.
+
 use axum::{Router, extract::State, response::Json, routing::get};
 use serde_json::{Value, json};
 
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
 
+#[derive(Debug)]
 pub struct SearchService;
 
 impl ServiceModule for SearchService {

@@ -1,3 +1,10 @@
+//! SSR server binary for the live-search application.
+//!
+//! Sets up:
+//! - Database connection pool and `PostgreSQL` `LISTEN`/`NOTIFY` background task.
+//! - Axum HTTP server with Leptos SSR routes, SSE endpoint, and static assets.
+//! - Graceful shutdown via `CancellationToken` on `Ctrl+C` / `SIGTERM`.
+
 #![cfg(feature = "ssr")]
 
 use std::net::SocketAddr;
@@ -19,6 +26,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::EnvFilter;
 
 use live_search::app;
 use live_search::events::SseEvent;
@@ -29,30 +37,32 @@ async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
 }
 
-/// Catch-all handler for server function endpoints.
+/// Server-function dispatch handler.
 ///
-/// Delegates to [`leptos_axum::handle_server_fns`] after attempting a
-/// path-rewrite workaround: if the exact path is not registered but a
-/// doubled-prefix variant exists (e.g. `/api/search` when the macro
-/// registered `/api/api/search` due to `endpoint = "/api/search"`), the
-/// URI is rewritten before dispatch.
+/// Leptos 0.8's `#[server(endpoint = "/api/search")]` macro registers each
+/// server fn at the **doubled** path `/api/api/search` (the default
+/// `/api` prefix concatenated with the explicit endpoint). The compile-time
+/// `server_fn` client knows only the original path `/api/search`, so requests
+/// from the browser will 404 on `leptos_axum::handle_server_fns` unless we
+/// probe for the doubled-prefix variant and rewrite the request URI in place.
+///
+/// This handler does exactly that probe-then-rewrite and then forwards the
+/// (possibly rewritten) request to `handle_server_fns`.
 ///
 /// # Panics
-/// If the path-rewritten URI is invalid (should never happen in practice
-/// because we only prepend `/api/` to an already-valid `/api/…` path).
+/// Panics only if the path-rewrite produces an invalid URI — in practice this
+/// is infallible because we only ever prepend `/api` to an existing valid URI.
 #[expect(
     clippy::expect_used,
-    reason = "Infallible: prepending /api/ to an already-valid /api/… path always produces a valid URI"
+    reason = "Path rewrite produces a valid URI by construction (prepending /api to a valid path)"
 )]
 async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
     let method = req.method().clone();
     let original_path = req.uri().path().to_string();
     let (mut parts, body) = req.into_parts();
 
-    // If the exact path isn't registered, try a doubled-prefix variant.
-    // This handles the case where `#[server(endpoint = "/api/search")]`
-    // concatenates the default prefix `/api` with the explicit endpoint
-    // path, producing `/api/api/search` in the registry.
+    // Probe the registry: is the server fn at the original path or the
+    // doubled-prefix path? Rewrite the URI accordingly.
     let path_to_try =
         if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
             && original_path.starts_with("/api/")
@@ -112,7 +122,11 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("info,live_search=debug,tower_http=debug,sqlx=warn")
+        }))
+        .init();
 
     let database_url =
         std::env::var("DATABASE_URL").context("DATABASE_URL environment variable must be set")?;
@@ -139,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
     //
     // One shutdown signal propagates to every long-running task:
     //   * `pg_listener_task` exits via `shutdown.cancelled()`
-    //   * `axum::serve` exits via the same token in `tokio::select!`
+    //   * `axum::serve` exits via the same token in graceful shutdown
     //
     // Dropping `JoinSet` aborts its tasks, but we drain it explicitly with a
     // grace period so in-flight requests can complete cleanly.
@@ -166,10 +180,9 @@ async fn main() -> anyhow::Result<()> {
     // do **not** use Axum's `State` extractor, so we can freely switch to
     // `Router<()>` afterwards.
     //
-    // The `/api/{*fn_name}` catch-all uses a custom handler that falls back
-    // to a doubled-prefix lookup, working around a common Leptos 0.8 macro
-    // interaction where `#[server(endpoint = "/api/…")]` registers the
-    // function under `/api/api/…`.
+    // Both `/api/{*fn_name}` and `/api/api/{*fn_name}` are registered because
+    // the `#[server(endpoint = "/api/…")]` macro may register the function
+    // under the doubled prefix.
 
     let app = Router::new()
         // ---- static assets (hydration JS/WASM, CSS) --------------------------
@@ -178,6 +191,7 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/pkg", ServeDir::new("./pkg"))
         .route("/api/events", get(sse::sse_handler))
         .route("/api/{*fn_name}", any(server_fn_handler))
+        .route("/api/api/{*fn_name}", any(server_fn_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, routes, {
@@ -205,17 +219,14 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind live-search listener on {addr}"))?;
 
-    // Race axum::serve against the shutdown token. Whichever finishes first wins.
-    let server_token = shutdown.clone();
-    let server = axum::serve(listener, app);
-    tokio::select! {
-        result = server => {
-            result.context("live-search server exited with an error")?;
-        }
-        () = server_token.cancelled() => {
-            tracing::info!("live-search shutdown requested");
-        }
-    }
+    // Serve with graceful shutdown so in-flight SSE handlers can drain.
+    let graceful_shutdown_token = shutdown.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            graceful_shutdown_token.cancelled().await;
+        })
+        .await
+        .context("live-search server exited with an error")?;
 
     // Drain background tasks with a grace period so in-flight notifications
     // can flush. A second `cancel()` is idempotent and safe if the signal

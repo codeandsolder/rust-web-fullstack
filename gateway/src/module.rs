@@ -1,3 +1,9 @@
+//! Service module trait and metadata types.
+//!
+//! Defines [`ServiceModule`] (the trait every mountable service implements),
+//! [`ServiceInfo`] (read-only metadata for API discovery), and
+//! [`ServiceHealthError`] (the error type for health-check failures).
+
 use axum::Router;
 use futures::future::{self, BoxFuture, FutureExt};
 

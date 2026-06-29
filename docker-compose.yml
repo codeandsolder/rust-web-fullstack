@@ -24,11 +24,17 @@ services:
       context: .
       dockerfile: live-search.Dockerfile
     container_name: rwf-live-search
+    env_file: .env
     environment:
       DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
       RUST_LOG: info
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,11 +46,12 @@ services:
     container_name: rwf-gateway
     ports:
       - "3001:3001"
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
       live-search:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   postgres-data:

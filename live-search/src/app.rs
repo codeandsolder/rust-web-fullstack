@@ -1,7 +1,13 @@
-#![allow(
-    clippy::unused_async_trait_impl,
-    reason = "Leptos #[server] generates client-side trait impl stubs without awaits when compiled without ssr"
-)]
+//! Leptos UI components and server functions for the live-search frontend.
+//!
+//! Two pages are provided via `FlatRoutes`:
+//! - `/` — [`SearchPage`] with a full-text search form backed by a server
+//!   function.
+//! - `/live` — [`LiveFeedPage`] that displays search results in real time
+//!   via Server-Sent Events.
+
+// Leptos #[server] generates client-side trait impl stubs without awaits
+// when compiled without ssr — the unused async is expected.
 
 use leptos::prelude::*;
 #[allow(
@@ -20,9 +26,23 @@ use crate::events::SseEvent;
 // Server function: search via PostgreSQL full-text search
 // ---------------------------------------------------------------------------
 
+/// Search `search_results` using PostgreSQL full-text search.
+///
+/// # Errors
+///
+/// Returns [`ServerFnError::ServerError`] if the query is empty / too long,
+/// the global pool has not been initialized, or the database query fails.
 #[server(endpoint = "/api/search")]
 pub async fn search(query: String) -> Result<Vec<SearchResult>, ServerFnError> {
     use crate::db::get_pool;
+
+    let trimmed = query.trim();
+    let len = trimmed.len();
+    if !(1..=1024).contains(&len) {
+        return Err(ServerFnError::ServerError(
+            "query must be 1..=1024 characters".into(),
+        ));
+    }
 
     let Some(pool) = get_pool() else {
         return Err(ServerFnError::ServerError(
@@ -114,14 +134,10 @@ pub fn SearchPage() -> impl IntoView {
         async move { search(input).await }
     });
 
-    // Flatten the last result into something we can iterate over.
-    let results = move || {
-        search_action
-            .value()
-            .get()
-            .and_then(Result::ok)
-            .unwrap_or_default()
-    };
+    // Track the last result's Ok and Err branches separately so the view
+    // can render a distinct error branch instead of silently swallowing it.
+    let results = move || search_action.value().get().and_then(Result::ok);
+    let error = move || search_action.value().get().and_then(Result::err);
 
     view! {
         <h2>"Search"</h2>
@@ -144,14 +160,14 @@ pub fn SearchPage() -> impl IntoView {
         </form>
 
         <div id="results">
-            {move || {
-                let items = results();
-                if items.is_empty() && search_action.value().get().is_some() {
-                    // A search was submitted but returned no results.
-                    view! { <p>"No results found."</p> }.into_any()
-                } else if items.is_empty() {
-                    view! { <p>"Enter a query above to search."</p> }.into_any()
-                } else {
+            {move || match (results(), error()) {
+                (None, None) =>
+                    view! { <p>"Enter a query above to search."</p> }.into_any(),
+                (_, Some(e)) =>
+                    view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                (Some(items), None) if items.is_empty() =>
+                    view! { <p>"No results found."</p> }.into_any(),
+                (Some(items), None) =>
                     items
                         .into_iter()
                         .map(|r| {
@@ -167,8 +183,7 @@ pub fn SearchPage() -> impl IntoView {
                             }
                         })
                         .collect::<Vec<_>>()
-                        .into_any()
-                }
+                        .into_any(),
             }}
         </div>
     }
@@ -196,65 +211,97 @@ pub fn LiveFeedPage() -> impl IntoView {
     let connected = RwSignal::new(false);
 
     // On the client (WASM) side, open an EventSource to the SSE endpoint.
-    //
-    // # Panics
-    // Panics if the `EventSourceSubscription` stream returns a value that
-    // cannot be destructured as `(String, String)`. This is infallible in
-    // practice because the underlying implementation always yields
-    // `Ok((String, String))` for well-formed SSE messages.
+    // The stream is long-lived; on disconnect or error we reconnect after a
+    // 2-second delay.
     #[cfg(target_arch = "wasm32")]
     {
-        let es = gloo_net::eventsource::futures::EventSource::new("/api/events");
-        match es {
-            Ok(mut event_source) => {
-                leptos::task::spawn_local(async move {
-                    use futures::stream::StreamExt;
+        let stop = RwSignal::new(false);
+        let stop_cleanup = stop;
+        on_cleanup(move || stop_cleanup.set(true));
 
-                    let Ok(mut stream) = event_source.subscribe("message") else {
-                        leptos::logging::error!("Failed to subscribe to SSE message events");
-                        return;
-                    };
+        leptos::task::spawn_local(async move {
+            use futures::stream::StreamExt;
+            use gloo_timers::future::sleep;
+            use leptos::logging;
+            use std::time::Duration;
 
-                    while let Some(Ok((_event_type, msg))) = stream.next().await {
-                        let Some(data) = msg.data().as_string() else {
-                            leptos::logging::warn!("SSE message had non-string data");
-                            continue;
-                        };
+            loop {
+                if stop.get() {
+                    logging::log!("SSE live feed stopped");
+                    return;
+                }
 
-                        match serde_json::from_str::<SseEvent>(&data) {
-                            Ok(event) => match event {
-                                SseEvent::Connected => {
-                                    connected.set(true);
+                match gloo_net::eventsource::futures::EventSource::new("/api/events") {
+                    Ok(mut event_source) => {
+                        connected.set(true);
+
+                        match event_source.subscribe("search_result") {
+                            Ok(mut stream) => {
+                                while let Some(result) = stream.next().await {
+                                    if stop.get() {
+                                        return;
+                                    }
+                                    match result {
+                                        Ok((_event_type, msg)) => {
+                                            let Some(data) = msg.data().as_string() else {
+                                                logging::warn!("SSE message had non-string data");
+                                                continue;
+                                            };
+                                            match serde_json::from_str::<SseEvent>(&data) {
+                                                Ok(event) => match event {
+                                                    SseEvent::Connected => {
+                                                        connected.set(true);
+                                                    }
+                                                    SseEvent::SearchResult {
+                                                        title,
+                                                        url,
+                                                        snippet,
+                                                    } => {
+                                                        results.update(|r| {
+                                                            if r.len() >= 200 {
+                                                                r.remove(0);
+                                                            }
+                                                            r.push(LiveResult {
+                                                                title,
+                                                                url,
+                                                                snippet,
+                                                            });
+                                                        });
+                                                    }
+                                                    SseEvent::StreamLagged { skipped } => {
+                                                        logging::warn!(
+                                                            "SSE stream lagged by {skipped} messages"
+                                                        );
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    logging::warn!("Invalid SSE message: {e:?}");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            logging::warn!("SSE stream error: {e:?}");
+                                            break;
+                                        }
+                                    }
                                 }
-                                SseEvent::SearchResult {
-                                    title,
-                                    url,
-                                    snippet,
-                                } => {
-                                    let result = LiveResult {
-                                        title,
-                                        url,
-                                        snippet,
-                                    };
-                                    results.update(|r| r.push(result));
-                                }
-                                SseEvent::StreamLagged { skipped } => {
-                                    leptos::logging::warn!(
-                                        "SSE stream lagged by {skipped} messages"
-                                    );
-                                }
-                            },
+                            }
                             Err(e) => {
-                                leptos::logging::warn!("Invalid SSE message: {e:?}");
+                                logging::error!("Failed to subscribe to SSE search_result: {e:?}");
                             }
                         }
+
+                        connected.set(false);
                     }
-                });
+                    Err(e) => {
+                        logging::warn!("Failed to connect to SSE: {e:?}");
+                    }
+                }
+
+                // Reconnect delay — allow cancellation during sleep
+                sleep(Duration::from_secs(2)).await;
             }
-            Err(e) => {
-                leptos::logging::warn!("Failed to connect to SSE: {e:?}");
-            }
-        }
+        });
     }
 
     view! {

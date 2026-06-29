@@ -66,14 +66,18 @@ let pool = PgPoolOptions::new()
 
 ### Multi-Process Pooling
 
-Each binary gets its own `PgPool`. Divide PostgreSQL's `max_connections` (~97 usable, 3 reserved for superuser) across all processes:
+Each binary gets its own `PgPool`. Divide PostgreSQL's `max_connections` across all processes, accounting for the 3-connection superuser reserve.
+
+For a **512MB baseline** PostgreSQL, `max_connections = 20` is appropriate for a single binary (19 for queries + 1 for PgListener). For multi-process deployments, multiply by process count:
 
 ```rust
-// For 3 binaries sharing PostgreSQL:
+// For a deployment with max_connections = 100 and 3 binaries:
 let pool = PgPoolOptions::new()
-    .max_connections(97 / 3)  // ~32 per process
+    .max_connections((100 - 3) / 3)  // ~32 per process
     .connect(&db_url).await?;
 ```
+
+Adjust PostgreSQL's `max_connections` proportionally when adding binaries. Each PgListener also consumes 1 connection from its pool. Keep the 3-connection superuser reserve for maintenance tasks.
 
 ### connect_lazy vs connect
 
@@ -533,7 +537,7 @@ shared_buffers = 64MB              # 12.5% of RAM
 effective_cache_size = 128MB       # OS cache hint
 work_mem = 2MB                     # per-operation limit (keep low)
 maintenance_work_mem = 32MB        # for VACUUM, CREATE INDEX
-max_connections = 20               # total, divide across processes
+max_connections = 20               # 512MB baseline (19 queries + 1 listener); multiply by N processes for multi-process
 synchronous_commit = off           # speed tradeoff (acceptable for proxy data)
 wal_compression = on               # reduce WAL size
 autovacuum_max_workers = 1         # lightweight

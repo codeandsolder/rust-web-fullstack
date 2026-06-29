@@ -1,19 +1,28 @@
+//! Gateway router composition and shared state.
+//!
+//! Provides [`GatewayState`] (shared, clone-able mutable state for all
+//! handlers) and [`build_gateway`] which composes all service modules into a
+//! single Axum [`Router`].
+
 use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{Extension, State},
     middleware,
     response::Json,
     routing::{get, post},
 };
+use futures::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tower_http::trace::TraceLayer;
+use tracing::instrument;
 
 use crate::{
-    auth,
+    auth::{self, Claims, LoginRateLimiter},
     module::{ServiceInfo, ServiceModule},
+    settings,
     sse::{self, GatewayEvent},
 };
 
@@ -21,6 +30,7 @@ use crate::{
 // Shared gateway state
 // ---------------------------------------------------------------------------
 
+/// Shared mutable state available to every handler via [`State`] extraction.
 #[derive(Clone)]
 pub struct GatewayState {
     /// Broadcast channel for SSE events.
@@ -29,6 +39,22 @@ pub struct GatewayState {
     pub services: Vec<ServiceInfo>,
     /// Module trait objects kept alive for health aggregation.
     pub modules: Vec<Arc<dyn ServiceModule>>,
+    /// Application settings loaded from environment variables at startup.
+    pub settings: settings::Settings,
+    /// Per-IP login rate limiter.
+    pub rate_limiter: LoginRateLimiter,
+}
+
+impl std::fmt::Debug for GatewayState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayState")
+            .field("tx", &self.tx)
+            .field("services", &self.services)
+            .field("modules", &format_args!("[{} modules]", self.modules.len()))
+            .field("settings", &self.settings)
+            .field("rate_limiter", &self.rate_limiter)
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -37,11 +63,15 @@ pub struct GatewayState {
 
 /// Compose every `ServiceModule` under its own path prefix and attach
 /// gateway-wide routes — `/health`, `/events`, `/auth/login`, and `/`.
-pub fn build_gateway(service_modules: Vec<Box<dyn ServiceModule>>) -> Router {
+///
+/// # Errors
+///
+/// Returns an error if application settings cannot be loaded from
+/// environment variables.
+#[instrument(skip(modules))]
+pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
+    let settings = settings::Settings::load()?;
     let (tx, _rx) = broadcast::channel(100);
-
-    // Wrap each module in Arc so we can keep a clone-able reference.
-    let modules: Vec<Arc<dyn ServiceModule>> = service_modules.into_iter().map(Arc::from).collect();
 
     let service_infos: Vec<ServiceInfo> = modules
         .iter()
@@ -64,35 +94,39 @@ pub fn build_gateway(service_modules: Vec<Box<dyn ServiceModule>>) -> Router {
     let state = GatewayState {
         tx,
         services: service_infos,
-        modules: modules.clone(),
+        modules,
+        settings,
+        rate_limiter: LoginRateLimiter::default(),
     };
 
-    // --- gateway-wide routes (note: with_state returns Router<S2>;
-    // we assign to a `Router` / `Router<()>` variable to finalise it) ---
+    // --- gateway-wide routes ---
     let app: Router = router
         .route("/health", get(health_handler))
         .route("/events", get(sse::sse_handler))
         .route("/auth/login", post(auth::login_handler))
         .route(
             "/auth/protected",
-            get(protected_handler).route_layer(middleware::from_fn(auth::auth_middleware)),
+            get(protected_handler).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::auth_middleware,
+            )),
         )
         .route("/", get(root_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    app
+    Ok(app)
 }
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Aggregate health check — probes every registered service module.
+/// Aggregate health check — probes every registered service module in
+/// parallel.
+#[instrument(skip(state))]
 async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
-    let mut service_statuses = Vec::new();
-
-    for module in &state.modules {
+    let results = join_all(state.modules.iter().map(|module| async {
         let status = match module.health_check().await {
             Ok(()) => "healthy",
             Err(e) => {
@@ -100,17 +134,18 @@ async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
                 "unhealthy"
             }
         };
-        service_statuses.push(json!({
+        json!({
             "name": module.name(),
             "path": module.path(),
             "enabled": module.enabled(),
             "status": status,
-        }));
-    }
+        })
+    }))
+    .await;
 
     Json(json!({
         "gateway": "ok",
-        "services": service_statuses,
+        "services": results,
     }))
 }
 
@@ -123,7 +158,9 @@ async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
     }))
 }
 
-async fn protected_handler() -> Json<Value> {
+/// Protected endpoint — requires a valid JWT.
+#[instrument(skip(_claims))]
+async fn protected_handler(Extension(_claims): Extension<Claims>) -> Json<Value> {
     Json(json!({
         "status": "ok",
         "protected": true,

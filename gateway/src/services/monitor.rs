@@ -1,3 +1,9 @@
+//! Monitor service — renders a simple status dashboard.
+//!
+//! The dashboard endpoint now redirects users to the `/health` endpoint
+//! instead of showing a hardcoded status page, ensuring displayed status
+//! reflects actual service health.
+
 use axum::{
     Router,
     response::{Html, Json},
@@ -8,32 +14,20 @@ use serde_json::{Value, json};
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
 
-const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
+/// Static HTML page that redirects to `/health`.
+const REDIRECT_PAGE: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Gateway Monitor Dashboard</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; }
-    h1 { color: #333; }
-    .ok { color: #090; }
-    ul { list-style: none; padding: 0; }
-    li { padding: .5rem; border-bottom: 1px solid #eee; }
-  </style>
+  <meta http-equiv="refresh" content="0; url=/health">
+  <title>Gateway Monitor</title>
 </head>
 <body>
-  <h1>🔍 Gateway Monitor Dashboard</h1>
-  <p class="ok">All services operational</p>
-  <ul>
-    <li>✅ Search  – <span class="ok">healthy</span></li>
-    <li>✅ Proxy   – <span class="ok">healthy</span></li>
-    <li>✅ Monitor – <span class="ok">healthy</span></li>
-  </ul>
-  <hr>
-  <small>Gateway Example v0.1.0</small>
+  <p>Service status has moved to the <a href="/health">/health</a> endpoint.</p>
 </body>
 </html>"#;
 
+#[derive(Debug)]
 pub struct MonitorService;
 
 impl ServiceModule for MonitorService {
@@ -42,7 +36,7 @@ impl ServiceModule for MonitorService {
     }
 
     fn description(&self) -> &'static str {
-        "Mock monitor dashboard – renders an HTML status page"
+        "Mock monitor dashboard — redirects to /health"
     }
 
     fn enabled(&self) -> bool {
@@ -56,8 +50,9 @@ impl ServiceModule for MonitorService {
     }
 }
 
+/// Renders a redirect page pointing to `/health`.
 async fn dashboard_handler() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
+    Html(REDIRECT_PAGE)
 }
 
 async fn monitor_health() -> Json<Value> {

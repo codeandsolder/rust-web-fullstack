@@ -47,7 +47,7 @@ Last verified against the canonical `Cargo.lock` in this directory on 2026-06-27
 | `tokio` | 1 | `full` | |
 | `tower-http` | 0.7 | `fs`, `trace` | `fs` is required for `ServeDir` |
 | `jsonwebtoken` | 10 | **MUST** set `features = ["rust_crypto"]` or `["aws_lc_rs"]` | 10.x panics without explicit crypto provider — see Pitfall 10 |
-| `reqwest` | 0.13 | `rustls` (renamed from 0.12's `rustls-tls`), `json` | |
+| `reqwest` | 0.13 | `rustls`, `json`, `stream` | `stream` feature enables `bytes_stream()` for SSE reading |
 | `chromiumoxide` | 0.9 | Direct CDP, no Node.js | Replaces abandoned playwright-rs |
 
 ### Architecture Decision Tree
@@ -65,6 +65,15 @@ Starting a Rust web project?
 │   └── Live notifications → PgListener (borrows 1 connection from pool)
 └── Need forms? → ServerAction + ActionForm (progressive enhancement)
 ```
+
+### When NOT to use this skill
+
+- **You need React/Vue/Svelte interoperability**: Leptos is Rust-only; no JS interop for 3rd party components
+- **Your team is not familiar with Rust**: The fullstack Rust learning curve is steep — consider this only if the team already ships Rust
+- **You need quick prototyping**: Use a managed backend (Supabase, Convex) and a JS frontend for MVP speed
+- **Your app is read-heavy with no real-time needs**: A simpler SSR-only setup (e.g. axum + maud/askama) avoids the complexity of hydration, WASM, and SSE
+- **You need mobile rendering**: Leptos targets the web; use Tauri + Leptos for desktop, but not for mobile-first
+- **You need extensive 3rd-party JS ecosystem**: If your app requires many client-side JS libraries without WASM wrappers, stick with a JS framework
 
 ### Critical Rules
 
@@ -104,7 +113,7 @@ Load these as needed for deep patterns:
 use axum::Router;
 use anyhow::Context;
 use leptos::*;
-use leptos_axum::{generate_route_list, LeptosRoutes, handle_server_fns};
+use leptos_axum::{generate_route_list, LeptosRoutes};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
@@ -125,24 +134,20 @@ async fn main() -> anyhow::Result<()> {
     let routes = generate_route_list(App);
 
     let app = Router::new()
-        .route("/api/*fn_name", get(handle_server_fns))
+        // Static assets FIRST — before leptos_routes so /pkg/* takes priority
+        .nest_service("/pkg", tower_http::services::ServeDir::new("./pkg"))
+        // Server function catch-all — see Pattern 9 for the custom handler
+        .route("/api/{*fn_name}", axum::routing::any(server_fn_handler))
+        // SSE endpoint
+        .route("/api/events", axum::routing::get(sse_handler))
+        .layer(TraceLayer::new_for_http())
+        .with_state(leptos_options.clone())
+        // Leptos page routes last (catch-all within its domain)
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())
         })
-        .layer(TraceLayer::new_for_http())
-        .with_state(leptos_options);
-
-    // Inject pool into SSR context so server functions can use it
-    let app_fn = move |leptos_options| {
-        let app = App;
-        leptos_axum::render_app_to_stream_with_context(
-            move || {
-                provide_context(pool.clone());
-            },
-            move || app,
-        )(leptos_options)
-    };
+        .fallback(fallback_handler);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -343,7 +348,7 @@ async fn test_sse_live_update() {
     tokio::spawn(async move { while let Some(_) = handler.next().await {} });
 
     let page = browser.new_page("about:blank").await.unwrap();
-    page.goto("http://localhost:3020").await.unwrap();
+    page.goto("http://localhost:3000").await.unwrap();
 
     // Wait for SSE to populate the DOM via JS evaluation
     let populated = wait_for_js_true(
@@ -416,60 +421,57 @@ let rows = sqlx::query_as!(
 ### Pattern 6: Gateway with ServiceModule Trait
 
 ```rust
+use axum::Router;
 use futures::future::{BoxFuture, FutureExt};
 
+/// Error returned by service module health checks.
+/// String-based reason because the gateway has no opinion about which
+/// underlying error type a particular service depends on.
 #[derive(Debug, thiserror::Error)]
-#[error("service unhealthy")]
-struct ServiceHealthError {
-    #[source]
-    source: sqlx::Error,
+#[non_exhaustive]
+#[error("service unavailable: {reason}")]
+#[must_use = "a ServiceHealthError must be observed"]
+pub struct ServiceHealthError {
+    pub reason: String,
 }
 
-// Each service implements this trait
-trait ServiceModule: Send + Sync {
+/// A composable service module mounted under the gateway.
+pub trait ServiceModule: Send + Sync {
     fn name(&self) -> &'static str;
-    fn router(&self) -> Router<AppState>;
-    fn health_check<'a>(
-        &'a self,
-        pool: &'a PgPool,
-    ) -> BoxFuture<'a, Result<(), ServiceHealthError>>;
-}
+    fn path(&self) -> &'static str { self.name() }
+    fn description(&self) -> &'static str;
+    fn enabled(&self) -> bool { true }
+    fn router(&self) -> Router<GatewayState>;
 
-struct SearxRs2;
-impl ServiceModule for SearxRs2 {
-    fn name(&self) -> &'static str { "searxrs2" }
-    fn router(&self) -> Router<AppState> {
-        Router::new()
-            .route("/search", get(search_handler))
-            .route("/api/search/*fn_name", get(handle_server_fns))
-    }
-    fn health_check<'a>(
-        &'a self,
-        pool: &'a PgPool,
-    ) -> BoxFuture<'a, Result<(), ServiceHealthError>> {
-        async move {
-            sqlx::query("SELECT 1")
-                .execute(pool)
-                .await
-                .map_err(ServiceHealthError::from)
-        }
-        .boxed()
+    /// Health check with no arguments — the service knows its dependencies.
+    /// Default: always healthy.
+    #[must_use = "a health check result should be observed"]
+    fn health_check(&self) -> BoxFuture<'_, Result<(), ServiceHealthError>> {
+        future::ready(Ok(())).boxed()
     }
 }
 
 // Compose all services
-fn build_gateway() -> Router<AppState> {
+fn build_gateway(state: GatewayState) -> Router {
     let services: Vec<Box<dyn ServiceModule>> = vec![
-        Box::new(SearxRs2),
-        Box::new(ProxyTest),
-        Box::new(WarpProxy),
+        Box::new(LiveSearchService),
     ];
 
-    let mut router = Router::new();
+    let mut router = Router::new()
+        .route("/events", get(sse_handler))
+        .route("/health", get(health_handler));
+
     for service in &services {
-        router = router.nest(&format!("/{}", service.name()), service.router());
+        if !service.enabled() { continue; }
+        router = router.nest(
+            &format!("/{}", service.path()),
+            service.router(),
+        );
     }
+
     router
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 ```
 
@@ -509,47 +511,54 @@ SELECT cron.schedule(
 declared by their `endpoint = "..."` macro arg. When that arg starts with
 `/api/`, the resulting route is `/api/api/<fn_name>` — clients calling
 `/api/search` get 404. This is a known wart of Leptos 0.8's macro expansion.
-Fix with a catch-all handler that tries both paths:
+Fix with a custom handler that probes both paths via
+`leptos::server_fn::axum::get_server_fn_service`:
 
 ```rust
-use axum::{routing::post, extract::Path, http::Uri};
-use leptos_axum::handle_server_fns;
+use axum::body::Body;
+use axum::extract::Request;
+use axum::http::{StatusCode, Uri};
+use axum::response::IntoResponse;
+use axum::routing::any;
 
-let app = Router::new()
-    .route("/api/{*fn_name}", post(
-        |Path(fn_name): Path<String>, uri: Uri, req: Request| async move {
-            // Try the exact path first; fall back to doubled-prefix variant.
-            let path = uri.path().to_string();
-            handle_server_fns_with_path(path, req).await
-        }
-    ));
+/// Catch-all handler for server function endpoints.
+///
+/// Probes the exact path first; if not registered, tries a doubled-prefix
+/// variant (e.g. `/api/search` when the `#[server(endpoint = "/api/search")]`
+/// macro registered `/api/api/search`).
+async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
+    let method = req.method().clone();
+    let original_path = req.uri().path().to_string();
+    let (mut parts, body) = req.into_parts();
 
-async fn handle_server_fns_with_path(
-    path: String,
-    req: Request,
-) -> Response {
-    // Try as-is, then with the doubled /api prefix stripped + re-added.
-    let tried = path.clone();
-    match handle_server_fns_internal(&path, &req).await {
-        Ok(r) => r,
-        Err(_) => {
-            // Fallback: replace leading /api/ with /api/api/ if present
-            let fallback = if path.starts_with("/api/")
-                && !path.starts_with("/api/api/")
-            {
-                path.replacen("/api/", "/api/api/", 1)
+    let path_to_try =
+        if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
+            && original_path.starts_with("/api/")
+        {
+            let doubled = format!("/api{original_path}");
+            if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
+                doubled
             } else {
-                tried
-            };
-            handle_server_fns_internal(&fallback, &req).await
-                .unwrap_or_else(|_| (StatusCode::NOT_FOUND, "fn not found").into_response())
-        }
+                original_path
+            }
+        } else {
+            original_path
+        };
+
+    if path_to_try != parts.uri.path() {
+        parts.uri = Uri::try_from(&path_to_try).expect("valid URI from path rewrite");
     }
+
+    let req = Request::from_parts(parts, body);
+    leptos_axum::handle_server_fns(req).await
 }
 ```
 
-Or simpler: register the `handle_server_fns` route at `/api/{*fn_name}` and
-also at `/api/api/{*fn_name}` so both variants work — accept the duplicate.
+Mount it with `any` (accepts both GET and POST):
+
+```rust
+.route("/api/{*fn_name}", any(server_fn_handler))
+```
 
 ### Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)
 
@@ -561,10 +570,11 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "live-search"
 path = "src/main.rs"
+required-features = ["ssr"]
 
 [features]
-hydrate = ["live-search/leptos/hydrate"]
-ssr = ["live-search/leptos/ssr"]
+ssr = ["dep:leptos_axum", "leptos/ssr"]
+hydrate = ["leptos/hydrate"]
 ```
 
 ```rust
@@ -585,17 +595,18 @@ async fn main() -> anyhow::Result<()> {
     let leptos_options = conf.leptos_options;
 
     let app = Router::new()
-        // Catch-all server-fn route (see Pattern 9)
-        .route("/api/{*fn_name}", post(handle_server_fns))
-        // Static WASM + JS bundle — MUST exist for hydration
+        // Static WASM + JS bundle — MUST exist for hydration (serve before leptos_routes)
         .nest_service("/pkg", tower_http::services::ServeDir::new("./pkg"))
+        // Catch-all server-fn route (see Pattern 9 for the custom handler)
+        .route("/api/{*fn_name}", any(server_fn_handler))
+        .layer(TraceLayer::new_for_http())
+        .with_state(leptos_options.clone())
         // Leptos page routes (returns SSR HTML)
         .leptos_routes(&leptos_options, routes, {
             let opts = leptos_options.clone();
             move || shell(opts.clone())
         })
-        .layer(TraceLayer::new_for_http())
-        .with_state(leptos_options);
+        .fallback(fallback_handler);
 
     let listener = tokio::net::TcpListener::bind(&leptos_options.site_addr)
         .await
@@ -672,33 +683,38 @@ pub async fn setup() -> TestContext {
     let dir = unique_profile_dir();
     std::fs::create_dir_all(&dir).expect("failed to create Chromium profile dir");
 
+    let mut builder = BrowserConfig::builder()
+        .user_data_dir(dir.clone())
+        .no_sandbox();
+
+    // Allow overriding Chrome binary via CHROME_PATH env var
+    if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+        builder = builder.chrome_executable(chrome_path);
+    }
+
     let (browser, mut handler) = Browser::launch(
-        BrowserConfig::builder()
-            .user_data_dir(dir.clone())
-            .build()
+        builder.build()
     ).await.expect("failed to launch Chromium");
 
     // Pump CDP events in the background — without this the browser hangs.
-    // (Verified against chromiumoxide 0.9 README pattern; no CancellationToken
-    // needed — the handler lifecycle is driven by the Browser handle via
-    // `browser.close()`, which signals the handler channel.)
     tokio::spawn(async move { while handler.next().await.is_some() {} });
 
     let page = browser.new_page("about:blank").await
         .expect("failed to create Chromium page");
 
-    TestContext { browser, page, profile_dir: dir, base_url: base_url() }
+    TestContext { browser, page, base_url: base_url() }
 }
 
 pub async fn teardown(ctx: TestContext) {
     // eprintln! is intentional: the Rust test harness captures stderr per-test
     // and only displays it on failure. A tracing subscriber is not initialized
     // in tests, so tracing::warn! would be silently dropped.
-    if let Err(e) = ctx.browser.close().await {
-        eprintln!("failed to close Chromium browser: {e}");
+    let TestContext { mut browser, page, .. } = ctx;
+    if let Err(e) = page.close().await {
+        eprintln!("failed to close Chromium page during teardown: {e}");
     }
-    if let Err(e) = std::fs::remove_dir_all(&ctx.profile_dir) {
-        eprintln!("failed to remove Chromium profile dir: {e}");
+    if let Err(e) = browser.close().await {
+        eprintln!("failed to close Chromium browser: {e}");
     }
 }
 
@@ -736,34 +752,44 @@ detection. On a system with both Playwright's Chromium and the system
 Chrome installed, force a specific binary via `chromiumoxide::BrowserConfig`:
 
 ```rust
+// Set via CHROME_PATH env var when running tests
+if let Ok(chrome_path) = std::env::var("CHROME_PATH") {
+    builder = builder.chrome_executable(chrome_path);
+}
+
+// Or inline for debugging:
 BrowserConfig::builder()
-    .chrome_path(std::path::PathBuf::from(
-        "/home/jan/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome"
+    .chrome_executable(std::path::PathBuf::from(
+        "/path/to/chrome"
     ))
     .build()
 ```
+
+Use the `CHROME_PATH` environment variable rather than hardcoding paths.
+Common locations: Playwright cache (`$PLAYWRIGHT_BROWSERS_PATH/chromium-1208/chrome-linux64/chrome`),
+system installation (`/usr/bin/chromium`), or local download.
 
 Verified stable: Chromium **1208** (Playwright 1.50 era).
 Crashes observed: Chromium **1223** (Playwright 1.51+ on this host).
 
 ### Pattern 14: SSE JSON Injection in Rust Raw Strings
 
-When using `format!()` to build SSE event payloads that include JSON, the
-literal `{{` and `}}` escape sequences produce literal `{` and `}` — but
-double braces from `{json_field}` placeholders also produce `{}`. To avoid
-both pitfalls, use **raw string literals** (`r#"..."#`) and explicit
-`replace()` for any interpolation:
+When building SSE event payloads that include JSON, use **raw string literals**
+(`r#"..."#`) to avoid escaping JSON braces. For interpolation, prefer explicit
+`replace()` over `format!()` when there are many JSON fields — it avoids
+confusion between `format!`'s `{field}` placeholders and JSON's `{ }`:
 
 ```rust
-// WRONG: format! doubles { and } for escape, breaks downstream JSON parsing
+// Simple case — format! works fine with {{ }} escaping:
 let payload = format!(r#"data: {{"query":"{q}","results":[]}}"#);
 
-// RIGHT: raw string + explicit replacement
+// For complex JSON payloads, raw string + replace() is more readable:
 let payload = r#"data: {"query":"__QUERY__","results":[]}"#
     .replace("__QUERY__", &q);
 ```
 
-Apply same rule to test JS strings — never `format!` JS source code.
+Apply same principle to test JS strings — prefer `replace()` over complex
+`format!` with deeply nested `{{ }}` in JS source code.
 
 ### Pattern 15: Structured Concurrency Triad (CancellationToken + JoinSet + select!)
 
@@ -852,7 +878,7 @@ async fn main() -> anyhow::Result<()> {
 5. **Feature flag conflicts**: `csr`, `ssr`, `hydrate` are mutually exclusive — use `[features]` section in Cargo.toml to enforce this with `skip_feature_sets`
 6. **cross-origin SSE**: EventSource requires same-origin by default; use CORS headers or serve from same domain
 7. **chromiumoxide user_data_dir collision**: Default `~/.cache/chromiumoxide-runner/SingletonLock` collides when tests run in parallel. Always set a unique `user_data_dir` per test (see Pattern 12).
-8. **WASM hydration requires static serving**: SSR HTML references `/pkg/{crate}.js` and `/pkg/{crate}_bg.wasm`. Without `ServeDir::new("./pkg")` mounted on the router, the page renders but JavaScript never runs. Verify with `curl http://localhost:3020/pkg/live_search.js` returning 200.
+8. **WASM hydration requires static serving**: SSR HTML references `/pkg/{crate}.js` and `/pkg/{crate}_bg.wasm`. Without `ServeDir::new("./pkg")` mounted on the router, the page renders but JavaScript never runs. Verify with `curl http://localhost:3000/pkg/live_search.js` returning 200.
 9. **Server-fn 404 / doubled-prefix**: `endpoint = "/api/search"` + `handle_server_fns` mounted at `/api/*fn_name` → server fn is reachable only at `/api/api/search`. Either mount the route at `/api/api/*fn_name`, or use a catch-all handler that tries both (Pattern 9).
 10. **jsonwebtoken 10 panics without crypto provider**: `jsonwebtoken = "10"` alone crashes the process on first `encode()`/`decode()` call with `Could not automatically determine the process-level CryptoProvider`. Fix with `features = ["rust_crypto"]` (pure Rust) or `["aws_lc_rs"]` (requires cmake/perl/nasm C toolchain).
 11. **Silent test skips via `check_server_or_skip()`**: Do not use helpers that return `false` and let tests `return`. Required dependencies should panic/assert with the actual status or error; optional slow tests should use `#[ignore]`.
