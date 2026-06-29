@@ -162,7 +162,10 @@ async fn test_ssr_page_renders() {
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .user_data_dir(profile_dir.clone())
-            .headless_mode(chromiumoxide::browser::HeadlessMode::True)
+            // No `.headless_mode(...)` needed — chromiumoxide 0.9 default
+            // is already headless. Note that `HeadlessMode` is NOT publicly
+            // re-exported by chromiumoxide 0.9 (issue #317); use
+            // `.new_headless_mode()` for explicit selection.
             .build()
     ).await.expect("failed to launch Chromium");
 

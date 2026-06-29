@@ -57,15 +57,32 @@ steps:
         apt-get update && apt-get install -y --no-install-recommends postgresql-client chromium=149.0.7827.196-1~deb12u1
         rustup target add wasm32-unknown-unknown
         cargo install wasm-bindgen-cli --version 0.2.126 --locked
+        # Export gateway env vars BEFORE any test runs; gateway::settings refuses
+        # to start without them and rejects the literal placeholder JWT secret.
+        export ADMIN_PASSWORD=synthetic-gateway-test-password
+        # Must match scripts/test-e2e.sh and .env / .env.example exactly so
+        # that tokens signed by one process verify under the other. ≥32 bytes
+        # and not the literal placeholder rejected by gateway::settings.
+        export JWT_SECRET=dev-jwt-secret-change-in-production-please-32-bytes
         cargo build --release --locked -p live-search --lib --target wasm32-unknown-unknown --features hydrate
-        mkdir -p target/wasm-pkg
-        wasm-bindgen --target web --out-dir target/wasm-pkg --out-name live_search target/wasm32-unknown-unknown/release/live_search.wasm
+        mkdir -p pkg
+        wasm-bindgen --target web --out-dir pkg --out-name live_search target/wasm32-unknown-unknown/release/live_search.wasm
+        # SSR shell renders <Stylesheet href="/pkg/live-search.css"/>; placeholder.
+        touch pkg/live-search.css
         cargo build --release --locked -p live-search --features ssr
         cargo build --release --locked -p gateway-example
         PGPASSWORD=rwf_dev_password psql -h postgres -U rwf -d rwf_demo -f scripts/init-db.sql
         echo "==> Applying database migrations..."
-        cargo install sqlx-cli --version 0.8.4 --no-default-features --features postgres,rustls --locked
-        DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo sqlx migrate run --source live-search/migrations
+        # sqlx-cli 0.8.4 has been yanked from crates.io; apply via the binary.
+        DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo ./target/release/live-search &
+        LS_PID=$!
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:3000/ > /dev/null 2>&1; then break; fi
+          sleep 1
+        done
+        curl -sf http://localhost:3000/ > /dev/null || { echo "live-search (migrations) not ready"; exit 1; }
+        kill $LS_PID 2>/dev/null || true
+        wait $LS_PID 2>/dev/null || true
         ./scripts/seed-db.sh "postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo"
         DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo ./target/release/live-search &
         LS_PID=$!
@@ -81,8 +98,14 @@ steps:
         done
         curl -sf http://localhost:3000/ > /dev/null || { echo "live-search not ready after 60s"; exit 1; }
         curl -sf http://localhost:3001/health > /dev/null || { echo "gateway not ready after 60s"; exit 1; }
-        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release --locked -p e2e-tests --features integration --test live_search_test -- --test-threads=1
-        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 cargo test --release --locked -p e2e-tests --features integration --test sse_test -- --test-threads=1
-        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3001 cargo test --release --locked -p e2e-tests --features integration --test gateway_test -- --test-threads=1
+        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 \
+          DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo \
+          cargo test --release --locked -p e2e-tests --features integration --test live_search_test -- --test-threads=1
+        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3000 \
+          DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo \
+          cargo test --release --locked -p e2e-tests --features integration --test sse_test -- --test-threads=1
+        CHROME_PATH=/usr/bin/chromium BASE_URL=http://localhost:3001 \
+          DATABASE_URL=postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo \
+          cargo test --release --locked -p e2e-tests --features integration --test gateway_test -- --test-threads=1
         '
     depends_on: []

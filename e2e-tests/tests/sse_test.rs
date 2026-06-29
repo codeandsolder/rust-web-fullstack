@@ -82,6 +82,15 @@ async fn notify_trigger_fires_sse_event() {
 
     require_server(&base_url(None)).await;
 
+    // ── 0. Pre-clean: wipe any leftover e2e-test rows from previous failed runs.
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+    sqlx::query("DELETE FROM search_results WHERE title LIKE 'e2e-%' OR title LIKE 'e2e-warmup-%' OR title LIKE 'browser-sse-sentinel-%'")
+        .execute(&pool)
+        .await
+        .ok();
+
     // ── 1. Open an SSE connection to /api/events ──────────────────────
     let url = format!("{}/api/events", base_url(None));
     let response = reqwest::Client::builder()
@@ -93,12 +102,58 @@ async fn notify_trigger_fires_sse_event() {
         .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
 
     assert_eq!(response.status(), 200);
+    let mut stream = response.bytes_stream();
+    let mut buf = String::new();
 
-    // ── 2. Insert a search result row via sqlx ────────────────────────
-    let pool = sqlx::PgPool::connect(&database_url)
+    // ── 2. Insert a warmup row and wait for it to appear in the stream ─
+    //
+    // PostgreSQL NOTIFY is best-effort: if `PgListener` hasn't yet called
+    // `LISTEN search_results` (cold start, slow CI runner), the NOTIFY is
+    // dropped silently and the assertion below would time out for the wrong
+    // reason. We can't observe `PgListener::listen()` directly, but we CAN
+    // prove the listener is active by inserting a sentinel row and waiting
+    // for the resulting SSE event. (Waiting for `SseEvent::Connected` is
+    // NOT sufficient — that event is emitted by the SSE handler itself,
+    // independent of the broadcast/listener pipeline.)
+    let warmup_title = format!(
+        "e2e-warmup-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    );
+    let warmup_url = format!("https://example.com/e2e-warmup/{warmup_title}");
+    sqlx::query("INSERT INTO search_results (title, url, snippet) VALUES ($1, $2, $3)")
+        .bind(&warmup_title)
+        .bind(&warmup_url)
+        .bind("SSE warmup row to prove PgListener is LISTEN-ing")
+        .execute(&pool)
         .await
-        .expect("Failed to connect to database");
+        .expect("Failed to insert warmup row");
 
+    let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            tokio::time::Instant::now() < warmup_deadline,
+            "Timeout waiting for warmup SSE event — PgListener may not be \
+             LISTEN-ing yet. Buffer so far (first 500 chars): {buf:.500}"
+        );
+        match tokio::time::timeout(Duration::from_secs(1), stream.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+                buf.push('\n');
+                if buf.contains(&warmup_title) && buf.contains("SearchResult") {
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => panic!("SSE stream error during warmup: {e}"),
+            Ok(None) => panic!("SSE stream ended during warmup. Buffer: {buf:.300}"),
+            Err(_timeout) => {} // keep waiting
+        }
+    }
+    println!("Warmup SSE event received — PgListener is LISTEN-ing");
+
+    // ── 3. Insert the real test row ──────────────────────────────────
     let title = format!(
         "e2e-test-{}-{}",
         std::process::id(),
@@ -106,25 +161,21 @@ async fn notify_trigger_fires_sse_event() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())
     );
-    let test_url = "https://example.com/e2e-test";
+    // Use a unique URL per test run so the UNIQUE constraint on `url` does
+    // not reject the INSERT when the test is re-run.
+    let test_url = format!("https://example.com/e2e-test/{title}");
     let snippet = "E2E test snippet for NOTIFY→SSE verification";
 
-    // Clone for the INSERT — the original is needed for the assertion below.
     sqlx::query("INSERT INTO search_results (title, url, snippet) VALUES ($1, $2, $3)")
-        .bind(title.clone())
-        .bind(test_url)
+        .bind(&title)
+        .bind(&test_url)
         .bind(snippet)
         .execute(&pool)
         .await
         .expect("Failed to insert search result");
 
-    pool.close().await;
-
-    // ── 3. Read SSE events until we see the SearchResult ──────────────
-    let mut stream = response.bytes_stream();
-    let mut buf = String::new();
+    // ── 4. Read SSE events until we see the SearchResult ──────────────
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-
     loop {
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -137,6 +188,24 @@ async fn notify_trigger_fires_sse_event() {
                 buf.push('\n');
                 if buf.contains(&title) && buf.contains("SearchResult") {
                     println!("SearchResult SSE event with title '{title}' received");
+                    // Best-effort cleanup so re-runs don't accumulate rows.
+                    // Warmup row cleanup happens via the pre-clean DELETE in
+                    // a future run; success-path cleanup is here.
+                    if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
+                        .bind(&title)
+                        .execute(&pool)
+                        .await
+                    {
+                        eprintln!("warning: failed to delete e2e-test row '{title}': {e}");
+                    }
+                    if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
+                        .bind(&warmup_title)
+                        .execute(&pool)
+                        .await
+                    {
+                        eprintln!("warning: failed to delete e2e-warmup row '{warmup_title}': {e}");
+                    }
+                    pool.close().await;
                     return;
                 }
             }

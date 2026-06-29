@@ -20,17 +20,17 @@ use e2e_tests::base_url;
 
 /// Synthetic dev credential used by the integration tests.
 ///
-/// The CI runner sets `ADMIN_PASSWORD=synthetic-gateway-test-password` in
-/// `e2e-tests/scripts/` (or the equivalent in `.woodpecker.yml`) so this
-/// constant does not collide with any production credential and is
-/// impossible to confuse with `admin`.
-const TEST_PASSWORD: &str = "synthetic-gateway-test-password-do-not-use-in-prod";
+/// MUST match the `ADMIN_PASSWORD` exported by `scripts/test-e2e.sh` and the
+/// `command:` block in `.woodpecker.yml` (both ultimately source from `.env`).
+/// If you change one, change all three in the same commit.
+const TEST_PASSWORD: &str = "synthetic-gateway-test-password";
 
 // ---------------------------------------------------------------------------
 // Required integration tests (from spec)
 // ---------------------------------------------------------------------------
 
-/// 8. Landing page loads — GET `/`, assert HTTP 200 and body mentions "Gateway".
+/// 8. Landing page loads — GET `/`, assert HTTP 200 and JSON structure
+///    (gateway name and services array).
 #[tokio::test]
 #[cfg_attr(
     not(feature = "integration"),
@@ -56,14 +56,31 @@ async fn landing_page_loads() {
         "Expected HTTP 200 from landing page, got {status}",
     );
 
-    let body = response.text().await.expect("Failed to read response body");
+    let json: serde_json::Value = response.json().await.expect("Response is not valid JSON");
+
+    // Exact gateway name — catches typos and version regressions.
+    let gateway = json
+        .get("gateway")
+        .and_then(|v| v.as_str())
+        .expect("Landing page response should contain a string 'gateway' field");
     assert!(
-        body.contains("Gateway"),
-        "Landing page body should contain 'Gateway', got: {body:.200}"
+        gateway.contains("Gateway"),
+        "Landing page 'gateway' field should contain 'Gateway', got: {gateway}"
     );
+
+    // Services array present and non-empty.
+    let services = json
+        .get("services")
+        .and_then(|v| v.as_array())
+        .expect("Landing page response should contain a 'services' array");
+    assert!(
+        !services.is_empty(),
+        "Landing page 'services' array should not be empty"
+    );
+
     println!(
-        "Gateway landing page loaded (body length: {len})",
-        len = body.len()
+        "Gateway landing page loaded: gateway='{gateway}', services={}",
+        services.len()
     );
 }
 
@@ -226,5 +243,109 @@ async fn auth_middleware_rejects_unauthenticated() {
         response.status(),
         401,
         "Expected protected route to reject missing Bearer token"
+    );
+}
+
+/// 13. Auth middleware accepts a valid token — POST credentials to
+///     `/auth/login`, then use the returned JWT to GET `/auth/protected`
+///     and verify a 200 response. Catches regressions where the middleware
+///     rejects ALL tokens.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn auth_protected_accepts_valid_token() {
+    require_server(&base_url(None)).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+
+    // ── 1. Login ────────────────────────────────────────────────────
+    let login_url = format!("{}/auth/login", base_url(None));
+    let login_response = client
+        .post(&login_url)
+        .json(&serde_json::json!({
+            "user_id": "test",
+            "password": TEST_PASSWORD,
+        }))
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to POST {login_url}: {e}"));
+
+    let login_status = login_response.status();
+    assert!(
+        login_status == 200 || login_status == 201,
+        "Expected 200/201 from /auth/login, got {login_status}",
+    );
+
+    let login_json: serde_json::Value = login_response
+        .json()
+        .await
+        .expect("Login response is not valid JSON");
+
+    let token = login_json
+        .get("token")
+        .and_then(|v| v.as_str())
+        .expect("Login response should contain a 'token' field");
+
+    // ── 2. Use the token to access the protected endpoint ───────────
+    let protected_url = format!("{}/auth/protected", base_url(None));
+    let protected_response = client
+        .get(&protected_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to GET {protected_url}: {e}"));
+
+    let status = protected_response.status();
+    assert_eq!(
+        status, 200,
+        "Expected HTTP 200 from /auth/protected with valid Bearer token, got {status}"
+    );
+
+    let body: serde_json::Value = protected_response
+        .json()
+        .await
+        .expect("Protected response is not valid JSON");
+    assert_eq!(
+        body.get("protected").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "Expected protected body to have `protected: true`, got: {body}"
+    );
+    println!("Auth middleware accepted valid token, returned protected=true");
+}
+
+/// 14. Auth login rejects an invalid password — POST to `/auth/login` with
+///     the wrong password and verify 401.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration"
+)]
+async fn auth_login_rejects_invalid_password() {
+    require_server(&base_url(None)).await;
+
+    let url = format!("{}/auth/login", base_url(None));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build reqwest client");
+    let response = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "user_id": "test",
+            "password": "definitely-wrong-password",
+        }))
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to POST {url}: {e}"));
+
+    let status = response.status();
+    assert_eq!(
+        status, 401,
+        "Expected HTTP 401 from /auth/login with invalid password, got {status}",
     );
 }

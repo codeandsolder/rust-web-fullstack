@@ -25,7 +25,11 @@ async fn main() -> anyhow::Result<()> {
 
     let app = gateway::build_gateway(service_modules)?;
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
+    let port: u16 = std::env::var("GATEWAY_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3001);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     tracing::info!("gateway-example starting on {addr}");
     tracing::info!("  Health: http://{addr}/health");

@@ -38,4 +38,9 @@ COPY --from=builder /build/pkg /app/pkg
 COPY live-search/migrations /app/migrations
 EXPOSE 3000
 USER app
+# LEPTOS_OUTPUT_NAME must match the wasm-bindgen `--out-name` used at build
+# time (live_search, with underscore). Without this, the SSR shell emits
+# empty hydration paths (`///pkg///.js`) and the browser 404s on the JS
+# module — the page renders but JavaScript never runs.
+ENV LEPTOS_OUTPUT_NAME=live_search
 CMD ["/app/live-search"]

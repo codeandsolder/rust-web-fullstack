@@ -217,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
     // ---- serve ------------------------------------------------------------
 
     let port: u16 = std::env::var("PORT")
+        .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);

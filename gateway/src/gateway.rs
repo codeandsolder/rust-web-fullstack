@@ -176,7 +176,7 @@ async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
 }
 
 /// Protected endpoint — requires a valid JWT.
-#[instrument(skip(_claims))]
+#[instrument(skip(_claims))] // `skip` suppresses `clippy::used_underscore_binding` on `_claims`
 async fn protected_handler(Extension(_claims): Extension<Claims>) -> Json<Value> {
     Json(json!({
         "status": "ok",

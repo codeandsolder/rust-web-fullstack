@@ -485,7 +485,10 @@ async fn test_sse_live_update() {
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
             .user_data_dir(std::path::PathBuf::from(&profile_dir))
-            .headless_mode(chromiumoxide::browser::HeadlessMode::True)
+            // No `.headless_mode(...)` call needed: the chromiumoxide 0.9 default
+            // is already headless. Note that `HeadlessMode` itself is *not*
+            // publicly re-exported by chromiumoxide 0.9 (issue #317), so any
+            // explicit selector must use `.new_headless_mode()` instead.
             .build()
     )
     .await
@@ -705,6 +708,14 @@ use axum::routing::any;
 /// Probes the exact path first; if not registered, tries a doubled-prefix
 /// variant (e.g. `/api/search` when the `#[server(endpoint = "/api/search")]`
 /// macro registered `/api/api/search`).
+///
+/// # Panics
+/// Panics only if the path-rewrite produces an invalid URI — in practice this
+/// is infallible because we only ever prepend `/api` to an existing valid URI.
+#[expect(
+    clippy::expect_used,
+    reason = "Path rewrite produces a valid URI by construction (prepending /api to a valid path)"
+)]
 async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
     let method = req.method().clone();
     let original_path = req.uri().path().to_string();
@@ -814,6 +825,17 @@ pub mod server {
 }
 ```
 
+> **Note on `axum::serve` signature**: the call `axum::serve(listener, app.into_make_service())`
+> shown above is the **stateful** form — `into_make_service()` adapts `Router<S>` into
+> `MakeService<S>` so the per-connection `State` extractor works. The canonical
+> `live-search/src/main.rs` takes a different (and slightly cheaper) route: it
+> converts `Router<LeptosOptions>` to `Router<()>` via `.with_state(...)` and then
+> calls `axum::serve(listener, app)` directly, since `LeptosRoutes` handlers
+> capture their state via closures rather than via axum's `State` extractor.
+> Both forms compile and behave identically at runtime — pick whichever fits
+> your routing style. See the `Router<S> → Router<()>` conversion at
+> `live-search/src/main.rs:215`.
+
 ### Pattern 11: Action.value() vs Action.input()
 
 Both `Action::input()` and `Action::value()` are reactive signals that
@@ -919,15 +941,18 @@ pub async fn setup() -> TestContext {
 }
 
 pub async fn teardown(ctx: TestContext) {
-    // eprintln! is intentional: the Rust test harness captures stderr per-test
-    // and only displays it on failure. A tracing subscriber is not initialized
-    // in tests, so tracing::warn! would be silently dropped.
+    // Use `eprintln!` (not `tracing::warn!`) for cleanup errors: no
+    // `tracing_subscriber::fmt()` is initialised in any E2E test binary, so
+    // `tracing::warn!` would be silently dropped on the floor. `eprintln!`
+    // always writes to stderr, which the Rust test harness captures per-test
+    // and only displays on failure — exactly the right scope for cleanup
+    // diagnostics.
     let TestContext { mut browser, page, .. } = ctx;
     if let Err(e) = page.close().await {
         eprintln!("failed to close Chromium page during teardown: {e}");
     }
     if let Err(e) = browser.close().await {
-        eprintln!("failed to close Chromium browser: {e}");
+        eprintln!("failed to close Chromium browser during teardown: {e}");
     }
 }
 
@@ -1025,15 +1050,24 @@ async fn main() -> anyhow::Result<()> {
     // Spawn a signal handler that fires the shutdown token on Ctrl+C / SIGTERM
     let signal_token = shutdown.clone();
     tokio::spawn(async move {
+        #[expect(
+            clippy::expect_used,
+            reason = "signal handler installation can only fail in unrecoverable runtime states"
+        )]
         let ctrl_c = async {
-            signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+            signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
         };
         #[cfg(unix)]
         let terminate = async {
-            signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler")
-                .recv()
-                .await;
+            #[expect(
+                clippy::expect_used,
+                reason = "signal handler installation can only fail in unrecoverable runtime states"
+            )]
+            let mut sig = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+            sig.recv().await;
         };
         #[cfg(not(unix))]
         let terminate = std::future::pending::<()>();
@@ -1244,8 +1278,12 @@ pub async fn large_payload() -> Result<Vec<u8>, ServerFnError> {
 }
 ```
 
-The client and server must agree on the codec. Bitcode requires
-`bitcode = "0.6"` in both `Cargo.toml`s.
+The client and server must agree on the codec. **No extra `Cargo.toml`
+entry is needed** for `bitcode` itself — `leptos::server_fn::codec::Bitcode`
+is re-exported by the `server_fn = "0.8"` crate (`pub use bitcode;` in
+`server_fn-0.8.13/src/lib.rs`). The codec is therefore available wherever
+`leptos` is a dependency. If you want to call `bitcode` APIs directly
+outside of `#[server]`, add `bitcode = "0.6"` explicitly.
 
 ---
 

@@ -19,6 +19,9 @@ Cargo.lock.bak
 *~
 .DS_Store
 
+# Tool session state (oh-my-opencode-slim / deepwork)
+.slim/
+
 # Node (for playwright-rs drivers)
 /node_modules/
 .playwright/

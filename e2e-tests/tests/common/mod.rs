@@ -20,7 +20,10 @@ use e2e_tests::base_url;
 ///
 /// Fields may appear unused in some test binaries (each `tests/*.rs` file
 /// compiles its own copy of this module); suppress the warning.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 #[derive(Debug)]
 pub struct TestContext {
     pub browser: Browser,
@@ -34,7 +37,10 @@ pub struct TestContext {
 /// Generate a unique Chromium user-data-dir path using PID, nanos-since-epoch,
 /// and an atomic counter.  The counter ensures uniqueness even when two threads
 /// call this at the same monotonic instant.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 fn unique_profile_dir() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -75,7 +81,10 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 ///
 /// # Panics
 /// Panics if the browser cannot launch or the page cannot be created.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn setup() -> TestContext {
     let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
         let playwright_path = format!(
@@ -138,7 +147,10 @@ pub async fn setup() -> TestContext {
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
 /// creation order. Cleanup errors are logged via `tracing::warn!` (structured)
 /// but never mask the test assertion that already ran.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
         mut browser,
@@ -148,12 +160,11 @@ pub async fn teardown(ctx: TestContext) {
         ..
     } = ctx;
     if let Err(e) = page.close().await {
-        tracing::warn!(error = %e, "failed to close Chromium page during teardown");
+        eprintln!("failed to close Chromium page during teardown: {e}");
     }
     if let Err(e) = browser.close().await {
-        tracing::warn!(
-            error = %e,
-            "failed to close Chromium browser during teardown; signalling handler shutdown"
+        eprintln!(
+            "failed to close Chromium browser during teardown; signalling handler shutdown: {e}"
         );
     }
     // Always fire the shutdown token so the handler task exits even if
@@ -161,10 +172,9 @@ pub async fn teardown(ctx: TestContext) {
     shutdown.cancel();
     // Remove the temporary profile directory.
     if let Err(e) = std::fs::remove_dir_all(&profile_dir) {
-        tracing::warn!(
-            profile_dir = %profile_dir.display(),
-            error = %e,
-            "failed to remove Chromium profile dir"
+        eprintln!(
+            "failed to remove Chromium profile dir {}: {e}",
+            profile_dir.display()
         );
     }
 }
@@ -174,7 +184,10 @@ pub async fn teardown(ctx: TestContext) {
 /// # Panics
 /// Panics if the server does not respond with a 2xx or 3xx status before the
 /// timeout expires.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn require_server(url: &str) {
     assert!(
         wait_for_server(url, Duration::from_secs(5)).await,
@@ -186,7 +199,10 @@ pub async fn require_server(url: &str) {
 
 /// Poll `page.evaluate(expression)` until it returns `true` (as a boolean)
 /// or the timeout elapses. Replacement for browser-framework wait helpers.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn wait_for_js_true(page: &Page, expression: &str, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
@@ -202,7 +218,10 @@ pub async fn wait_for_js_true(page: &Page, expression: &str, timeout: Duration) 
 
 /// Poll `page.find_element(selector)` until it returns `Ok` or the timeout
 /// elapses.  Returns the element if found.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn wait_for_element(
     page: &Page,
     selector: &str,
@@ -218,30 +237,12 @@ pub async fn wait_for_element(
     None
 }
 
-/// Poll `page.find_element(selector)` until the element is both present AND
-/// visible (per [`element_is_visible`]), or the timeout elapses.  Returns the
-/// element if found and visible.
-#[allow(dead_code)]
-pub async fn wait_for_visible_element(
-    page: &Page,
-    selector: &str,
-    timeout: Duration,
-) -> Option<chromiumoxide::element::Element> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while tokio::time::Instant::now() < deadline {
-        if let Ok(el) = page.find_element(selector).await
-            && element_is_visible(page, selector).await
-        {
-            return Some(el);
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    None
-}
-
 /// Check whether an element matching `selector` is visible on the page
 /// (exists, has non-zero dimensions, `visibility` not hidden, `display` not none).
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target. `allow` (not `expect`) because whether `dead_code` fires depends on which helpers each specific test binary uses — `expect` would flag itself as unfulfilled when the lint doesn't fire."
+)]
 pub async fn element_is_visible(page: &Page, selector: &str) -> bool {
     let escaped_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
     let js = format!(
@@ -255,35 +256,4 @@ pub async fn element_is_visible(page: &Page, selector: &str) -> bool {
         .ok()
         .and_then(|v| v.into_value::<bool>().ok())
         .unwrap_or(false)
-}
-
-/// Check whether an element matching `selector` is enabled (not disabled).
-#[allow(dead_code)]
-pub async fn element_is_enabled(page: &Page, selector: &str) -> bool {
-    let escaped_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
-    let js = format!(
-        "(() => {{ const el = document.querySelector('{escaped_sel}'); \
-         return !!el && !el.disabled; }})()"
-    );
-    page.evaluate(js)
-        .await
-        .ok()
-        .and_then(|v| v.into_value::<bool>().ok())
-        .unwrap_or(false)
-}
-
-/// Get an attribute value from an element matching `selector`.
-#[allow(dead_code)]
-pub async fn element_attribute(page: &Page, selector: &str, attr: &str) -> Option<String> {
-    let escaped_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
-    let escaped_attr = attr.replace('\\', "\\\\").replace('\'', "\\'");
-    let js = format!(
-        "(() => {{ const el = document.querySelector('{escaped_sel}'); \
-         return el ? el.getAttribute('{escaped_attr}') : null; }})()"
-    );
-    page.evaluate(js)
-        .await
-        .ok()
-        .and_then(|v| v.into_value::<serde_json::Value>().ok())
-        .and_then(|v| v.as_str().map(String::from))
 }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use leptos::prelude::*;
 #[allow(
     clippy::wildcard_imports,
-    reason = "leptos_meta re-exports are feature-gated (ssr/csr/hydrate); wildcard avoids conditional import errors when features change"
+    reason = "leptos_meta re-exports are feature-gated (ssr/csr/hydrate); wildcard avoids conditional import errors when features change. `allow` (not `expect`) because whether the lint fires depends on which specific re-exports are used in each compiled target — `expect` would flag itself as unfulfilled when the lint doesn't fire."
 )]
 use leptos_meta::*;
 use leptos_router::components::{FlatRoutes, Route, Router};

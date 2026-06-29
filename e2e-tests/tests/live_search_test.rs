@@ -88,16 +88,18 @@ async fn homepage_loads() {
         .await
         .expect("Failed to navigate to homepage");
 
-    // Page title contains "Live" or "Search"
+    // Page title is the literal value set by `<Title text="Live Search" />`
+    // in live-search/src/app.rs. Tightening the assertion to the exact value
+    // catches typos in the Title component that a substring check would miss.
     let title = ctx
         .page
         .get_title()
         .await
         .expect("Failed to read page title")
         .unwrap_or_default();
-    assert!(
-        title.contains("Live") || title.contains("Search"),
-        "Page title '{title}' should contain 'Live' or 'Search'"
+    assert_eq!(
+        title, "Live Search",
+        "Page title should be exactly 'Live Search', got '{title}'"
     );
 
     // Search input is visible.
@@ -284,6 +286,115 @@ async fn live_feed_page_loads() {
         status_indicator,
         "Expected connection status indicator on /live"
     );
+
+    teardown(ctx).await;
+}
+
+/// 4b. Live-feed browser-side end-to-end — navigates to `/live`, inserts a
+///     unique sentinel row via `PostgreSQL` `INSERT`, and verifies the sentinel
+///     title appears inside `#live-results` (proving the full
+///     `PostgreSQL` → `PgListener` → broadcast → SSE → browser
+///     `EventSource` → Leptos signal pipeline works end to end).
+///
+///     This test covers the gap that the `live_feed_page_loads` test above
+///     leaves: that test only verifies the static "Connecting/Connected"
+///     indicator, which appears the moment the `EventSource` opens, regardless
+///     of whether any data event is ever delivered. The HTTP-level
+///     `sse_test::notify_trigger_fires_sse_event` covers the server side, but
+///     no test verified that the BROWSER actually receives a live event.
+///
+///     Requires `DATABASE_URL` to be set in the environment in addition to
+///     `--features integration`.
+#[tokio::test]
+#[cfg_attr(
+    not(feature = "integration"),
+    ignore = "requires --features integration and DATABASE_URL"
+)]
+async fn live_feed_receives_sse_event_in_browser() {
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for this test");
+
+    require_server(&base_url(None)).await;
+
+    // ── Pre-clean: wipe leftover browser-sse-sentinel rows from prior failed runs.
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+    sqlx::query("DELETE FROM search_results WHERE title LIKE 'browser-sse-sentinel-%'")
+        .execute(&pool)
+        .await
+        .ok();
+
+    let ctx = setup().await;
+
+    let live_url = format!("{}/live", ctx.base_url);
+    ctx.page
+        .goto(&live_url)
+        .await
+        .expect("Failed to navigate to /live");
+
+    // Wait for the page to confirm the EventSource is open — guarantees the
+    // browser is subscribed to the broadcast channel BEFORE we insert the
+    // sentinel row. Without this, the row could land before the EventSource
+    // handler attaches and the test would race the connection.
+    let connected = wait_for_js_true(
+        &ctx.page,
+        "() => document.body.innerText.includes('Connected')",
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        connected,
+        "Expected 'Connected' indicator before inserting sentinel"
+    );
+
+    // Insert a sentinel row that will trigger `notify_search_result` →
+    // broadcast → SSE.
+    let title = format!(
+        "browser-sse-sentinel-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    );
+    let sentinel_url = format!("https://example.com/{title}");
+    let snippet = "Browser-side SSE end-to-end test sentinel";
+
+    sqlx::query("INSERT INTO search_results (title, url, snippet) VALUES ($1, $2, $3)")
+        .bind(&title)
+        .bind(&sentinel_url)
+        .bind(snippet)
+        .execute(&pool)
+        .await
+        .expect("Failed to insert sentinel row");
+
+    // Wait for the sentinel title to appear in the live-results list.
+    // The title text is set inside `<h3>{r.title}</h3>` in LiveFeedPage
+    // (live-search/src/app.rs:345).
+    let escaped_title = title.replace('\'', "\\'");
+    let sentinel_appeared = wait_for_js_true(
+        &ctx.page,
+        &format!(
+            "() => Array.from(document.querySelectorAll('#live-results h3'))\
+             .some(h => h.innerText === '{escaped_title}')"
+        ),
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        sentinel_appeared,
+        "Sentinel title '{title}' did not appear in #live-results within 10s"
+    );
+
+    // Best-effort cleanup so re-runs don't accumulate rows.
+    if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
+        .bind(&title)
+        .execute(&pool)
+        .await
+    {
+        eprintln!("warning: failed to delete sentinel row '{title}': {e}");
+    }
+    pool.close().await;
 
     teardown(ctx).await;
 }
