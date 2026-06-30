@@ -112,6 +112,62 @@ make test-e2e
 ./scripts/test-e2e.sh
 ```
 
+## Feature Flags
+
+The workspace defines **per-crate** Cargo feature flags that opt in to observability and developer tooling:
+
+| Flag | Crates | Description |
+|------|--------|-------------|
+| `otel` | gateway, live-search | OpenTelemetry OTLP export via OTLP/HTTP+protobuf (reqwest+rustls). Off by default; requires a collector endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`). Wires `tracing-opentelemetry` layers, `axum-tracing-opentelemetry` middleware, and `sqlx-otel` pool instrumentation. |
+| `dev-tools` | gateway, live-search | Development-only instrumentation: `console-subscriber` (Tokio console, requires `RUSTFLAGS="--cfg tokio_unstable"`), extra logging spans. Not for production. |
+
+## EdDSA JWT Keys
+
+The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. Each running gateway needs a key pair.
+
+Generate a fresh key pair with OpenSSL:
+
+```bash
+# Private key (PKCS#8 PEM)
+openssl genpkey -algorithm ed25519 -out jwt-private.pem
+
+# Public key (SPKI PEM, derived from the private key)
+openssl pkey -in jwt-private.pem -pubout -out jwt-public.pem
+```
+
+Point the gateway at the key files:
+
+```bash
+export JWT_PRIVATE_KEY_PEM="$(cat jwt-private.pem)"
+export JWT_PUBLIC_KEY_PEM="$(cat jwt-public.pem)"
+```
+
+**`--dev-keys` fallback**: for local exploration, start the gateway binary with `--dev-keys` to generate an ephemeral key pair at startup (with a `tracing::warn!`). Never use `--dev-keys` in production — keys vanish on restart and clients cannot verify old tokens.
+
+**Security note**: never commit private keys. `.gitignore` already excludes `.env`; keep it that way. CI uses a fixed test pair under `scripts/test-keys/` that is **not** suitable for any non-test deployment.
+
+## What's New (v3 Showcase Upgrade)
+
+This version brings the project to a high-end Rust 2026 showcase standard:
+
+- **EdDSA JWT** with `ed25519-dalek` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
+- **DB-backed refresh tokens** — `refresh_tokens` table (jti UUID PK, subject, hashed token, expiry, revocation tracking) with rotation and reuse detection.
+- **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
+- **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
+- **tower-governor** — rate limiting on gateway auth routes (two governor instances for login vs. refresh).
+- **tower-sessions + CSRF** — HttpOnly/Secure/SameSite=Lax session cookies with `axum-tower-sessions-csrf`.
+- **axum-valid + validator** — typed, validated DTOs on every public gateway handler.
+- **Trigram fuzzy search** — `pg_trgm` GIN index on `search_results.title` for typo-tolerant search.
+- **pg_stat_statements** — query performance monitoring, preloaded via Postgres config.
+- **moka cache** — hot search query caching in live-search (60s TTL, 1000 entries).
+- **stylance** — scoped CSS replaces inline `style=` in all frontend crates.
+- **leptos-use**, **leptos-struct-table**, **lepticons**, **leptos-forms-rs** — richer Leptos ecosystem integration.
+- **utoipa + Swagger UI** — documented API at `/docs` on the gateway.
+- **criterion benchmarks** — throughput bench for JWT auth, latency bench for search queries.
+- **console-subscriber** — Tokio console instrumentation behind `dev-tools` feature.
+- **testcontainers** — per-test Postgres 17 isolation in E2E tests, removing the shared-db dependency.
+- **Nextest, squawk, sccache** — CI tooling upgrades for faster runs and SQL migration linting.
+
 ## CI/CD
 
 This project uses [Woodpecker CI](https://woodpecker-ci.org/) with Forgejo Actions.

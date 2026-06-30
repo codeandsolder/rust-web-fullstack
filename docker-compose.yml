@@ -2,12 +2,13 @@ name: rust-web-fullstack
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
     container_name: rwf-postgres
     environment:
       POSTGRES_USER: rwf
       POSTGRES_PASSWORD: rwf_dev_password
       POSTGRES_DB: rwf_demo
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     ports:
       - "5432:5432"
     volumes:
@@ -28,8 +29,11 @@ services:
     environment:
       DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
       RUST_LOG: info
+      SCCACHE_DIR: /var/cache/sccache
     ports:
       - "3000:3000"
+    volumes:
+      - sccache-data:/var/cache/sccache
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3000/"]
       interval: 5s
@@ -47,8 +51,11 @@ services:
     environment:
       PORT: 3002
       RUST_LOG: info
+      SCCACHE_DIR: /var/cache/sccache
     ports:
       - "3002:3002"
+    volumes:
+      - sccache-data:/var/cache/sccache
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3002/"]
       interval: 5s
@@ -63,6 +70,10 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    environment:
+      SCCACHE_DIR: /var/cache/sccache
+    volumes:
+      - sccache-data:/var/cache/sccache
     healthcheck:
       # Gateway exposes /health (aggregates service-module health).
       test: ["CMD", "curl", "-sf", "http://localhost:3001/health"]
@@ -78,3 +89,4 @@ services:
 
 volumes:
   postgres-data:
+  sccache-data:

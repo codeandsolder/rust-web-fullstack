@@ -11,33 +11,66 @@ license = "MIT"
 rust-version = "1.85"
 
 [workspace.dependencies]
-anyhow = "1.0.103"
-axum = "0.8.9"
-chrono = { version = "0.4.45", features = ["serde"] }
-console_error_panic_hook = "0.1.7"
-futures = "0.3.32"
-gloo-net = { version = "0.7.0", features = ["eventsource"] }
-jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"] }
-leptos = "0.8.20"
-leptos_axum = "0.8.10"
+anyhow = "1.0"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+console_error_panic_hook = "0.1"
+futures = "0.3"
+gloo-net = { version = "0.7", features = ["eventsource"] }
+jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto"] }
+leptos = "0.8"
+leptos_axum = "0.8"
 leptos_i18n = "0.6"
-leptos_meta = "0.8.6"
-leptos_router = "0.8.14"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
+leptos_meta = "0.8"
+leptos_router = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# sqlx 0.9 has no `tracing` feature; per-query spans come from sqlx-otel.
+sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
-tokio-util = { version = "0.7.16", features = ["rt"] }
-tower = "0.5.3"
-tower-http = "0.7.0"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-uuid = { version = "1.23.4", features = ["serde"] }
-wasm-bindgen = "0.2.126"
+tokio = { version = "1.52", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "cors", "fs", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1.23", features = ["serde"] }
+wasm-bindgen = "0.2"
+axum-prometheus = "0.10"
+tower_governor = { version = "0.8", features = ["axum"] }
+tower-sessions = "0.15"
+axum-tower-sessions-csrf = "0.1"
+axum-valid = "0.24"
+validator = { version = "0.20", features = ["derive"] }
+ed25519-dalek = "2"
+moka = { version = "0.12", features = ["future"] }
+stylance = "0.8"
+leptos-use = "0.19"
+leptos-struct-table = "0.19"
+lepticons = "0.13"
+# `bitcode` feature required for leptos-forms-rs to work with Leptos 0.8.11+ server_fn Bitcode encoding.
+leptos-forms-rs = { version = "1", features = ["bitcode"] }
+utoipa = "5"
+utoipa-axum = "0.2"
+# `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
+tracing-opentelemetry = "0.33"
+axum-tracing-opentelemetry = "0.38"
+sqlx-otel = "0.3"
+console-subscriber = "0.5"
+criterion = { version = "0.8", features = ["html_reports"] }
+insta = "1"
+proptest = "1"
+mockall = "0.15"
+httpmock = "0.8"
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
