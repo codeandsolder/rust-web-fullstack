@@ -88,17 +88,19 @@ pub struct ProtectedResponse {
     ),
     tag = "auth",
 )]
-#[allow(clippy::needless_pass_by_value)]
 pub async fn login_handler(
     State(state): State<GatewayState>,
-    // Validated JSON extraction via axum-valid
-    axum_valid::Valid(axum::Json(req)): axum_valid::Valid<axum::Json<LoginRequest>>,
+    // Validated json extraction via axum-valid; consume the payload by
+    // destructuring so the extractor wrappers are not held as borrowed
+    // bindings (which would trigger `needless_pass_by_value`).
+    axum_valid::Valid(axum::Json(LoginRequest { user_id, password })): axum_valid::Valid<
+        axum::Json<LoginRequest>,
+    >,
 ) -> Result<Json<LoginResponse>, AppError> {
     let s = &state.settings;
 
     // Constant-time password comparison.
-    let password_match: bool = req
-        .password
+    let password_match: bool = password
         .as_bytes()
         .ct_eq(s.default_admin_password.as_bytes())
         .into();
@@ -106,11 +108,8 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&req.user_id, &s.jwt_private_key_pem)?;
-    Ok(Json(LoginResponse {
-        token,
-        user_id: req.user_id,
-    }))
+    let token = create_jwt(&user_id, &s.jwt_private_key_pem)?;
+    Ok(Json(LoginResponse { token, user_id }))
 }
 
 /// Refresh a JWT token.

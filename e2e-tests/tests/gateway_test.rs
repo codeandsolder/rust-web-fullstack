@@ -15,10 +15,8 @@
 
 use std::time::Duration;
 
-mod common;
-
-use common::GatewayEnv;
 use anyhow::Context;
+use e2e_tests::common::GatewayEnv;
 
 /// Synthetic dev credential used by the integration tests.
 ///
@@ -71,7 +69,10 @@ async fn landing_page_loads() -> anyhow::Result<()> {
         "Expected HTTP 200 from landing page, got {status}",
     );
 
-    let json: serde_json::Value = response.json().await.context("response is not valid JSON")?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("response is not valid JSON")?;
 
     // Exact gateway name — catches typos and version regressions.
     let gateway = json
@@ -116,7 +117,10 @@ async fn service_listing_returns_services() -> anyhow::Result<()> {
 
     assert_eq!(response.status(), 200);
 
-    let json: serde_json::Value = response.json().await.context("response is not valid JSON")?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("response is not valid JSON")?;
     let services = json
         .get("services")
         .and_then(|v| v.as_array())
@@ -159,7 +163,10 @@ async fn health_endpoint_returns_ok() -> anyhow::Result<()> {
     let status = response.status();
     assert_eq!(status, 200, "Expected HTTP 200 from /health, got {status}");
 
-    let json: serde_json::Value = response.json().await.context("response is not valid JSON")?;
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("response is not valid JSON")?;
 
     let gateway_ok = json.get("gateway").and_then(|v| v.as_str());
     assert_eq!(
@@ -409,4 +416,3 @@ async fn gateway_cors_preflight_is_handled() -> anyhow::Result<()> {
 
     Ok(())
 }
-

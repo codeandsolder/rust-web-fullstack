@@ -12,10 +12,8 @@
 
 use std::time::Duration;
 
-mod common;
-
 use anyhow::Context as _;
-use common::{GatewayEnv, TestEnv};
+use e2e_tests::common::{GatewayEnv, TestEnv};
 
 /// Verify that `GatewayEnv::start()` launches a reachable gateway that
 /// responds to health checks.

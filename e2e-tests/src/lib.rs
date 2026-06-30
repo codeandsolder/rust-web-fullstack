@@ -1,4 +1,14 @@
-//! e2e test helpers — unit-tested in this crate's lib module.
+//! Shared library for e2e tests and helpers — exposes [`common`] (browser and
+//! server helpers, test fixtures) for use from each `tests/*.rs` binary.
+//!
+//! Pre-refactor the helpers lived inline under `tests/common/`; that approach
+//! duplicated a private copy of every helper into each test binary, which
+//! produced `dead_code` and `unused_imports` warnings whenever an item was
+//! unused in a particular binary. Centralising the helpers into this library
+//! makes them public API (which the rustc `dead_code` lint treats as reachable)
+//! and lets each test binary reference only the helpers it needs.
+
+pub mod common;
 
 /// Resolve the base URL — use `BASE_URL` env var or fall back to `http://localhost:3000`.
 ///

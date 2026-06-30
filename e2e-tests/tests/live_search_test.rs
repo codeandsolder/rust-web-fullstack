@@ -14,23 +14,19 @@
 //! testcontainer Postgres database.  Browser-level tests (behind
 //! `--features browser-tests`) additionally require a Chromium installation.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
 
-mod common;
-
 #[cfg(feature = "browser-tests")]
 use chromiumoxide::Page;
 #[cfg(feature = "browser-tests")]
-use common::{
-    element_is_visible, setup, teardown, wait_for_element, wait_for_js_true,
-};
+use e2e_tests::common::{element_is_visible, setup, teardown, wait_for_element, wait_for_js_true};
 
-use common::LiveSearchEnv;
+use e2e_tests::common::LiveSearchEnv;
 use tokio::sync::OnceCell;
 
 /// Shared live-search server instance, initialised lazily on first access.
@@ -54,9 +50,10 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
                     let rt = match tokio::runtime::Runtime::new() {
                         Ok(rt) => rt,
                         Err(e) => {
-                            let err = Arc::new(anyhow::Error::new(e).context(
-                                "failed to create background init runtime",
-                            ));
+                            let err = Arc::new(
+                                anyhow::Error::new(e)
+                                    .context("failed to create background init runtime"),
+                            );
                             let _ = LIVE_SEARCH.set(Err(err));
                             BG_INIT_DONE.store(true, Ordering::Release);
                             return;
@@ -81,7 +78,9 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
                     });
                 })
                 .map_err(|e| {
-                    Arc::new(anyhow::Error::new(e).context("failed to spawn background init thread"))
+                    Arc::new(
+                        anyhow::Error::new(e).context("failed to spawn background init thread"),
+                    )
                 })?;
             let _ = handle;
             Ok(())
@@ -103,12 +102,8 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let cell_ref = LIVE_SEARCH
-        .get()
-        .context("LiveSearchEnv not initialized")?;
-    cell_ref
-        .as_ref()
-        .map_err(|e| anyhow::anyhow!("{e:#}"))
+    let cell_ref = LIVE_SEARCH.get().context("LiveSearchEnv not initialized")?;
+    cell_ref.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -489,16 +484,31 @@ async fn server_fn_search_returns_results_via_http() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to connect to {conn_str}"))?;
     let seed_rows = vec![
-        ("Rust Programming Guide", "https://example.com/rust-guide",
-         "Learn the Rust programming language with practical examples"),
-        ("Rust vs C++ Performance", "https://example.com/rust-vs-cpp",
-         "A detailed comparison of Rust and C++ performance benchmarks"),
-        ("Getting Started with WebAssembly", "https://example.com/wasm-intro",
-         "Build WebAssembly modules using Rust and wasm-pack"),
-        ("Python Data Science Cookbook", "https://example.com/python-ds",
-         "Data science and machine learning with Python"),
-        ("TypeScript Handbook", "https://example.com/ts-handbook",
-         "Comprehensive guide to TypeScript types and patterns"),
+        (
+            "Rust Programming Guide",
+            "https://example.com/rust-guide",
+            "Learn the Rust programming language with practical examples",
+        ),
+        (
+            "Rust vs C++ Performance",
+            "https://example.com/rust-vs-cpp",
+            "A detailed comparison of Rust and C++ performance benchmarks",
+        ),
+        (
+            "Getting Started with WebAssembly",
+            "https://example.com/wasm-intro",
+            "Build WebAssembly modules using Rust and wasm-pack",
+        ),
+        (
+            "Python Data Science Cookbook",
+            "https://example.com/python-ds",
+            "Data science and machine learning with Python",
+        ),
+        (
+            "TypeScript Handbook",
+            "https://example.com/ts-handbook",
+            "Comprehensive guide to TypeScript types and patterns",
+        ),
     ];
 
     for (title, url, snippet) in &seed_rows {
@@ -555,10 +565,15 @@ async fn server_fn_search_returns_results_via_http() -> anyhow::Result<()> {
     // either its title or its snippet. This guarantees the search hit
     // matching works without coupling to a particular ranking order.
     let any_rust_hit = results.iter().any(|r| {
-        let title = r.get("title").and_then(serde_json::Value::as_str).unwrap_or("");
-        let snippet = r.get("snippet").and_then(serde_json::Value::as_str).unwrap_or("");
-        title.to_lowercase().contains("rust")
-            || snippet.to_lowercase().contains("rust")
+        let title = r
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let snippet = r
+            .get("snippet")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        title.to_lowercase().contains("rust") || snippet.to_lowercase().contains("rust")
     });
     anyhow::ensure!(
         any_rust_hit,
@@ -568,7 +583,9 @@ async fn server_fn_search_returns_results_via_http() -> anyhow::Result<()> {
     // Every returned row must have the documented schema fields.
     for (idx, row) in results.iter().enumerate() {
         anyhow::ensure!(
-            row.get("title").and_then(serde_json::Value::as_str).is_some(),
+            row.get("title")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
             "row[{idx}] missing string 'title' field: {row}"
         );
         anyhow::ensure!(

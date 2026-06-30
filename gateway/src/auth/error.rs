@@ -69,39 +69,22 @@ fn jwt_kind(e: &jsonwebtoken::errors::Error) -> String {
 }
 
 impl IntoResponse for AppError {
-    #[allow(clippy::too_many_lines)]
     fn into_response(self) -> Response {
         match self {
-            Self::AuthError => (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Authentication failed"})),
-            )
-                .into_response(),
+            Self::AuthError => unauthenticated("Authentication failed"),
             Self::Jwt(e) => {
                 // Routine attacker probing — keep at `debug!` to avoid drowning
                 // the alert channel; never echo the error message itself.
                 tracing::debug!(kind = %jwt_kind(&e), "jwt error");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Authentication failed"})),
-                )
-                    .into_response()
+                unauthenticated("Authentication failed")
             }
             Self::TokenExpired(e) => {
                 tracing::warn!(kind = %jwt_kind(&e), "token expired");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Token expired"})),
-                )
-                    .into_response()
+                unauthenticated("Token expired")
             }
             Self::InvalidSignature(e) => {
                 tracing::warn!(kind = %jwt_kind(&e), "invalid JWT signature");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": "Invalid signature"})),
-                )
-                    .into_response()
+                unauthenticated("Invalid signature")
             }
             Self::Internal { context, source } => {
                 // `?source` uses `Debug` and walks the chain via `tracing-error`
@@ -113,14 +96,31 @@ impl IntoResponse for AppError {
                     error = ?source,
                     "internal error"
                 );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "internal error"})),
-                )
-                    .into_response()
+                internal_error()
             }
         }
     }
+}
+
+/// Build a generic 401 UNAUTHORIZED response with a static client-safe message.
+///
+/// Kept private — the only public mapping is [`AppError::into_response`].
+/// Centralising the layout lets us adjust headers / structured-log fields in
+/// one place without touching each variant.
+fn unauthenticated(message: &'static str) -> Response {
+    (StatusCode::UNAUTHORIZED, Json(json!({"error": message}))).into_response()
+}
+
+/// Build a generic 500 `INTERNAL_SERVER_ERROR` response with a static
+/// client-safe message.
+///
+/// The actual error context and source are logged separately via `tracing`.
+fn internal_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"error": "internal error"})),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

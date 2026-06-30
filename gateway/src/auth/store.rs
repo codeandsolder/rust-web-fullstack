@@ -87,16 +87,21 @@ impl Default for InMemoryKeyStore {
 
 impl seal::Sealed for InMemoryKeyStore {}
 
-#[allow(clippy::significant_drop_tightening)]
 impl KeyStore for InMemoryKeyStore {
     fn get(&self, kid: &Kid) -> Option<DecodingKey> {
-        let guard = self.inner.try_read().ok()?;
-        let entry = guard.get(kid)?;
-        if Instant::now() < entry.expires_at {
-            DecodingKey::from_ed_pem(entry.pem.as_bytes()).ok()
-        } else {
-            None
-        }
+        // Scope the read guard so it drops before we perform the (potentially
+        // expensive) PEM parsing — reduces lock contention on hot paths.
+        // `Arc<str>` is cheap to clone, so we pay only an atomic increment to
+        // free the read lock early.
+        let pem = self.inner.try_read().ok().and_then(|guard| {
+            let entry = guard.get(kid)?;
+            if Instant::now() < entry.expires_at {
+                Some(entry.pem.clone())
+            } else {
+                None
+            }
+        })?;
+        DecodingKey::from_ed_pem(pem.as_bytes()).ok()
     }
 
     fn insert(&self, kid: Kid, pem_public_key: Arc<str>, ttl: Duration) {

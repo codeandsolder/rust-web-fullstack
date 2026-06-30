@@ -32,9 +32,12 @@ default = []
 # browser installation.  Run with `--features browser-tests`.
 browser-tests = []
 
+# The test helpers live in this library crate ([lib] + src/common/) and are
+# imported by each `tests/*.rs` binary. As a result, what used to be
+# dev-dependencies (only visible to test binaries) are now regular dependencies
+# on the library itself. Test binaries pull them in transitively through
+# `e2e_tests::common::*`.
 [dependencies]
-
-[dev-dependencies]
 # default-features = false is fine — local CDP uses plain HTTP, no TLS needed
 chromiumoxide = { version = "0.9.1", default-features = false, features = ["bytes"] }
 tokio = { workspace = true }
@@ -75,3 +78,8 @@ gateway-example = { path = "../gateway" }
 # Used directly by common::json for Uuid/DateTime proptest strategies
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+# Anything extra that only the integration tests need (not the lib helpers).
+# Currently empty — every dep that test binaries need is already a regular
+# dependency, reachable through the library crate.

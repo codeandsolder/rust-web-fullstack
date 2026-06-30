@@ -98,16 +98,20 @@ impl Settings {
     /// This is intended for local development only. The generated keypair is
     /// logged at `warn!` level so operators are aware that keys are ephemeral.
     ///
-    /// # Panics
-    ///
-    /// Panics only on programmer error (e.g. PEM encoding fails), never on
-    /// runtime conditions.
+    /// The `admin_password` is taken as an argument so callers (including tests)
+    /// can construct `Settings` without mutating process-wide environment
+    /// variables.
     ///
     /// # Errors
     ///
-    /// Returns an error if `ADMIN_PASSWORD` is not set or is empty.
-    pub fn load_dev_keys() -> Result<Self, anyhow::Error> {
+    /// Returns an error if the ephemeral keypair cannot be generated or encoded,
+    /// or if `admin_password` is empty.
+    pub fn load_dev_keys(admin_password: &str) -> Result<Self, anyhow::Error> {
         use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+
+        if admin_password.is_empty() {
+            anyhow::bail!("admin_password must not be empty");
+        }
 
         let key_pair = Ed25519KeyPair::generate()
             .map_err(|_| anyhow::anyhow!("Ed25519 key generation failed"))?;
@@ -125,17 +129,26 @@ impl Settings {
         tracing::warn!("JWT_PUBLIC_KEY_PEM={public_pem}");
         tracing::warn!("─── END DEV KEYPAIR ───");
 
-        let default_admin_password = std::env::var("ADMIN_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set"))?;
-
-        if default_admin_password.is_empty() {
-            anyhow::bail!("ADMIN_PASSWORD must not be empty");
-        }
-
         Ok(Self {
             jwt_private_key_pem: Arc::from(private_pem.as_str()),
             jwt_public_key_pem: Arc::from(public_pem.as_str()),
-            default_admin_password: Arc::from(default_admin_password.as_str()),
+            default_admin_password: Arc::from(admin_password),
         })
+    }
+
+    /// Load dev-key settings using `ADMIN_PASSWORD` from the environment.
+    ///
+    /// Thin wrapper around [`Self::load_dev_keys`] for the production `--dev-keys`
+    /// CLI path, where `ADMIN_PASSWORD` is conventionally provided via the
+    /// process environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `ADMIN_PASSWORD` is not set or is empty, or if the
+    /// underlying [`Self::load_dev_keys`] call fails.
+    pub fn load_dev_keys_from_env() -> Result<Self, anyhow::Error> {
+        let admin_password = std::env::var("ADMIN_PASSWORD")
+            .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;
+        Self::load_dev_keys(&admin_password)
     }
 }

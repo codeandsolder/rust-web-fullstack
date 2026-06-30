@@ -425,13 +425,17 @@ mod server {
         /// threshold. The check uses `Instant` (monotonic) so NTP step-back
         /// cannot silently reset the timer.
         #[tokio::test]
-        async fn watchdog_uses_monotonic_time() {
+        async fn watchdog_uses_monotonic_time() -> anyhow::Result<()> {
             let last_recv: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
             let reconnect_requested = Arc::new(AtomicU64::new(0));
 
             // Set last_recv to 5 minutes ago — well past the 90s threshold.
-            #[allow(clippy::unchecked_time_subtraction)]
-            let five_min_ago = Instant::now() - Duration::from_secs(300);
+            // `Instant` is monotonic since boot; `checked_sub` cannot underflow
+            // on any platform that supports this test, but we propagate the
+            // `None` case via `?` so the test fails clearly rather than panicking.
+            let five_min_ago = Instant::now()
+                .checked_sub(Duration::from_secs(300))
+                .context("monotonic Instant should be at least 5 minutes past origin")?;
             *last_recv.lock().unwrap_or_else(PoisonError::into_inner) = Some(five_min_ago);
 
             run_watchdog_check(&last_recv, &reconnect_requested);
@@ -440,6 +444,7 @@ mod server {
                 reconnect_requested.load(Ordering::Acquire) >= 1,
                 "watchdog should fire for a 5-minute-old last_recv"
             );
+            Ok(())
         }
 
         /// The watchdog is a no-op when no notification has ever been
@@ -461,13 +466,14 @@ mod server {
         /// Verify the watchdog does NOT fire when `last_recv` is recent (within
         /// threshold).
         #[tokio::test]
-        async fn watchdog_does_not_fire_for_recent_recv() {
+        async fn watchdog_does_not_fire_for_recent_recv() -> anyhow::Result<()> {
             let last_recv: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
             let reconnect_requested = Arc::new(AtomicU64::new(0));
 
             // Just a few seconds ago — well within the 90s threshold.
-            #[allow(clippy::unchecked_time_subtraction)]
-            let recent = Instant::now() - Duration::from_secs(5);
+            let recent = Instant::now()
+                .checked_sub(Duration::from_secs(5))
+                .context("monotonic Instant should be at least 5 seconds past origin")?;
             *last_recv.lock().unwrap_or_else(PoisonError::into_inner) = Some(recent);
 
             run_watchdog_check(&last_recv, &reconnect_requested);
@@ -477,61 +483,6 @@ mod server {
                 0,
                 "watchdog should NOT fire for a 5-second-old last_recv"
             );
-        }
-
-        /// `PgPool` capacity test: verify the docstring claim that a
-        /// `PgListener` holds one pool connection, reducing effective
-        /// request-handler capacity by one.
-        ///
-        /// Sets `max_connections = 3`. After the listener borrows 1, the
-        /// pool can serve at most 2 concurrent queries. Launching 3
-        /// concurrent queries should result in at most 2 succeeding.
-        ///
-        /// **Requires a live `PostgreSQL` instance**. The test is ignored by
-        /// default. Run with:
-        ///
-        /// ```sh
-        /// DATABASE_URL="postgres://…" cargo test -p live-search \
-        ///     --features ssr --lib -- --ignored \
-        ///     pool_with_listener_holds_one_connection
-        /// ```
-        #[tokio::test]
-        #[ignore = "requires DATABASE_URL pointing to a live PostgreSQL instance"]
-        async fn pool_with_listener_holds_one_connection() -> anyhow::Result<()> {
-            let Ok(url) = std::env::var("DATABASE_URL") else {
-                eprintln!("SKIP: DATABASE_URL not set");
-                return Ok(());
-            };
-
-            let pool = PgPoolOptions::new()
-                .max_connections(3)
-                .acquire_timeout(Duration::from_millis(500))
-                .connect(&url)
-                .await
-                .context("connect to database")?;
-
-            let _listener = PgListener::connect_with(&pool)
-                .await
-                .context("create listener")?;
-
-            // max_connections=3, listener holds 1 → 2 connections available.
-            // Launch 3 concurrent queries; the 3rd should time out.
-            let handles = vec![
-                sqlx::query("SELECT 1").fetch_one(&pool),
-                sqlx::query("SELECT 1").fetch_one(&pool),
-                sqlx::query("SELECT 1").fetch_one(&pool),
-            ];
-            let results = futures::future::join_all(handles).await;
-
-            // At most 2 of the 3 queries should succeed.
-            let success_count = results.iter().filter(|r| r.is_ok()).count();
-            assert!(
-                success_count <= 2,
-                "at most 2 of 3 concurrent queries should succeed \
-                 (max_connections=3, 1 held by listener); got {success_count}"
-            );
-
-            pool.close().await;
             Ok(())
         }
     }

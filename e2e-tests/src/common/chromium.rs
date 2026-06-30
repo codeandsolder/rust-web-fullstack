@@ -5,21 +5,17 @@
 //! The `base_url` points to the example server under test (defaults to
 //! `http://localhost:3000`).
 
-// Each e2e-tests/tests/*.rs binary compiles its own copy; not every helper is
-// used by every binary, so suppressing dead_code is handled via per-function
-// annotations rather than a module-level override.
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use e2e_tests::base_url;
+use crate::base_url;
 
 /// Holds the browser, page, base URL, and profile directory for a single test.
 ///
@@ -30,10 +26,6 @@ pub struct TestContext {
     /// Default base URL derived from the `BASE_URL` env var. Set during
     /// [`setup`] but currently only consumed via the explicit env URL; kept
     /// on the context for future assertions and diagnostic output.
-    #[allow(
-        dead_code,
-        reason = "Currently set but not read; preserved for test diagnostics and future assertions."
-    )]
     pub base_url: String,
     pub profile_dir: PathBuf,
     /// Token fired by [`teardown`] to stop the chromiumoxide handler task.
@@ -43,10 +35,6 @@ pub struct TestContext {
 /// Generate a unique Chromium user-data-dir path using PID, nanos-since-epoch,
 /// and an atomic counter.  The counter ensures uniqueness even when two threads
 /// call this at the same monotonic instant.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 fn unique_profile_dir() -> Result<PathBuf> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -88,10 +76,6 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 /// # Errors
 /// Returns an error if the browser cannot launch, the page cannot be created,
 /// or the profile directory cannot be created.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn setup() -> Result<TestContext> {
     let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
         let playwright_path = format!(
@@ -113,7 +97,9 @@ pub async fn setup() -> Result<TestContext> {
     if let Some(chrome_path) = chrome_path {
         builder = builder.chrome_executable(chrome_path);
     }
-    let config = builder.build().map_err(|e| anyhow!("failed to build BrowserConfig: {e}"))?;
+    let config = builder
+        .build()
+        .map_err(|e| anyhow!("failed to build BrowserConfig: {e}"))?;
 
     let (browser, mut handler) = Browser::launch(config)
         .await
@@ -155,10 +141,6 @@ pub async fn setup() -> Result<TestContext> {
 /// creation order. Cleanup errors are logged via `eprintln!` (stderr,
 /// captured by the test harness per-test and displayed only on failure)
 /// but never mask the test assertion that already ran.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
         mut browser,
@@ -192,10 +174,6 @@ pub async fn teardown(ctx: TestContext) {
 /// # Errors
 /// Returns an error if the server does not respond with a 2xx or 3xx status
 /// before the timeout expires.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn require_server(url: &str) -> Result<()> {
     if !wait_for_server(url, Duration::from_secs(5)).await {
         bail!("server at {url} is not reachable");
@@ -207,14 +185,12 @@ pub async fn require_server(url: &str) -> Result<()> {
 
 /// Poll `page.evaluate(expression)` until it returns `true` (as a boolean)
 /// or the timeout elapses. Replacement for browser-framework wait helpers.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn wait_for_js_true(page: &Page, expression: &str, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
-        if page.evaluate(expression).await
+        if page
+            .evaluate(expression)
+            .await
             .ok()
             .and_then(|v| v.into_value::<bool>().ok())
             .unwrap_or(false)
@@ -228,10 +204,6 @@ pub async fn wait_for_js_true(page: &Page, expression: &str, timeout: Duration) 
 
 /// Poll `page.find_element(selector)` until it returns `Ok` or the timeout
 /// elapses.  Returns the element if found.
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn wait_for_element(
     page: &Page,
     selector: &str,
@@ -249,10 +221,6 @@ pub async fn wait_for_element(
 
 /// Check whether an element matching `selector` is visible on the page
 /// (exists, has non-zero dimensions, `visibility` not hidden, `display` not none).
-#[allow(
-    dead_code,
-    reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
-)]
 pub async fn element_is_visible(page: &Page, selector: &str) -> bool {
     let escaped_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
     let js = format!(

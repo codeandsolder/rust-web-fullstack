@@ -4,14 +4,6 @@
 //! intentionally ignored — tests are strictly container-based for isolation.
 //! Container lifecycle is bound to [`TestEnv`] RAII (dropped on test exit).
 
-// Each e2e-tests/tests/*.rs binary compiles its own copy; not every helper is
-// used by every binary, so suppressing dead_code at the module level is cleaner
-// than annotating every struct/function individually.
-#![allow(
-    dead_code,
-    reason = "Some helpers unused per test-binary compilation"
-)]
-
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use testcontainers::runners::AsyncRunner;
@@ -25,10 +17,10 @@ use testcontainers_modules::postgres::Postgres;
 pub struct TestEnv {
     pool: PgPool,
     connection_string: String,
-    #[allow(
-        dead_code,
-        reason = "Field stays alive for RAII; never read after construction"
-    )]
+    /// Held for its `Drop` side-effect, which stops the testcontainer when the
+    /// test scope ends. Never read explicitly — the field needs to stay alive
+    /// on `Self` until `Drop` runs.
+    #[allow(dead_code, reason = "Kept alive for Drop side-effect on TestEnv")]
     container: Box<ContainerAsync<Postgres>>,
 }
 

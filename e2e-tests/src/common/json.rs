@@ -1,16 +1,5 @@
 //! JSON assertion helpers, insta snapshot utilities, and proptest strategies.
 
-/// Assert that two JSON values are structurally equal (ignoring field order).
-/// Thin wrapper around `serde_json::Value`'s `PartialEq` implementation.
-#[allow(
-    dead_code,
-    reason = "Available for test assertions; may be unused per-binary"
-)]
-#[must_use]
-pub fn json_eq(left: &serde_json::Value, right: &serde_json::Value) -> bool {
-    left == right
-}
-
 #[cfg(test)]
 mod proptests {
     use chrono::{Duration, Utc};

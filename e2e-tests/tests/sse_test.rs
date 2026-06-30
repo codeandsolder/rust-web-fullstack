@@ -8,18 +8,15 @@
 //! All tests use an in-process live-search server backed by a testcontainer
 //! Postgres database, so no external services are required.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
+use e2e_tests::common::LiveSearchEnv;
 use futures::StreamExt;
 use tokio::sync::OnceCell;
-
-mod common;
-
-use common::LiveSearchEnv;
 
 /// Shared live-search server instance, initialised lazily on first access.
 ///
@@ -42,9 +39,10 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
                     let rt = match tokio::runtime::Runtime::new() {
                         Ok(rt) => rt,
                         Err(e) => {
-                            let err = Arc::new(anyhow::Error::new(e).context(
-                                "failed to create background init runtime",
-                            ));
+                            let err = Arc::new(
+                                anyhow::Error::new(e)
+                                    .context("failed to create background init runtime"),
+                            );
                             let _ = LIVE_SEARCH.set(Err(err));
                             BG_INIT_DONE.store(true, Ordering::Release);
                             return;
@@ -69,7 +67,9 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
                     });
                 })
                 .map_err(|e| {
-                    Arc::new(anyhow::Error::new(e).context("failed to spawn background init thread"))
+                    Arc::new(
+                        anyhow::Error::new(e).context("failed to spawn background init thread"),
+                    )
                 })?;
             let _ = handle;
             Ok(())
@@ -91,12 +91,8 @@ async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let cell_ref = LIVE_SEARCH
-        .get()
-        .context("LiveSearchEnv not initialized")?;
-    cell_ref
-        .as_ref()
-        .map_err(|e| anyhow::anyhow!("{e:#}"))
+    let cell_ref = LIVE_SEARCH.get().context("LiveSearchEnv not initialized")?;
+    cell_ref.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
 /// Helper: build a reqwest client with a short timeout.
@@ -221,7 +217,11 @@ async fn notify_trigger_fires_sse_event() -> anyhow::Result<()> {
                 }
             }
             Ok(Some(Err(e))) => return Err(anyhow::anyhow!("SSE stream error during warmup: {e}")),
-            Ok(None) => return Err(anyhow::anyhow!("SSE stream ended during warmup. Buffer: {buf:.300}")),
+            Ok(None) => {
+                return Err(anyhow::anyhow!(
+                    "SSE stream ended during warmup. Buffer: {buf:.300}"
+                ));
+            }
             Err(_timeout) => {} // keep waiting
         }
     }

@@ -11,12 +11,9 @@
 
 use crate::i18n::{Locale, t, t_string, use_i18n};
 use crate::styles;
+use leptos::hydration::{AutoReload, HydrationScripts};
 use leptos::prelude::*;
-#[allow(
-    clippy::wildcard_imports,
-    reason = "leptos_meta re-exports are feature-gated (ssr/csr/hydrate); wildcard avoids conditional import errors when features change"
-)]
-use leptos_meta::*;
+use leptos_meta::{MetaTags, Title, provide_meta_context};
 use leptos_router::components::{FlatRoutes, Route, Router};
 use leptos_router::path;
 
@@ -57,7 +54,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
     clippy::must_use_candidate,
     reason = "Leptos component returns impl IntoView; must_use is implicit"
 )]
-#[allow(non_snake_case)]
+#[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
     let i18n = use_i18n();
@@ -90,7 +87,7 @@ pub fn App() -> impl IntoView {
     clippy::must_use_candidate,
     reason = "Leptos component returns impl IntoView; must_use is implicit"
 )]
-#[allow(non_snake_case)]
+#[component]
 pub fn Home() -> impl IntoView {
     let i18n = use_i18n();
 

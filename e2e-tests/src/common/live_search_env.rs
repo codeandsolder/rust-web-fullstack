@@ -4,16 +4,13 @@
 //! random local port.  All background tasks (HTTP server, `PgListener`, watchdog)
 //! run on a dedicated tokio runtime so they survive individual test lifetimes.
 
-#![allow(
-    dead_code,
-    reason = "Some helpers unused per test-binary compilation"
-)]
+#![allow(dead_code, reason = "Some helpers unused per test-binary compilation")]
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use axum::{
@@ -68,16 +65,14 @@ impl LiveSearchEnv {
             .context("Failed to create live-search database pool")?;
 
         // ── 3. Set global pool (OnceLock) ─────────────────────────────────
-        live_search::db::set_pool(server_pool.clone())
-            .context("set_pool already initialized")?;
+        live_search::db::set_pool(server_pool.clone()).context("set_pool already initialized")?;
 
         // ── 4. Initialise search cache (OnceLock) ─────────────────────────
         live_search::cache::init_cache();
 
         // ── 5. Broadcast channel for SSE (OnceLock) ───────────────────────
         let (tx, _rx) = broadcast::channel::<SseEvent>(256);
-        live_search::sse::set_broadcast(tx.clone())
-            .context("set_broadcast already initialized")?;
+        live_search::sse::set_broadcast(tx.clone()).context("set_broadcast already initialized")?;
 
         // ── 6. Cancellation token ─────────────────────────────────────────
         let shutdown = CancellationToken::new();
@@ -96,11 +91,10 @@ impl LiveSearchEnv {
         // Mount /pkg/ for Leptos build artifacts if available.
         let pkg_dir = std::path::Path::new("../live-search/pkg");
         if pkg_dir.exists() {
-            router = router.nest_service(
-                "/pkg",
-                tower_http::services::ServeDir::new(pkg_dir),
-            );
-            let pkg_abs = pkg_dir.canonicalize().unwrap_or_else(|_| pkg_dir.to_path_buf());
+            router = router.nest_service("/pkg", tower_http::services::ServeDir::new(pkg_dir));
+            let pkg_abs = pkg_dir
+                .canonicalize()
+                .unwrap_or_else(|_| pkg_dir.to_path_buf());
             tracing::info!("Mounted /pkg/ from {}", pkg_abs.display());
         }
 
@@ -206,7 +200,9 @@ impl LiveSearchEnv {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             let addr = loop {
                 {
-                    let guard = addr_lock.lock().map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
+                    let guard = addr_lock
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
                     if let Some(a) = *guard {
                         break a;
                     }
@@ -295,18 +291,19 @@ async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
     let original_path = req.uri().path().to_string();
     let (mut parts, body) = req.into_parts();
 
-    let path_to_try = if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
-        && original_path.starts_with("/api/")
-    {
-        let doubled = format!("/api{original_path}");
-        if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
-            doubled
+    let path_to_try =
+        if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
+            && original_path.starts_with("/api/")
+        {
+            let doubled = format!("/api{original_path}");
+            if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
+                doubled
+            } else {
+                original_path
+            }
         } else {
             original_path
-        }
-    } else {
-        original_path
-    };
+        };
 
     if path_to_try != parts.uri.path() {
         // Path is derived from an existing valid URI; construction only fails

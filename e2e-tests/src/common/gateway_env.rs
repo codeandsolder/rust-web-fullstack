@@ -4,12 +4,10 @@
 //! session / governor middleware so that auth tests can POST without CSRF
 //! tokens.  The server is cleaned up when [`GatewayEnv`] is dropped.
 
-#![allow(
-    dead_code,
-    unsafe_code,
-    reason = "Some helpers unused per test-binary compilation; \
-              unsafe_code needed for std::env::set_var in test setup"
-)]
+// Each e2e-tests/tests/*.rs binary compiles its own copy of this module.
+// Helper items used by some but not all binaries are kept public and
+// suppressed here rather than annotated individually.
+#![allow(dead_code, reason = "Some helpers unused per test-binary compilation")]
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -30,14 +28,19 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use gateway_example::gateway::GatewayState;
-use gateway_example::module::{ServiceModule, ServiceInfo};
+use gateway_example::module::{ServiceInfo, ServiceModule};
 use gateway_example::sse::GatewayEvent;
+
+/// Synthetic admin password used for in-test gateway launches.
+///
+/// The gateway `Settings` requires some non-empty `default_admin_password`; the
+/// tests log in with this constant value via [`GatewayEnv::login`].
+pub const TEST_ADMIN_PASSWORD: &str = "synthetic-gateway-test-password";
 
 /// RAII guard that runs a gateway server in the background on a random port.
 ///
 /// # Errors
-/// Returns an error if the admin password env var is missing or the server
-/// fails to start.
+/// Returns an error if the server fails to start.
 pub struct GatewayEnv {
     addr: SocketAddr,
     shutdown: CancellationToken,
@@ -46,20 +49,17 @@ pub struct GatewayEnv {
 impl GatewayEnv {
     /// Start a gateway server bound to a random local port.
     ///
-    /// Sets `ADMIN_PASSWORD` to a test default if not already set in the
-    /// environment.
+    /// The admin password is injected directly via `Settings::load_dev_keys`
+    /// rather than through `ADMIN_PASSWORD` env mutation — this keeps the test
+    /// runner safe-by-default (no `unsafe`, no process-global state) and
+    /// matches what production `--dev-keys` flow does after reading the env var
+    /// itself.
+    ///
+    /// # Errors
+    /// Returns an error if dev-key generation or PEM encoding fails, or if the
+    /// server fails to bind or become ready within 15 seconds.
     pub async fn start() -> Result<Self> {
-        if std::env::var("ADMIN_PASSWORD").is_err() {
-            // SAFETY: serialised by test runner; env var writes are only unsafe
-            // in multi-threaded contexts, and we are in a single-threaded
-            // async test context.
-            #[allow(unsafe_code)]
-            unsafe {
-                std::env::set_var("ADMIN_PASSWORD", "synthetic-gateway-test-password");
-            }
-        }
-
-        let settings = gateway_example::settings::Settings::load_dev_keys()
+        let settings = gateway_example::settings::Settings::load_dev_keys(TEST_ADMIN_PASSWORD)
             .context("failed to load dev keys for gateway")?;
 
         let modules: Vec<Arc<dyn ServiceModule>> = vec![
@@ -112,7 +112,9 @@ impl GatewayEnv {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
             loop {
                 {
-                    let guard = addr_lock.lock().map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
+                    let guard = addr_lock
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
                     if let Some(addr) = *guard {
                         break addr;
                     }
@@ -232,15 +234,19 @@ fn build_test_gateway(
         .route("/health", get(health_handler))
         .route("/events", get(gateway_example::sse::sse_handler))
         .route("/auth/login", post(gateway_example::auth::login_handler))
-        .route("/auth/refresh", post(gateway_example::auth::refresh_handler))
+        .route(
+            "/auth/refresh",
+            post(gateway_example::auth::refresh_handler),
+        )
         .route("/auth/logout", post(gateway_example::auth::logout_handler))
         .route(
             "/auth/protected",
-            get(gateway_example::auth::protected_handler)
-                .route_layer(middleware::from_fn_with_state(
+            get(gateway_example::auth::protected_handler).route_layer(
+                middleware::from_fn_with_state(
                     state.clone(),
                     gateway_example::auth::auth_middleware,
-                )),
+                ),
+            ),
         )
         .merge(service_router)
         .merge(gateway_example::openapi::swagger_ui_router::<GatewayState>())
@@ -261,26 +267,24 @@ async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
 /// Inline health handler (replicates `gateway::health_handler` which is `pub(crate)`).
 async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
     let results = join_all(state.modules.iter().map(|module| async {
-        let status = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            module.health_check(),
-        )
-        .await
-        {
-            Ok(Ok(())) => "healthy",
-            Ok(Err(e)) => {
-                tracing::warn!(name = module.name(), error = %e, "health check failed");
-                "unhealthy"
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    name = module.name(),
-                    timeout_ms = 5000u64,
-                    "health check timed out"
-                );
-                "unhealthy"
-            }
-        };
+        let status =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), module.health_check())
+                .await
+            {
+                Ok(Ok(())) => "healthy",
+                Ok(Err(e)) => {
+                    tracing::warn!(name = module.name(), error = %e, "health check failed");
+                    "unhealthy"
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        name = module.name(),
+                        timeout_ms = 5000u64,
+                        "health check timed out"
+                    );
+                    "unhealthy"
+                }
+            };
         json!({
             "name": module.name(),
             "path": module.path(),

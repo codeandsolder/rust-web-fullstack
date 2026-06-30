@@ -233,8 +233,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     // ---- Axum router ------------------------------------------------------
 
-    #[allow(unused_mut)]
-    let mut router = Router::new()
+    let router = Router::new()
         .nest_service("/pkg", ServeDir::new("./pkg"))
         .route("/api/events", get(sse::sse_handler))
         .route("/api/{*fn_name}", any(server_fn_handler))
@@ -248,16 +247,18 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .fallback(fallback_handler);
 
     // Prometheus metrics endpoint — available when `otel` feature is active.
+    // We shadow the binding instead of mutating it so the non-otel build
+    // doesn't trigger `unused_mut` on the outer `router`.
     #[cfg(feature = "otel")]
-    {
+    let router = {
         use axum_prometheus::PrometheusMetricLayer;
 
         let (prom_layer, metric_handle) = PrometheusMetricLayer::pair();
-        router = router.layer(prom_layer).route(
+        router.layer(prom_layer).route(
             "/metrics",
             get(move || async move { metric_handle.render() }),
-        );
-    }
+        )
+    };
 
     let router: Router<()> = router.with_state(leptos_options);
 
