@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod i18n;
+pub mod styles;
 
 // ---------------------------------------------------------------------------
 // Hydrate entry point – called by the browser after the WASM module loads.

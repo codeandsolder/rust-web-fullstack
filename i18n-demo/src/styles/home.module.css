@@ -1,0 +1,60 @@
+/* i18n-demo scoped CSS. Selectors pair with constants in styles.rs.
+ * All selectors scope under [data-i18n-demo] which is set on the root
+ * element in app.rs. */
+
+[data-i18n-demo] {
+  font-family: system-ui, sans-serif;
+  max-width: 32rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+[data-i18n-demo] h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+[data-i18n-demo] p {
+  line-height: 1.5;
+}
+
+[data-i18n-demo] .locale-btn {
+  margin-right: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+[data-i18n-demo] .locale-btn:hover {
+  background: #eee;
+}
+
+[data-i18n-demo] .search-input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+
+[data-i18n-demo] .counter-btn {
+  margin-right: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+[data-i18n-demo] .counter-btn:hover {
+  background: #eee;
+}
+
+[data-i18n-demo] .click-count {
+  display: inline-block;
+  margin-left: 0.5rem;
+  font-weight: 600;
+}
