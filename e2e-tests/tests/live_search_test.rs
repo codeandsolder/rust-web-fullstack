@@ -33,6 +33,7 @@ use e2e_tests::base_url;
 /// to update the underlying signal; `WebElement::type_str` types characters
 /// one at a time without firing the right input event on every Keystroke,
 /// so we set the value directly and dispatch a single bubbleable event.
+#[allow(clippy::expect_used, reason = "Test helper; panics are intentional")]
 async fn fill_search_input(page: &Page, query: &str) {
     // Wait for hydration: Leptos adds `data-hk` attributes to elements it
     // hydrates. Leptos 0.8.x does not expose a hydration marker attribute on
@@ -306,25 +307,25 @@ async fn live_feed_page_loads() {
 ///     `sse_test::notify_trigger_fires_sse_event` covers the server side, but
 ///     no test verified that the BROWSER actually receives a live event.
 ///
-///     Requires `DATABASE_URL` to be set in the environment in addition to
-///     `--features integration`.
+///     Uses [`common::db::TestEnv::postgres`] for the database connection. The
+///     live-search service must be running and connected to the same Postgres
+///     instance (in CI, Docker resolves this via a shared `DATABASE_URL`).
+///
+///     Requires `--features integration`.
 #[tokio::test]
 #[cfg_attr(
     not(feature = "integration"),
     ignore = "requires --features integration and DATABASE_URL"
 )]
 async fn live_feed_receives_sse_event_in_browser() {
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for this test");
+    let env = common::db::TestEnv::postgres().await;
+    let pool = env.pool();
 
     require_server(&base_url(None)).await;
 
     // ── Pre-clean: wipe leftover browser-sse-sentinel rows from prior failed runs.
-    let pool = sqlx::PgPool::connect(&database_url)
-        .await
-        .expect("Failed to connect to database");
     sqlx::query("DELETE FROM search_results WHERE title LIKE 'browser-sse-sentinel-%'")
-        .execute(&pool)
+        .execute(pool)
         .await
         .ok();
 
@@ -367,7 +368,7 @@ async fn live_feed_receives_sse_event_in_browser() {
         .bind(&title)
         .bind(&sentinel_url)
         .bind(snippet)
-        .execute(&pool)
+        .execute(pool)
         .await
         .expect("Failed to insert sentinel row");
 
@@ -392,12 +393,11 @@ async fn live_feed_receives_sse_event_in_browser() {
     // Best-effort cleanup so re-runs don't accumulate rows.
     if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
         .bind(&title)
-        .execute(&pool)
+        .execute(pool)
         .await
     {
         eprintln!("warning: failed to delete sentinel row '{title}': {e}");
     }
-    pool.close().await;
 
     teardown(ctx).await;
 }

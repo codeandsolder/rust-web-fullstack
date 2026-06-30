@@ -1,0 +1,10 @@
+---
+source: e2e-tests/tests/sse_test.rs
+expression: value
+---
+{
+  "type": "SearchResult",
+  "title": "<DYNAMIC_TEST_TITLE>",
+  "url": "<DYNAMIC_TEST_URL>",
+  "snippet": "E2E test snippet for NOTIFY→SSE verification"
+}
