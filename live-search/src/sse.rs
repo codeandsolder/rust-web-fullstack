@@ -56,7 +56,7 @@ fn config_error_event() -> Event {
 }
 
 /// SSE handler: streams events from the broadcast channel to the client.
-#[expect(
+#[allow(
     clippy::unused_async,
     reason = "Axum 0.8 requires async fn for Handler trait"
 )]
