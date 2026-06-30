@@ -123,7 +123,7 @@ The workspace defines **per-crate** Cargo feature flags that opt in to observabi
 
 ## EdDSA JWT Keys
 
-The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. Each running gateway needs a key pair.
+The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the 2026 canonical choice for EdDSA in Rust. Each running gateway needs a key pair.
 
 Generate a fresh key pair with OpenSSL:
 
@@ -150,7 +150,7 @@ export JWT_PUBLIC_KEY_PEM="$(cat jwt-public.pem)"
 
 This version brings the project to a high-end Rust 2026 showcase standard:
 
-- **EdDSA JWT** with `ed25519-dalek` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
+- **EdDSA JWT** with `aws-lc-rs` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
 - **DB-backed refresh tokens** — `refresh_tokens` table (jti UUID PK, subject, hashed token, expiry, revocation tracking) with rotation and reuse detection.
 - **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
 - **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
@@ -275,6 +275,11 @@ cargo check -p live-search --features ssr --all-targets
 rustup target add wasm32-unknown-unknown
 cargo check -p live-search --target wasm32-unknown-unknown --features hydrate --lib
 ```
+
+### `aws-lc-rs` fails to compile
+Install `cmake` and a C compiler (`build-essential` on Debian/Ubuntu, `base-devel` on Arch,
+`Xcode Command Line Tools` on macOS). `aws-lc-rs` requires a C toolchain at build time
+(the `aws-lc-sys` C library is bundled and compiled from source).
 
 ### E2E tests fail
 - Ensure PostgreSQL is running and seeded.
