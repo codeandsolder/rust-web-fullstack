@@ -33,6 +33,14 @@ steps:
       - cargo fmt --all -- --check
     depends_on: []
 
+  leptosfmt:
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
+    commands:
+      - cargo install leptosfmt --locked
+      - leptosfmt --check .
+    depends_on:
+      - fmt
+
   # E2E tests run on self-hosted runner with docker
   e2e-tests:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55

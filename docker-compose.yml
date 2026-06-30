@@ -39,6 +39,22 @@ services:
       postgres:
         condition: service_healthy
 
+  i18n-demo:
+    build:
+      context: .
+      dockerfile: i18n-demo.Dockerfile
+    container_name: rwf-i18n-demo
+    environment:
+      PORT: 3002
+      RUST_LOG: info
+    ports:
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3002/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   gateway:
     build:
       context: .

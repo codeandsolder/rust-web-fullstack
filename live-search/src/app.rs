@@ -34,35 +34,63 @@ use crate::events::SseEvent;
 ///
 /// Returns [`ServerFnError::ServerError`] if the query is empty / too long,
 /// the global pool has not been initialized, or the database query fails.
+#[allow(
+    clippy::unused_async,
+    reason = "The `#[server]` body has `.await` under `feature = \"ssr\"`. The non-ssr branch is synchronous (immediate error return) but the function must remain `async` for the server-fn macro's signature; this is the Leptos 0.8 idiom for SSR-gated server functions."
+)]
 #[server(endpoint = "/api/search")]
 pub async fn search(query: String) -> Result<Vec<SearchResult>, ServerFnError> {
-    use crate::db::get_pool;
+    // The body touches `crate::db::get_pool` (gated by `feature = "ssr"`)
+    // and uses `SearchResult`'s `sqlx::FromRow` derive, which only exists
+    // under `feature = "ssr"`. Gate the DB-using body explicitly so that
+    // `cargo check --workspace --all-targets` (which compiles with no
+    // features active) does not see an unresolved `get_pool` import.
+    //
+    // The `#[server]` macro generates the client-side stub from the
+    // function signature alone; this branch is only compiled in on the SSR
+    // build. The non-ssr branch should never run — if it does, the
+    // server-fn machinery has been bypassed and we surface the error to
+    // the caller rather than panicking (workspace lint forbids `panic`).
+    #[cfg(feature = "ssr")]
+    {
+        use crate::db::get_pool;
 
-    let trimmed = query.trim();
-    let len = trimmed.len();
-    if !(1..=1024).contains(&len) {
-        return Err(ServerFnError::ServerError(
-            "query must be 1..=1024 characters".into(),
-        ));
+        let trimmed = query.trim();
+        let len = trimmed.len();
+        if !(1..=1024).contains(&len) {
+            return Err(ServerFnError::ServerError(
+                "query must be 1..=1024 characters".into(),
+            ));
+        }
+
+        let Some(pool) = get_pool() else {
+            return Err(ServerFnError::ServerError(
+                "database pool is not initialized".to_string(),
+            ));
+        };
+
+        sqlx::query_as::<_, SearchResult>(
+            r"SELECT id, title, url, snippet, created_at
+               FROM search_results
+               WHERE fts @@ plainto_tsquery('english', $1)
+               ORDER BY created_at DESC
+               LIMIT 20",
+        )
+        .bind(&query)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ServerFnError::ServerError(e.to_string()))
     }
-
-    let Some(pool) = get_pool() else {
-        return Err(ServerFnError::ServerError(
-            "database pool is not initialized".to_string(),
-        ));
-    };
-
-    sqlx::query_as::<_, SearchResult>(
-        r"SELECT id, title, url, snippet, created_at
-           FROM search_results
-           WHERE fts @@ plainto_tsquery('english', $1)
-           ORDER BY created_at DESC
-           LIMIT 20",
-    )
-    .bind(&query)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| ServerFnError::ServerError(e.to_string()))
+    #[cfg(not(feature = "ssr"))]
+    {
+        // Defensive: server fns are routed through the wire, never called
+        // locally on the client. Returning a `ServerFnError` keeps the
+        // workspace `clippy::panic = "deny"` rule satisfied.
+        let _ = query;
+        Err(ServerFnError::ServerError(
+            "search() server fn called on a non-ssr build".into(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +337,7 @@ pub fn LiveFeedPage() -> impl IntoView {
                         connected.set(false);
                     }
                     Err(e) => {
-                        logging::warn!("Failed to connect to SSE: {e:?}");
+                        logging::warn!("Failed to connect to SSE: {e}");
                     }
                 }
 

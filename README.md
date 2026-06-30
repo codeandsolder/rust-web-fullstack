@@ -1,8 +1,9 @@
 # rust-web-fullstack
 
 A working showcase of **Leptos 0.8 + PostgreSQL + Axum** patterns from the `rust-web-fullstack` skill.
-Three example crates demonstrating full-stack Rust patterns with server-side rendering,
-hydration assets, real-time database notifications, service-oriented routing, and end-to-end testing.
+Four example crates demonstrating full-stack Rust patterns with server-side rendering,
+hydration assets, real-time database notifications, service-oriented routing,
+compile-time-checked internationalization, and end-to-end testing.
 
 ## What It Demonstrates
 
@@ -10,6 +11,7 @@ hydration assets, real-time database notifications, service-oriented routing, an
 |-------|---------|------------|
 | **live-search** | Full-stack Leptos SSR + PostgreSQL FTS | PgListener + SSE push, sqlx migrations, full-text search with `tsvector`, reactive UI |
 | **gateway** | ServiceModule trait + multi-service composition | JWT auth middleware, Tower service layers, mock modular services |
+| **i18n-demo** | Compile-time-checked internationalization | `leptos_i18n` 0.6 with JSON locales, `t!` macro, runtime locale switcher (EN ↔ DE) |
 | **e2e-tests** | chromiumoxide E2E tests | Browser automation, SSE stream validation, cross-service integration |
 
 ## Architecture
@@ -36,13 +38,16 @@ hydration assets, real-time database notifications, service-oriented routing, an
                       │   (tokio + tower) │
                       └──────────────────┘
 
-┌──────────────────┐
-│   Gateway (:3001)│
-│   JWT Auth       │
-│   Mock services  │
-│   ServiceModule  │
-└──────────────────┘
+┌──────────────────┐    ┌──────────────────┐
+│   Gateway (:3001)│    │  i18n-demo (:3002)│
+│   JWT Auth       │    │  leptos_i18n 0.6  │
+│   Mock services  │    │  EN ↔ DE switcher │
+│   ServiceModule  │    │  t! macro         │
+└──────────────────┘    └──────────────────┘
 ```
+
+`i18n-demo` runs on port **3002** and has no DB dependency — the four
+crates are independent builds composed in `docker-compose.yml`.
 
 ## Quick Start
 

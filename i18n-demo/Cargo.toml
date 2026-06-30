@@ -1,0 +1,45 @@
+[package]
+name = "i18n-demo"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "i18n-demo"
+path = "src/main.rs"
+required-features = ["ssr"]
+
+[dependencies]
+leptos = { workspace = true }
+leptos_router = { workspace = true }
+leptos_meta = { workspace = true }
+leptos_axum = { workspace = true, optional = true }
+leptos_i18n = { workspace = true, features = ["csr", "hydrate", "ssr"] }
+serde = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tower-http = { workspace = true, features = ["trace", "fs"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+console_error_panic_hook = { workspace = true }
+
+[build-dependencies]
+leptos_i18n_build = { version = "0.6", features = ["hydrate", "ssr", "pretty_print"] }
+proc-macro2 = "1"
+
+[features]
+default = []
+ssr = ["dep:leptos_axum", "leptos/ssr", "leptos_i18n/ssr"]
+hydrate = ["leptos/hydrate", "leptos_i18n/hydrate"]

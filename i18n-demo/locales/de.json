@@ -1,0 +1,7 @@
+{
+    "app_title": "i18n Demo",
+    "greeting": "Hallo, {{ name }}!",
+    "search_placeholder": "Suchen...",
+    "search_button": "Sprache wechseln",
+    "click_count": "Sie klickten {{ count }} Mal"
+}
