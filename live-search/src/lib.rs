@@ -8,9 +8,20 @@
 pub mod app;
 pub mod db;
 pub mod events;
+pub mod styles;
 
 #[cfg(feature = "ssr")]
+pub mod cache;
+#[cfg(feature = "ssr")]
 pub mod sse;
+
+#[cfg(feature = "ssr")]
+pub mod bootstrap;
+#[cfg(feature = "ssr")]
+pub mod shutdown;
+
+#[cfg(feature = "otel")]
+pub mod otel;
 
 // ---------------------------------------------------------------------------
 // Hydrate entry point – called by the browser after the WASM module loads.

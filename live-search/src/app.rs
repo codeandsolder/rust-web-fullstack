@@ -20,9 +20,13 @@ use leptos_meta::*;
 use leptos_router::components::{FlatRoutes, Route, Router};
 use leptos_router::path;
 
+use lepticons::{Icon, LucideGlyph};
+use leptos_use::watch_debounced;
+
 use crate::db::SearchResult;
 #[cfg(target_arch = "wasm32")]
 use crate::events::SseEvent;
+use crate::styles;
 
 // ---------------------------------------------------------------------------
 // Server function: search via PostgreSQL full-text search
@@ -39,7 +43,7 @@ use crate::events::SseEvent;
     reason = "The `#[server]` body has `.await` under `feature = \"ssr\"`. The non-ssr branch is synchronous (immediate error return) but the function must remain `async` for the server-fn macro's signature; this is the Leptos 0.8 idiom for SSR-gated server functions."
 )]
 #[server(endpoint = "/api/search")]
-pub async fn search(query: String) -> Result<Vec<SearchResult>, ServerFnError> {
+pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnError> {
     // The body touches `crate::db::get_pool` (gated by `feature = "ssr"`)
     // and uses `SearchResult`'s `sqlx::FromRow` derive, which only exists
     // under `feature = "ssr"`. Gate the DB-using body explicitly so that
@@ -53,14 +57,20 @@ pub async fn search(query: String) -> Result<Vec<SearchResult>, ServerFnError> {
     // the caller rather than panicking (workspace lint forbids `panic`).
     #[cfg(feature = "ssr")]
     {
+        use crate::cache;
         use crate::db::get_pool;
 
-        let trimmed = query.trim();
+        let trimmed = query.trim().to_lowercase();
         let len = trimmed.len();
         if !(1..=1024).contains(&len) {
             return Err(ServerFnError::ServerError(
                 "query must be 1..=1024 characters".into(),
             ));
+        }
+
+        // Try the in-memory cache first.
+        if let Some(cached) = cache::get(&trimmed).await {
+            return Ok(cached);
         }
 
         let Some(pool) = get_pool() else {
@@ -69,17 +79,28 @@ pub async fn search(query: String) -> Result<Vec<SearchResult>, ServerFnError> {
             ));
         };
 
-        sqlx::query_as::<_, SearchResult>(
+        let query_result = sqlx::query_as::<_, SearchResult>(
             r"SELECT id, title, url, snippet, created_at
                FROM search_results
                WHERE fts @@ plainto_tsquery('english', $1)
                ORDER BY created_at DESC
                LIMIT 20",
         )
-        .bind(&query)
+        .bind(&trimmed)
         .fetch_all(pool)
-        .await
-        .map_err(|e| ServerFnError::ServerError(e.to_string()))
+        .await;
+
+        let results: Vec<SearchResult> = match query_result {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(ServerFnError::ServerError(e.to_string()));
+            }
+        };
+
+        // Store in cache for subsequent requests.
+        let results = Arc::new(results);
+        cache::insert(trimmed, results.clone()).await;
+        Ok(results)
     }
     #[cfg(not(feature = "ssr"))]
     {
@@ -133,12 +154,16 @@ pub fn App() -> impl IntoView {
         <Title text="Live Search" />
 
         <Router>
-            <nav style="margin-bottom: 1rem; padding: 0.5rem; border-bottom: 1px solid #ccc;">
-                <a href="/">"Search"</a>
+            <nav class={styles::nav}>
+                <a class={styles::nav_link} href="/">
+                    <Icon glyph=LucideGlyph::Search size="16" />" Search"
+                </a>
                 " | "
-                <a href="/live">"Live Feed"</a>
+                <a class={styles::nav_link} href="/live">
+                    <Icon glyph=LucideGlyph::Radio size="16" />" Live Feed"
+                </a>
             </nav>
-            <main style="padding: 0.5rem;">
+            <main class={styles::main}>
                 <FlatRoutes fallback=|| view! { <p>"Page not found."</p> }>
                     <Route path=path!("/") view=SearchPage />
                     <Route path=path!("/live") view=LiveFeedPage />
@@ -159,18 +184,29 @@ pub fn App() -> impl IntoView {
 #[component]
 pub fn SearchPage() -> impl IntoView {
     let (query, set_query) = signal(String::new());
+
+    // Watch the query input with a 300ms debounce so we don't fire a search
+    // on every keystroke. The search is dispatched automatically when the
+    // user stops typing.
     let search_action = Action::new(|input: &String| {
         let input = input.clone();
         async move { search(input).await }
     });
+    let _stop = watch_debounced(
+        move || query.get(),
+        move |new_query, _old_query, _| {
+            if !new_query.is_empty() {
+                search_action.dispatch(new_query.clone());
+            }
+        },
+        300.0,
+    );
 
     // Track the last result's Ok and Err branches separately so the view
     // can render a distinct error branch instead of silently swallowing it.
     // Read `.value()` once per render frame; reading it twice would create
     // two reactive subscriptions and run the body twice on every change.
     let action_value = move || search_action.value().get();
-    let results = move || action_value().and_then(Result::ok);
-    let error = move || action_value().and_then(Result::err);
 
     view! {
         <h2>"Search"</h2>
@@ -179,50 +215,55 @@ pub fn SearchPage() -> impl IntoView {
                 ev.prevent_default();
                 search_action.dispatch(query.get());
             }
-            style="margin-bottom: 1rem;"
+            class={styles::form}
         >
             <input
                 type="text"
                 placeholder="Enter search query..."
                 bind:value=(query, set_query)
-                style="width: 300px; padding: 0.4rem;"
+                class={styles::input}
             />
-            <button type="submit" style="padding: 0.4rem 1rem; margin-left: 0.5rem;">
+            <button type="submit" class={styles::button}>
                 "Search"
             </button>
         </form>
 
         <div id="results">
-            {move || match (results(), error()) {
-                (None, None) =>
-                    view! { <p>"Enter a query above to search."</p> }.into_any(),
-                (_, Some(e)) =>
-                    view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                (Some(items), None) if items.is_empty() =>
-                    view! { <p>"No results found."</p> }.into_any(),
-                (Some(items), None) =>
-                    items
-                        .into_iter()
-                        .map(|r| {
-                            // The `view!` macro requires owned text for `text` nodes
-                            // and `href`, so each `String` field is moved once into
-                            // its respective binding. Without the bind below we
-                            // would clone `r.url` twice (once for `href`, once for
-                            // the `<small>` text node).
-                            let url = r.url.clone();
-                            view! {
-                                <div class="result-item" style="margin-bottom: 0.8rem; padding: 0.5rem; border: 1px solid #eee; border-radius: 4px;">
-                                    <h3 style="margin: 0 0 0.2rem;">
-                                        <a href={url}>{r.title}</a>
-                                    </h3>
-                                    <p style="margin: 0 0 0.2rem;">{r.snippet}</p>
-                                    <small style="color: #666;">{r.url}</small>
-                                </div>
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .into_any(),
-            }}
+            <Show when=move || action_value().is_none()
+                fallback=|| ()>
+                <p>"Enter a query above to search."</p>
+            </Show>
+
+            {move || action_value()
+                .and_then(Result::err)
+                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            }
+
+            {move || action_value()
+                .and_then(Result::ok)
+                .map(|items| {
+                    if items.is_empty() {
+                        view! { <p>"No results found."</p> }.into_any()
+                    } else {
+                        (*items).clone()
+                            .into_iter()
+                            .map(|r| {
+                                let url = r.url.clone();
+                                view! {
+                                    <div class={styles::result_item}>
+                                        <h3 class={styles::result_title}>
+                                            <a href={url}>{r.title}</a>
+                                        </h3>
+                                        <p class={styles::result_snippet}>{r.snippet}</p>
+                                        <small class={styles::result_url}>{r.url}</small>
+                                    </div>
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into_any()
+                    }
+                })
+            }
         </div>
     }
 }
@@ -354,9 +395,9 @@ pub fn LiveFeedPage() -> impl IntoView {
         </p>
         {move || {
             if connected.get() {
-                view! { <p style="color: green;">"✓ Connected to live feed"</p> }.into_any()
+                view! { <p class={styles::connected}>"✓ Connected to live feed"</p> }.into_any()
             } else {
-                view! { <p style="color: #888;">"Connecting …"</p> }.into_any()
+                view! { <p class={styles::disconnected}>"Connecting …"</p> }.into_any()
             }
         }}
         <div id="live-results">
@@ -369,10 +410,10 @@ pub fn LiveFeedPage() -> impl IntoView {
                         .iter()
                         .map(|r| {
                             view! {
-                                <div class="result-item" style="margin-bottom: 0.8rem; padding: 0.5rem; border: 1px solid #eee; border-radius: 4px;">
-                                    <h3 style="margin: 0 0 0.2rem;">{r.title.clone()}</h3>
-                                    <p style="margin: 0 0 0.2rem;">{r.snippet.clone()}</p>
-                                    <small style="color: #666;">{r.url.clone()}</small>
+                                <div class={styles::result_item}>
+                                    <h3 class={styles::result_title}>{r.title.clone()}</h3>
+                                    <p class={styles::result_snippet}>{r.snippet.clone()}</p>
+                                    <small class={styles::result_url}>{r.url.clone()}</small>
                                 </div>
                             }
                         })

@@ -5,6 +5,10 @@ edition = "2024"
 # sqlx-data.json was removed — the project uses runtime query_as only.
 # Compile-time query checking requires `cargo sqlx prepare`.
 
+# dev-tools feature (console-subscriber) requires
+# `RUSTFLAGS="--cfg tokio_unstable"` at build time. The Phase 2 dev Docker
+# image bakes this in; for local dev, export the env var.
+
 [lints]
 workspace = true
 
@@ -14,6 +18,12 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "live-search"
 path = "src/main.rs"
+required-features = ["ssr"]
+
+[[bench]]
+name = "db_bench"
+path = "benches/db_bench.rs"
+harness = false
 required-features = ["ssr"]
 
 [dependencies]
@@ -26,6 +36,11 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
+# Shared (wasm32 + native) UI / utility dependencies
+leptos-use = { workspace = true }
+leptos-struct-table = { workspace = true }
+lepticons = { workspace = true }
+stylance = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
@@ -39,6 +54,18 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tower-http = { workspace = true, features = ["trace", "fs"] }
 thiserror = { workspace = true }
+axum-prometheus = { workspace = true }
+moka = { workspace = true }
+leptos-forms-rs = { version = "1", features = ["ssr"] }
+# OTel stack — gated behind `otel` feature
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+axum-tracing-opentelemetry = { workspace = true, optional = true }
+sqlx-otel = { workspace = true, optional = true }
+# Dev tools — gated behind `dev-tools` feature
+console-subscriber = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }
@@ -46,8 +73,21 @@ gloo-net = { workspace = true }
 gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen = { workspace = true }
 console_error_panic_hook = { workspace = true }
+leptos-forms-rs = { version = "1", features = ["hydrate"] }
 
 [features]
 default = []
 ssr = ["dep:leptos_axum", "leptos/ssr"]
 hydrate = ["leptos/hydrate"]
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+    "dep:axum-tracing-opentelemetry",
+    "dep:sqlx-otel",
+]
+dev-tools = ["dep:console-subscriber"]
+
+[dev-dependencies]
+criterion = { workspace = true }
