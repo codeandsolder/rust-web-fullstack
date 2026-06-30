@@ -17,7 +17,7 @@ chrono = { version = "0.4", features = ["serde"] }
 console_error_panic_hook = "0.1"
 futures = "0.3"
 gloo-net = { version = "0.7", features = ["eventsource"] }
-jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 leptos = "0.8"
 leptos_axum = "0.8"
 leptos_i18n = "0.6"
@@ -45,7 +45,7 @@ tower-sessions = "0.15"
 axum-tower-sessions-csrf = "0.1"
 axum-valid = "0.24"
 validator = { version = "0.20", features = ["derive"] }
-ed25519-dalek = "2"
+aws-lc-rs = "1"
 moka = { version = "0.12", features = ["future"] }
 stylance = "0.8"
 leptos-use = "0.19"

@@ -3,13 +3,20 @@
 //! The dashboard endpoint now redirects users to the `/health` endpoint
 //! instead of showing a hardcoded status page, ensuring displayed status
 //! reflects actual service health.
+//!
+//! # DTOs
+//!
+//! Response types implement [`Serialize`], [`Deserialize`], and
+//! [`utoipa::ToSchema`] for `OpenAPI` documentation (except HTML responses
+//! which are excluded from the `OpenAPI` schema).
 
 use axum::{
     Router,
     response::{Html, Json},
     routing::get,
 };
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
@@ -50,11 +57,46 @@ impl ServiceModule for MonitorService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
+
+/// Monitor health check response.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MonitorHealthResponse {
+    pub status: String,
+    pub service: String,
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
 /// Renders a redirect page pointing to `/health`.
+#[utoipa::path(
+    get,
+    path = "/monitor/dashboard",
+    responses(
+        (status = 200, description = "HTML redirect page", content_type = "text/html"),
+    ),
+    tag = "monitor",
+)]
 async fn dashboard_handler() -> Html<&'static str> {
     Html(REDIRECT_PAGE)
 }
 
-async fn monitor_health() -> Json<Value> {
-    Json(json!({"status": "ok", "service": "monitor"}))
+/// Monitor service health check.
+#[utoipa::path(
+    get,
+    path = "/monitor/health",
+    responses(
+        (status = 200, description = "Monitor service healthy", body = MonitorHealthResponse),
+    ),
+    tag = "monitor",
+)]
+async fn monitor_health() -> Json<MonitorHealthResponse> {
+    Json(MonitorHealthResponse {
+        status: "ok".to_string(),
+        service: "monitor".to_string(),
+    })
 }

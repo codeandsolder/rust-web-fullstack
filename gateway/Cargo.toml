@@ -6,21 +6,61 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+default = []
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+    "dep:axum-tracing-opentelemetry",
+]
+dev-tools = ["dep:console-subscriber"]
+
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true, features = ["trace", "cors"] }
+axum-prometheus = { workspace = true }
+axum-tower-sessions-csrf = { workspace = true }
+axum-valid = { workspace = true }
+chrono = { workspace = true }
+aws-lc-rs = { workspace = true }
+base64 = "0.22"
+futures = { workspace = true }
+jsonwebtoken = { workspace = true, features = ["use_pem"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["trace", "cors", "timeout"] }
+tower-sessions = { workspace = true }
+tower-sessions-memory-store = "0.15"
+tower_governor = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
-jsonwebtoken = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
-futures = { workspace = true }
-subtle = { workspace = true }
-tokio-stream = { workspace = true }
+validator = { workspace = true }
+
+# Optional — OTel telemetry (behind `otel` feature)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+axum-tracing-opentelemetry = { workspace = true, optional = true }
+
+# Optional — tokio-console (behind `dev-tools` feature; requires RUSTFLAGS="--cfg tokio_unstable")
+console-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "auth_bench"
+harness = false

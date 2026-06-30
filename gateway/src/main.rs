@@ -1,29 +1,65 @@
+//! Gateway example binary — entry point.
+//!
+//! Configures the tracing subscriber (with optional `OTel` telemetry behind the
+//! `otel` feature), load service modules, build the axum router, and serve
+//! HTTP requests with graceful shutdown.
+//!
+//! # Dev keys
+//!
+//! Pass `--dev-keys` as the first argument to generate an ephemeral `EdDSA`
+//! keypair at startup (keys are logged at `warn!` level).  Do not use
+//! `--dev-keys` in production — the keypair changes on every restart and is
+//! logged in plain text.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
 use tokio::signal;
-use tracing_subscriber::EnvFilter;
 
 use gateway_example::{gateway, module, services};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Handle `--dev-keys` flag before loading settings.
+    let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
+
+    // ---- Telemetry / tracing ----
+    //
+    // With the `otel` feature we use the canonical layered subscriber
+    // (Registry + EnvFilter + fmt + `OTel`).  Without it we fall back to a
+    // simple fmt subscriber.
+    #[cfg(feature = "otel")]
+    let provider =
+        gateway_example::otel::init_telemetry().context("failed to initialize `OTel` telemetry")?;
+
+    #[cfg(not(feature = "otel"))]
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("gateway_example=info,tower_http=debug")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("gateway_example=info,tower_http=debug")
+            }),
         )
         .init();
 
-    // Register every service module as an `Arc<dyn ServiceModule>`.
+    // ---- Settings ----
+    //
+    // If `--dev-keys` was passed, generate an ephemeral keypair.  Otherwise
+    // load from environment variables.
+    let settings = if dev_keys {
+        gateway_example::settings::Settings::load_dev_keys()?
+    } else {
+        gateway_example::settings::Settings::load()?
+    };
+
+    // ---- Service modules ----
     let service_modules: Vec<Arc<dyn module::ServiceModule>> = vec![
         Arc::new(services::search::SearchService),
         Arc::new(services::proxy::ProxyService),
         Arc::new(services::monitor::MonitorService),
     ];
 
-    let app = gateway::build_gateway(service_modules)?;
+    let app = gateway::build_gateway_with_settings(service_modules, settings)?;
 
     let port: u16 = std::env::var("GATEWAY_PORT")
         .ok()
@@ -35,13 +71,13 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  Health: http://{addr}/health");
     tracing::info!("  Login:  http://{addr}/auth/login");
     tracing::info!("  Events: http://{addr}/events");
+    tracing::info!("  Docs:   http://{addr}/docs");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
 
-    // Catch Ctrl+C and SIGTERM gracefully.  We use `with_graceful_shutdown`
-    // so axum drains in-flight requests before the process exits.
+    // Catch Ctrl+C and SIGTERM gracefully.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -50,13 +86,21 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("gateway server exited with an error")?;
 
+    // ---- Shutdown telemetry ----
+    //
+    // Per rust-tracing §1.7: force_flush + shutdown (sync calls in
+    // opentelemetry_sdk 0.32).  The provider is dropped when `provider`
+    // exits scope.
+    #[cfg(feature = "otel")]
+    {
+        let _ = provider.force_flush();
+        let _ = provider.shutdown();
+    }
+
     Ok(())
 }
 
 /// Return a future that resolves when a shutdown signal is received.
-///
-/// Listens for Ctrl+C (all platforms) and SIGTERM (Unix).  Errors during
-/// signal installation are logged but do not prevent startup.
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = signal::ctrl_c().await {
