@@ -442,3 +442,65 @@ async fn gateway_cors_preflight_is_handled() {
         allow_origin.unwrap_or("(missing)")
     );
 }
+
+// ---------------------------------------------------------------------------
+// httpmock + mockall pattern fixtures (compile-check only; no external deps).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod pattern_fixtures {
+    /// Demonstrate the `httpmock` mock-server fixture pattern.
+    ///
+    /// `MockServer::start()` binds a random local port so this test is fully
+    /// self-contained — no external services needed.
+    #[tokio::test]
+    async fn httpmock_demo() {
+        let server = httpmock::MockServer::start();
+        let health_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/health");
+            then.status(200)
+                .json_body(serde_json::json!({"status": "ok"}));
+        });
+
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("Failed to build reqwest client");
+        let resp = client
+            .get(format!("{}/health", server.base_url()))
+            .send()
+            .await
+            .expect("GET /health failed");
+
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.expect("Not valid JSON");
+        assert_eq!(body, serde_json::json!({"status": "ok"}));
+
+        // Verify the mock was actually called.
+        health_mock.assert();
+    }
+
+    /// Demonstrate the `mockall` trait mock pattern.
+    #[allow(dead_code)]
+    #[mockall::automock]
+    trait SearchService {
+        fn search(&self, query: &str) -> Vec<String>;
+    }
+
+    #[tokio::test]
+    async fn mockall_demo() {
+        let mut mock = MockSearchService::new();
+        mock.expect_search()
+            .with(mockall::predicate::eq("rust"))
+            .returning(|_| {
+                vec![
+                    "rust-lang.org".to_string(),
+                    "rust-cookbook.github.io".to_string(),
+                ]
+            });
+
+        let results = mock.search("rust");
+        assert_eq!(results.len(), 2);
+        assert!(results[0].contains("rust"));
+    }
+}

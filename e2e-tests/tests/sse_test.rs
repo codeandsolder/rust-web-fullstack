@@ -69,25 +69,25 @@ async fn sse_endpoint_responds_with_event_stream() {
 ///    insert a search result via `PostgreSQL`, then verify a `SearchResult` SSE
 ///    event containing the inserted title arrives within 10 seconds.
 ///
-///    Requires `DATABASE_URL` to be set in the environment in addition to
-///    `--features integration`.
+///    Uses [`common::db::TestEnv::postgres`] for the database connection. The
+///    live-search service must be running and connected to the same Postgres
+///    instance (in CI, Docker resolves this via a shared `DATABASE_URL`).
+///
+///    Requires `--features integration`.
 #[tokio::test]
 #[cfg_attr(
     not(feature = "integration"),
     ignore = "requires --features integration and DATABASE_URL"
 )]
 async fn notify_trigger_fires_sse_event() {
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for this test");
+    let env = common::db::TestEnv::postgres().await;
+    let pool = env.pool();
 
     require_server(&base_url(None)).await;
 
     // ── 0. Pre-clean: wipe any leftover e2e-test rows from previous failed runs.
-    let pool = sqlx::PgPool::connect(&database_url)
-        .await
-        .expect("Failed to connect to database");
     sqlx::query("DELETE FROM search_results WHERE title LIKE 'e2e-%' OR title LIKE 'e2e-warmup-%' OR title LIKE 'browser-sse-sentinel-%'")
-        .execute(&pool)
+        .execute(pool)
         .await
         .ok();
 
@@ -127,7 +127,7 @@ async fn notify_trigger_fires_sse_event() {
         .bind(&warmup_title)
         .bind(&warmup_url)
         .bind("SSE warmup row to prove PgListener is LISTEN-ing")
-        .execute(&pool)
+        .execute(pool)
         .await
         .expect("Failed to insert warmup row");
 
@@ -170,7 +170,7 @@ async fn notify_trigger_fires_sse_event() {
         .bind(&title)
         .bind(&test_url)
         .bind(snippet)
-        .execute(&pool)
+        .execute(pool)
         .await
         .expect("Failed to insert search result");
 
@@ -188,24 +188,32 @@ async fn notify_trigger_fires_sse_event() {
                 buf.push('\n');
                 if buf.contains(&title) && buf.contains("SearchResult") {
                     println!("SearchResult SSE event with title '{title}' received");
+
+                    // Snapshot the event payload for regression detection.
+                    // Fields like `title`, `url`, `snippet` contain the
+                    // inserted values — the snapshot captures the shape.
+                    if let Some(event_json) = parse_sse_json_payload(&buf, &title) {
+                        // unwrap is safe: to_string_pretty only fails on
+                        // non-finite floats, which serde_json::Value from a
+                        // known schema never contains.
+                        event_snapshot(event_json);
+                    }
+
                     // Best-effort cleanup so re-runs don't accumulate rows.
-                    // Warmup row cleanup happens via the pre-clean DELETE in
-                    // a future run; success-path cleanup is here.
                     if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
                         .bind(&title)
-                        .execute(&pool)
+                        .execute(pool)
                         .await
                     {
                         eprintln!("warning: failed to delete e2e-test row '{title}': {e}");
                     }
                     if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
                         .bind(&warmup_title)
-                        .execute(&pool)
+                        .execute(pool)
                         .await
                     {
                         eprintln!("warning: failed to delete e2e-warmup row '{warmup_title}': {e}");
                     }
-                    pool.close().await;
                     return;
                 }
             }
@@ -218,4 +226,39 @@ async fn notify_trigger_fires_sse_event() {
             }
         }
     }
+}
+
+/// Try to extract the SSE event JSON for the test row from the accumulated
+/// buffer.  Returns `None` if the payload hasn't fully arrived yet.
+///
+/// The SSE stream delivers text/event-stream chunks; the JSON payload lives
+/// after `data: ` lines.
+fn parse_sse_json_payload(buf: &str, title: &str) -> Option<serde_json::Value> {
+    // Find the line containing the title after "data: "
+    for line in buf.lines() {
+        if let Some(payload) = line.strip_prefix("data: ")
+            && payload.contains(title)
+        {
+            return serde_json::from_str(payload).ok();
+        }
+    }
+    None
+}
+
+/// Replace dynamic test identifiers with stable placeholders so the snapshot
+/// is deterministic across runs, then snapshot the result.
+fn event_snapshot(mut value: serde_json::Value) {
+    if let Some(val) = value.get_mut("title")
+        && let Some(title) = val.as_str()
+        && (title.starts_with("e2e-test-") || title.starts_with("e2e-warmup-"))
+    {
+        *val = serde_json::Value::String("<DYNAMIC_TEST_TITLE>".to_string());
+    }
+    if let Some(val) = value.get_mut("url")
+        && let Some(url) = val.as_str()
+        && (url.contains("e2e-test-") || url.contains("e2e-warmup-"))
+    {
+        *val = serde_json::Value::String("<DYNAMIC_TEST_URL>".to_string());
+    }
+    insta::assert_json_snapshot!("sse_search_result_event", value);
 }

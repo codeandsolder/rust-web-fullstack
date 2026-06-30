@@ -6,16 +6,21 @@ publish = false
 
 [lib]
 
+# NOTE: `[lints] workspace = true` + pedantic override is not supported by Cargo
+# (Cargo rejects mixing workspace = true with per-crate [lints.*] sections).
+# We manually replicate the workspace lints with pedantic downgraded to warn
+# for test code that is legitimately noisy under pedantic/nursery rules.
+# clippy.toml handles unwrap_used/expect_used/panic exemptions for test code.
 [lints.rust]
+unsafe_code = "deny"
 rust_2024_compatibility = { level = "deny", priority = -1 }
 missing_debug_implementations = "warn"
 
 [lints.clippy]
-# Test code legitimately needs fail-fast assertions.
-unwrap_used = "allow"
-expect_used = "allow"
-panic = "allow"
-pedantic = { level = "deny", priority = -1 }
+pedantic = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
 todo = "deny"
 unimplemented = "deny"
 too_long_first_doc_paragraph = "allow"
@@ -37,3 +42,21 @@ reqwest = { workspace = true }
 sqlx = { workspace = true }
 # Used by common::setup / common::teardown to bound the chromiumoxide handler pump.
 tokio-util = { workspace = true }
+serde = { workspace = true }
+
+# Test infrastructure
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+httpmock = { workspace = true }
+mockall = { workspace = true }
+
+# Snapshot testing & property-based testing
+insta = { workspace = true, features = ["json"] }
+proptest = { workspace = true }
+
+# Import the real SearchResult type for proptest round-trip verification
+live-search = { path = "../live-search" }
+
+# Used directly by common::json for Uuid/DateTime proptest strategies
+chrono = { workspace = true }
+uuid = { workspace = true }
