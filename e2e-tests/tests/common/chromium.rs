@@ -6,21 +6,14 @@
 //! `http://localhost:3000`).
 
 // Each e2e-tests/tests/*.rs binary compiles its own copy; not every helper is
-// used by every binary, so suppressing dead_code at the module level is cleaner
-// than annotating every struct/function individually.
-#![allow(
-    dead_code,
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "Some helpers unused per test-binary compilation; \
-              test-support code uses expect/unwrap/panic for fail-fast assertions"
-)]
+// used by every binary, so suppressing dead_code is handled via per-function
+// annotations rather than a module-level override.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use anyhow::{anyhow, bail, Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
@@ -34,6 +27,13 @@ use e2e_tests::base_url;
 pub struct TestContext {
     pub browser: Browser,
     pub page: Page,
+    /// Default base URL derived from the `BASE_URL` env var. Set during
+    /// [`setup`] but currently only consumed via the explicit env URL; kept
+    /// on the context for future assertions and diagnostic output.
+    #[allow(
+        dead_code,
+        reason = "Currently set but not read; preserved for test diagnostics and future assertions."
+    )]
     pub base_url: String,
     pub profile_dir: PathBuf,
     /// Token fired by [`teardown`] to stop the chromiumoxide handler task.
@@ -47,18 +47,18 @@ pub struct TestContext {
     dead_code,
     reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
 )]
-fn unique_profile_dir() -> PathBuf {
+fn unique_profile_dir() -> Result<PathBuf> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock must be after Unix epoch")
+        .context("system clock must be after Unix epoch")?
         .as_nanos();
     let dir = format!(
         "/tmp/chromiumoxide-{pid}-{nanos}-{n}",
         pid = std::process::id(),
     );
-    PathBuf::from(dir)
+    Ok(PathBuf::from(dir))
 }
 
 /// Poll a server until it responds with an HTTP 2xx / 3xx status, or the timeout
@@ -85,13 +85,14 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 /// promptly instead of leaking for the rest of the test process when the
 /// browser fails to close cleanly.
 ///
-/// # Panics
-/// Panics if the browser cannot launch or the page cannot be created.
+/// # Errors
+/// Returns an error if the browser cannot launch, the page cannot be created,
+/// or the profile directory cannot be created.
 #[allow(
     dead_code,
     reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
 )]
-pub async fn setup() -> TestContext {
+pub async fn setup() -> Result<TestContext> {
     let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
         let playwright_path = format!(
             "{}/chromium-1208/chrome-linux64/chrome",
@@ -103,8 +104,8 @@ pub async fn setup() -> TestContext {
             .then_some(playwright_path)
     });
 
-    let profile_dir = unique_profile_dir();
-    std::fs::create_dir_all(&profile_dir).expect("failed to create Chromium profile dir");
+    let profile_dir = unique_profile_dir()?;
+    std::fs::create_dir_all(&profile_dir).context("failed to create Chromium profile dir")?;
 
     let mut builder = BrowserConfig::builder()
         .user_data_dir(profile_dir.clone())
@@ -112,11 +113,11 @@ pub async fn setup() -> TestContext {
     if let Some(chrome_path) = chrome_path {
         builder = builder.chrome_executable(chrome_path);
     }
-    let config = builder.build().expect("Failed to build BrowserConfig");
+    let config = builder.build().map_err(|e| anyhow!("failed to build BrowserConfig: {e}"))?;
 
     let (browser, mut handler) = Browser::launch(config)
         .await
-        .expect("Failed to launch Chromium browser");
+        .context("failed to launch Chromium browser")?;
 
     // Spawn the handler task — REQUIRED, otherwise the browser hangs.
     // Bound by `shutdown` so a failed `browser.close()` does not leak the
@@ -139,15 +140,15 @@ pub async fn setup() -> TestContext {
     let page = browser
         .new_page("about:blank")
         .await
-        .expect("Failed to create new page");
+        .context("failed to create new page")?;
 
-    TestContext {
+    Ok(TestContext {
         browser,
         page,
         base_url: base_url(None),
         profile_dir,
         shutdown,
-    }
+    })
 }
 
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
@@ -188,18 +189,18 @@ pub async fn teardown(ctx: TestContext) {
 
 /// Require the server at `url` to respond within 5 seconds.
 ///
-/// # Panics
-/// Panics if the server does not respond with a 2xx or 3xx status before the
-/// timeout expires.
+/// # Errors
+/// Returns an error if the server does not respond with a 2xx or 3xx status
+/// before the timeout expires.
 #[allow(
     dead_code,
     reason = "Each tests/*.rs binary compiles its own copy of this module, so helpers may be unused in a given test target."
 )]
-pub async fn require_server(url: &str) {
-    assert!(
-        wait_for_server(url, Duration::from_secs(5)).await,
-        "server at {url} is not reachable"
-    );
+pub async fn require_server(url: &str) -> Result<()> {
+    if !wait_for_server(url, Duration::from_secs(5)).await {
+        bail!("server at {url} is not reachable");
+    }
+    Ok(())
 }
 
 // ──────  Element wait helpers  ──────
@@ -213,8 +214,10 @@ pub async fn require_server(url: &str) {
 pub async fn wait_for_js_true(page: &Page, expression: &str, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
-        if let Ok(val) = page.evaluate(expression).await
-            && val.into_value::<bool>().unwrap_or(false)
+        if page.evaluate(expression).await
+            .ok()
+            .and_then(|v| v.into_value::<bool>().ok())
+            .unwrap_or(false)
         {
             return true;
         }

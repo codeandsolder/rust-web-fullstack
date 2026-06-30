@@ -75,6 +75,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use anyhow::Context;
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -105,7 +106,7 @@ mod tests {
     /// verifies that the `Arc` retrieved is the same allocation as the one
     /// inserted. This is the property the C2 fix relies on.
     #[tokio::test]
-    async fn cache_hit_returns_same_arc_instance() {
+    async fn cache_hit_returns_same_arc_instance() -> anyhow::Result<()> {
         let cache: Cache<String, Arc<Vec<SearchResult>>> = Cache::builder()
             .time_to_live(Duration::from_secs(60))
             .max_capacity(1000)
@@ -117,9 +118,7 @@ mod tests {
 
         cache.insert(key.clone(), arc.clone()).await;
         let retrieved = cache.get(&key).await;
-        assert!(retrieved.is_some(), "cache hit should return Some");
-
-        let retrieved = retrieved.unwrap();
+        let retrieved = retrieved.context("cache hit should return Some")?;
         // The retrieved Arc must point to the SAME allocation as the one we
         // inserted. If the cache cloned the inner Vec, the pointer would differ.
         assert!(
@@ -134,6 +133,7 @@ mod tests {
             2,
             "cache holds one reference; arc holds one; no stray clones"
         );
+        Ok(())
     }
 
     /// The global cache wrapper returns `None` for a nonexistent key.

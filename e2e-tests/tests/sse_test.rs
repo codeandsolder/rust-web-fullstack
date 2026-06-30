@@ -5,19 +5,107 @@
 //! - Deliver data events to the client.
 //! - Reconnect correctly after a page close/reopen cycle.
 //!
-//! All tests are gated behind the `integration` feature and will be ignored
-//! when running plain `cargo test`.  Use `--features integration` to enable
-//! them, and make sure the live-search service is running on port 3000
-//! with a valid database connection.
+//! All tests use an in-process live-search server backed by a testcontainer
+//! Postgres database, so no external services are required.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::Once;
 use std::time::Duration;
 
+use anyhow::Context;
 use futures::StreamExt;
+use tokio::sync::OnceCell;
 
 mod common;
 
-use common::require_server;
-use e2e_tests::base_url;
+use common::LiveSearchEnv;
+
+/// Shared live-search server instance, initialised lazily on first access.
+///
+/// Wraps a `Result` so that initialisation failures are propagated to every
+/// caller without panicking inside the background thread.
+static LIVE_SEARCH: OnceCell<Result<LiveSearchEnv, Arc<anyhow::Error>>> = OnceCell::const_new();
+static BG_INIT_DONE: AtomicBool = AtomicBool::new(false);
+static BG_INIT_ONCE: Once = Once::new();
+
+/// Get the shared server instance, running [`LiveSearchEnv::start()`] on a
+/// persistent background tokio runtime so the server's database pool is not
+/// tied to any single test runtime.
+async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
+    BG_INIT_ONCE.call_once(|| {
+        // IIFE so we can use `?` inside a `call_once` closure (which returns `()`).
+        let result: Result<(), Arc<anyhow::Error>> = (|| {
+            let handle = std::thread::Builder::new()
+                .name("e2e-bg-init".into())
+                .spawn(move || {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            let err = Arc::new(anyhow::Error::new(e).context(
+                                "failed to create background init runtime",
+                            ));
+                            let _ = LIVE_SEARCH.set(Err(err));
+                            BG_INIT_DONE.store(true, Ordering::Release);
+                            return;
+                        }
+                    };
+                    rt.block_on(async {
+                        match LiveSearchEnv::start().await {
+                            Ok(env) => {
+                                let _ = LIVE_SEARCH.set(Ok(env));
+                            }
+                            Err(e) => {
+                                let _ = LIVE_SEARCH.set(Err(Arc::new(e)));
+                            }
+                        }
+                        BG_INIT_DONE.store(true, Ordering::Release);
+                        if LIVE_SEARCH.get().is_none_or(Result::is_ok) {
+                            // Keep the runtime alive indefinitely so the pools'
+                            // background management tasks survive individual test
+                            // runtimes.
+                            std::future::pending::<()>().await;
+                        }
+                    });
+                })
+                .map_err(|e| {
+                    Arc::new(anyhow::Error::new(e).context("failed to spawn background init thread"))
+                })?;
+            let _ = handle;
+            Ok(())
+        })();
+
+        // If we couldn't even spawn the thread, surface the failure via
+        // LIVE_SEARCH so the test-side loop sees the error instead of timing out.
+        if let Err(err) = result {
+            let _ = LIVE_SEARCH.set(Err(err));
+            BG_INIT_DONE.store(true, Ordering::Release);
+        }
+    });
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !BG_INIT_DONE.load(Ordering::Acquire) {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "background LiveSearchEnv initialization timed out after 30s"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let cell_ref = LIVE_SEARCH
+        .get()
+        .context("LiveSearchEnv not initialized")?;
+    cell_ref
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("{e:#}"))
+}
+
+/// Helper: build a reqwest client with a short timeout.
+fn test_client() -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build reqwest client")
+}
 
 // ---------------------------------------------------------------------------
 // Required integration tests (from spec)
@@ -26,23 +114,15 @@ use e2e_tests::base_url;
 /// 5. SSE endpoint responds with event stream — make a raw HTTP GET to
 ///    `/api/events` and verify status 200 and Content-Type: text/event-stream.
 #[tokio::test]
-#[cfg_attr(
-    not(feature = "integration"),
-    ignore = "requires --features integration"
-)]
-async fn sse_endpoint_responds_with_event_stream() {
-    require_server(&base_url(None)).await;
-
-    let url = format!("{}/api/events", base_url(None));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to build reqwest client");
+async fn sse_endpoint_responds_with_event_stream() -> anyhow::Result<()> {
+    let env = get_server().await?;
+    let url = format!("{}/api/events", env.base_url());
+    let client = test_client()?;
     let response = client
         .get(&url)
         .send()
         .await
-        .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
+        .with_context(|| format!("failed to GET {url}"))?;
 
     assert_eq!(
         response.status(),
@@ -54,52 +134,46 @@ async fn sse_endpoint_responds_with_event_stream() {
     let content_type = response
         .headers()
         .get("content-type")
-        .expect("SSE response must have Content-Type header")
+        .context("SSE response must have Content-Type header")?
         .to_str()
-        .expect("Content-Type is not valid ASCII");
+        .context("content-type is not valid ASCII")?;
     assert!(
         content_type.contains("text/event-stream"),
         "Expected Content-Type containing 'text/event-stream', got '{content_type}'"
     );
 
     println!("SSE endpoint at {url} -> HTTP 200, Content-Type: {content_type}");
+    Ok(())
 }
 
 /// 6. Notify trigger fires SSE event — open the SSE connection to `/api/events`,
 ///    insert a search result via `PostgreSQL`, then verify a `SearchResult` SSE
 ///    event containing the inserted title arrives within 10 seconds.
 ///
-///    Uses [`common::db::TestEnv::postgres`] for the database connection. The
-///    live-search service must be running and connected to the same Postgres
-///    instance (in CI, Docker resolves this via a shared `DATABASE_URL`).
-///
-///    Requires `--features integration`.
+///    Uses the in-process live-search server with a testcontainer Postgres DB,
+///    so no external services are required.
 #[tokio::test]
-#[cfg_attr(
-    not(feature = "integration"),
-    ignore = "requires --features integration and DATABASE_URL"
-)]
-async fn notify_trigger_fires_sse_event() {
-    let env = common::db::TestEnv::postgres().await;
-    let pool = env.pool();
-
-    require_server(&base_url(None)).await;
+async fn notify_trigger_fires_sse_event() -> anyhow::Result<()> {
+    let env = get_server().await?;
+    let conn_str = env.db().connection_string().to_string();
+    let pool = sqlx::PgPool::connect(&conn_str)
+        .await
+        .with_context(|| format!("failed to connect to {conn_str}"))?;
 
     // ── 0. Pre-clean: wipe any leftover e2e-test rows from previous failed runs.
     sqlx::query("DELETE FROM search_results WHERE title LIKE 'e2e-%' OR title LIKE 'e2e-warmup-%' OR title LIKE 'browser-sse-sentinel-%'")
-        .execute(pool)
+        .execute(&pool)
         .await
         .ok();
 
     // ── 1. Open an SSE connection to /api/events ──────────────────────
-    let url = format!("{}/api/events", base_url(None));
-    let response = reqwest::Client::builder()
-        .build()
-        .expect("Failed to build reqwest client")
+    let client = test_client()?;
+    let url = format!("{}/api/events", env.base_url());
+    let response = client
         .get(&url)
         .send()
         .await
-        .unwrap_or_else(|e| panic!("Failed to GET {url}: {e}"));
+        .with_context(|| format!("failed to GET {url}"))?;
 
     assert_eq!(response.status(), 200);
     let mut stream = response.bytes_stream();
@@ -127,9 +201,9 @@ async fn notify_trigger_fires_sse_event() {
         .bind(&warmup_title)
         .bind(&warmup_url)
         .bind("SSE warmup row to prove PgListener is LISTEN-ing")
-        .execute(pool)
+        .execute(&pool)
         .await
-        .expect("Failed to insert warmup row");
+        .context("failed to insert warmup row")?;
 
     let warmup_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -146,8 +220,8 @@ async fn notify_trigger_fires_sse_event() {
                     break;
                 }
             }
-            Ok(Some(Err(e))) => panic!("SSE stream error during warmup: {e}"),
-            Ok(None) => panic!("SSE stream ended during warmup. Buffer: {buf:.300}"),
+            Ok(Some(Err(e))) => return Err(anyhow::anyhow!("SSE stream error during warmup: {e}")),
+            Ok(None) => return Err(anyhow::anyhow!("SSE stream ended during warmup. Buffer: {buf:.300}")),
             Err(_timeout) => {} // keep waiting
         }
     }
@@ -170,9 +244,9 @@ async fn notify_trigger_fires_sse_event() {
         .bind(&title)
         .bind(&test_url)
         .bind(snippet)
-        .execute(pool)
+        .execute(&pool)
         .await
-        .expect("Failed to insert search result");
+        .context("failed to insert search result")?;
 
     // ── 4. Read SSE events until we see the SearchResult ──────────────
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -202,24 +276,26 @@ async fn notify_trigger_fires_sse_event() {
                     // Best-effort cleanup so re-runs don't accumulate rows.
                     if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
                         .bind(&title)
-                        .execute(pool)
+                        .execute(&pool)
                         .await
                     {
                         eprintln!("warning: failed to delete e2e-test row '{title}': {e}");
                     }
                     if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
                         .bind(&warmup_title)
-                        .execute(pool)
+                        .execute(&pool)
                         .await
                     {
                         eprintln!("warning: failed to delete e2e-warmup row '{warmup_title}': {e}");
                     }
-                    return;
+                    return Ok(());
                 }
             }
-            Ok(Some(Err(e))) => panic!("SSE stream error: {e}"),
+            Ok(Some(Err(e))) => return Err(anyhow::anyhow!("SSE stream error: {e}")),
             Ok(None) => {
-                panic!("SSE stream ended before SearchResult. Buffer: {buf:.300}");
+                return Err(anyhow::anyhow!(
+                    "SSE stream ended before SearchResult. Buffer: {buf:.300}"
+                ));
             }
             Err(_timeout) => {
                 // No data in this 2 s window — keep waiting.

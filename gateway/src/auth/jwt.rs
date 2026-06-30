@@ -103,59 +103,60 @@ mod tests {
     /// Deterministic keypair from a fixed seed so tests are reproducible.
     const TEST_SEED: [u8; 32] = [1u8; 32];
 
-    fn dev_keypair_pems() -> (String, String) {
-        let key_pair = Ed25519KeyPair::from_seed_unchecked(&TEST_SEED)
-            .expect("Ed25519 keypair from seed should not fail for a valid 32-byte seed");
+    fn dev_keypair_pems() -> anyhow::Result<(String, String)> {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&TEST_SEED)?;
         let public_key = key_pair.public_key().as_ref().to_vec();
         let private_pem = pem_encode("PRIVATE KEY", &ed25519_pkcs8_der(&TEST_SEED));
         let public_pem = pem_encode("PUBLIC KEY", &ed25519_spki_der(&public_key));
-        (private_pem, public_pem)
+        Ok((private_pem, public_pem))
     }
 
     #[test]
-    fn sign_and_verify_roundtrip() {
-        let (private_pem, public_pem) = dev_keypair_pems();
+    fn sign_and_verify_roundtrip() -> anyhow::Result<()> {
+        let (private_pem, public_pem) = dev_keypair_pems()?;
 
         // Sign
-        let token = create_jwt("test-user", &private_pem).expect("create_jwt should succeed");
+        let token = create_jwt("test-user", &private_pem)?;
 
         // Verify
-        let claims = validate_jwt(&token, &public_pem).expect("validate_jwt should succeed");
+        let claims = validate_jwt(&token, &public_pem)?;
         assert_eq!(claims.sub, "test-user");
         assert_eq!(claims.iss, JWT_ISS);
         assert_eq!(claims.aud, JWT_ISS);
         assert!(claims.exp > claims.iat);
+        Ok(())
     }
 
     #[test]
-    fn rejects_wrong_key() {
-        let (private_pem, _) = dev_keypair_pems();
+    fn rejects_wrong_key() -> anyhow::Result<()> {
+        let (private_pem, _) = dev_keypair_pems()?;
         // Different seed → different key pair
         let wrong_seed = [2u8; 32];
-        let wrong_key_pair = Ed25519KeyPair::from_seed_unchecked(&wrong_seed)
-            .expect("Ed25519 keypair from seed should not fail for a valid 32-byte seed");
+        let wrong_key_pair = Ed25519KeyPair::from_seed_unchecked(&wrong_seed)?;
         let wrong_public_pem = pem_encode(
             "PUBLIC KEY",
             &ed25519_spki_der(wrong_key_pair.public_key().as_ref()),
         );
 
-        let token = create_jwt("test-user", &private_pem).expect("create_jwt should succeed");
+        let token = create_jwt("test-user", &private_pem)?;
 
         let result = validate_jwt(&token, &wrong_public_pem);
         assert!(result.is_err());
         assert!(matches!(result, Err(AppError::InvalidSignature(_))));
+        Ok(())
     }
 
     #[test]
-    fn rejects_garbage_token() {
-        let (_, public_pem) = dev_keypair_pems();
+    fn rejects_garbage_token() -> anyhow::Result<()> {
+        let (_, public_pem) = dev_keypair_pems()?;
         let result = validate_jwt("this.is.not.a.jwt", &public_pem);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn rejects_expired_token() {
-        let (private_pem, public_pem) = dev_keypair_pems();
+    fn rejects_expired_token() -> anyhow::Result<()> {
+        let (private_pem, public_pem) = dev_keypair_pems()?;
 
         // Manually craft a token with exp = 0 (i.e., well in the past).
         let expired = Claims {
@@ -167,12 +168,13 @@ mod tests {
         };
 
         let header = Header::new(Algorithm::EdDSA);
-        let key = EncodingKey::from_ed_pem(private_pem.as_bytes()).expect("parse private pem");
-        let token = jsonwebtoken::encode(&header, &expired, &key).expect("encode expired token");
+        let key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
+        let token = jsonwebtoken::encode(&header, &expired, &key)?;
 
         // Validate — should fail with TokenExpired
         let result = validate_jwt(&token, &public_pem);
         assert!(result.is_err());
         assert!(matches!(result, Err(AppError::TokenExpired(_))));
+        Ok(())
     }
 }

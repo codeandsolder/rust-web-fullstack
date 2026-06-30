@@ -4,7 +4,9 @@
 
 pub mod chromium;
 pub mod db;
+pub mod gateway_env;
 pub mod json;
+pub mod live_search_env;
 
 // Re-export the most commonly used helpers so test files can
 // `use common::*` or `use common::{setup, teardown, …}` directly.
@@ -16,4 +18,8 @@ pub use chromium::{
 #[allow(unused_imports)]
 pub use db::TestEnv;
 #[allow(unused_imports)]
+pub use gateway_env::GatewayEnv;
+#[allow(unused_imports)]
 pub use json::json_eq;
+#[allow(unused_imports)]
+pub use live_search_env::LiveSearchEnv;

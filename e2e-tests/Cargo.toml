@@ -28,7 +28,9 @@ nursery = { level = "warn", priority = -1 }
 
 [features]
 default = []
-integration = []
+# Browser-based tests (chromiumoxide) — gated because they require a real
+# browser installation.  Run with `--features browser-tests`.
+browser-tests = []
 
 [dependencies]
 
@@ -44,18 +46,31 @@ sqlx = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }
 
+# Leptos + axum for in-process server function routing
+leptos = { workspace = true }
+leptos_axum = { workspace = true }
+axum = { workspace = true }
+anyhow = { workspace = true }
+
+# tower-http for optional static file serving (Leptos build artifacts)
+tower-http = { workspace = true, features = ["fs"] }
+
+# tracing for subscriber init in live_search_env
+tracing = { workspace = true }
+
 # Test infrastructure
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
-httpmock = { workspace = true }
-mockall = { workspace = true }
 
 # Snapshot testing & property-based testing
 insta = { workspace = true, features = ["json"] }
 proptest = { workspace = true }
 
-# Import the real SearchResult type for proptest round-trip verification
-live-search = { path = "../live-search" }
+# Import the real SearchResult type and SSR modules for in-process server
+live-search = { path = "../live-search", features = ["ssr"] }
+
+# Gateway example for in-process HTTP tests
+gateway-example = { path = "../gateway" }
 
 # Used directly by common::json for Uuid/DateTime proptest strategies
 chrono = { workspace = true }

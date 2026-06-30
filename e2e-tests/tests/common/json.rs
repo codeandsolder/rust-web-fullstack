@@ -43,13 +43,18 @@ mod proptests {
         #[test]
         fn search_result_json_roundtrip(result in arb_search_result()) {
             let json = serde_json::to_value(&result)
-                .expect("serialization must succeed");
-            let deserialized: SearchResult =
-                serde_json::from_value(json.clone())
-                    .expect("deserialization must succeed");
+                .map_err(|e| proptest::test_runner::TestCaseError::fail(
+                    format!("serialization must succeed: {e}"))
+                )?;
+            let deserialized: SearchResult = serde_json::from_value(json.clone())
+                .map_err(|e| proptest::test_runner::TestCaseError::fail(
+                    format!("deserialization must succeed: {e}"))
+                )?;
             // Compare serialized forms since SearchResult doesn't impl PartialEq.
             let re_serialized = serde_json::to_value(&deserialized)
-                .expect("re-serialization must succeed");
+                .map_err(|e| proptest::test_runner::TestCaseError::fail(
+                    format!("re-serialization must succeed: {e}"))
+                )?;
             prop_assert_eq!(json, re_serialized);
         }
     }

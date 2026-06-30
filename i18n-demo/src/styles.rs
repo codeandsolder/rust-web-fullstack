@@ -26,7 +26,6 @@ pub const fn home_css() -> &'static str {
 mod tests {
     use super::*;
 
-    // Test for Fix 1 (C1): class constant is unhashed
     #[test]
     fn locale_btn_constant_is_unhashed() {
         assert_eq!(LOCALE_BTN, "locale-btn");
@@ -47,7 +46,6 @@ mod tests {
         assert_eq!(CLICK_COUNT, "click-count");
     }
 
-    // Test for Fix 2 (C2): CSS file must not contain :global(
     #[test]
     fn home_module_css_has_no_global_pseudo_class() {
         let css = include_str!("styles/home.module.css");
@@ -57,7 +55,6 @@ mod tests {
         );
     }
 
-    // Test for Fix 3 (C3): CSS must use [data-i18n-demo] selector
     #[test]
     fn home_module_css_uses_data_attribute_selector() {
         let css = include_str!("styles/home.module.css");
@@ -71,7 +68,6 @@ mod tests {
         );
     }
 
-    // Test for Fix 4: class constants match the selectors in CSS
     #[test]
     fn constants_match_css_selectors() {
         let css = include_str!("styles/home.module.css");

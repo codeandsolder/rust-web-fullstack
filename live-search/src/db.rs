@@ -419,6 +419,7 @@ mod server {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use anyhow::Context;
 
         /// Verify the watchdog fires when `last_recv` is older than the stale
         /// threshold. The check uses `Instant` (monotonic) so NTP step-back
@@ -496,10 +497,10 @@ mod server {
         /// ```
         #[tokio::test]
         #[ignore = "requires DATABASE_URL pointing to a live PostgreSQL instance"]
-        async fn pool_with_listener_holds_one_connection() {
+        async fn pool_with_listener_holds_one_connection() -> anyhow::Result<()> {
             let Ok(url) = std::env::var("DATABASE_URL") else {
                 eprintln!("SKIP: DATABASE_URL not set");
-                return;
+                return Ok(());
             };
 
             let pool = PgPoolOptions::new()
@@ -507,11 +508,11 @@ mod server {
                 .acquire_timeout(Duration::from_millis(500))
                 .connect(&url)
                 .await
-                .expect("connect to database");
+                .context("connect to database")?;
 
             let _listener = PgListener::connect_with(&pool)
                 .await
-                .expect("create listener");
+                .context("create listener")?;
 
             // max_connections=3, listener holds 1 → 2 connections available.
             // Launch 3 concurrent queries; the 3rd should time out.
@@ -531,6 +532,7 @@ mod server {
             );
 
             pool.close().await;
+            Ok(())
         }
     }
 }

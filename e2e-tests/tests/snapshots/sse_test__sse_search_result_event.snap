@@ -1,10 +1,11 @@
 ---
 source: e2e-tests/tests/sse_test.rs
+assertion_line: 268
 expression: value
 ---
 {
-  "type": "SearchResult",
+  "snippet": "E2E test snippet for NOTIFY→SSE verification",
   "title": "<DYNAMIC_TEST_TITLE>",
-  "url": "<DYNAMIC_TEST_URL>",
-  "snippet": "E2E test snippet for NOTIFY→SSE verification"
+  "type": "SearchResult",
+  "url": "<DYNAMIC_TEST_URL>"
 }

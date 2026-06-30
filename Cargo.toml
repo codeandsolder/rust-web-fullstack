@@ -67,8 +67,6 @@ console-subscriber = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
 proptest = "1"
-mockall = "0.15"
-httpmock = "0.8"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 

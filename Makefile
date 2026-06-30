@@ -1,4 +1,4 @@
-.PHONY: help db up down logs test test-e2e build clean nuke fmt clippy check seed
+.PHONY: help db up down logs test test-e2e test-e2e-serial build clean nuke fmt clippy check seed
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ test: ## Run unit + integration tests
 
 test-e2e: ## Run full E2E test suite (requires running services)
 	./scripts/test-e2e.sh
+
+test-e2e-serial: ## Run e2e tests serialized to one Postgres container at a time
+	cargo test -p e2e-tests --tests -- --test-threads=1
 
 build: ## Build all binaries in release mode
 	cargo build --release --workspace
