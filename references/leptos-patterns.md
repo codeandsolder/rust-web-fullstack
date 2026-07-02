@@ -615,3 +615,20 @@ cargo leptos end-to-end # build + run playwright tests
 6. **Tailwind purge in dev**: `cargo-leptos` runs Tailwind JIT in watch mode. CSS changes are hot-reloaded.
 7. **WebSocket vs SSE**: Leptos has no built-in WebSocket support. Use SSE for server-to-client, server functions for client-to-server.
 8. **Hydration mismatch**: If SSR HTML and CSR render produce different DOM, hydration fails silently. Fix by ensuring deterministic rendering or using `<Suspense>` for non-deterministic content.
+
+---
+
+## 11. ErrorBoundary + ActionForm
+
+Both are Leptos 0.8 essentials for production UI:
+
+- **`<ErrorBoundary>`** — catches rendering panics and server-fn errors in
+  its subtree; renders a `fallback` view (closure `|errors| -> impl IntoView`).
+  Place around any `<For>` over server-returned data.
+
+- **`<ActionForm action={some_action}>`** — like `<form>` but submits to
+  the bound `Action` via standard HTTP POST. Works with JS disabled
+  (progressive enhancement). Pair with `#[server]` server functions.
+
+Canonical implementations: `live-search/src/app.rs::SearchErrorBoundary` and the
+manual `<form on:submit>` in `live-search/src/app.rs::SearchPage`.

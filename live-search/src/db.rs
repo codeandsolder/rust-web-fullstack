@@ -45,6 +45,12 @@ mod server {
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    use chrono::{DateTime, Utc};
+    use uuid::Uuid;
+
     use crate::cache;
     use crate::events::SseEvent;
 
@@ -414,6 +420,105 @@ mod server {
     }
 
     // ------------------------------------------------------------------
+    // Cursor-based pagination
+    // ------------------------------------------------------------------
+
+    /// Search results with cursor-based pagination.
+    ///
+    /// `cursor` is the last row's `(created_at, id)` from the previous page;
+    /// pass `None` for the first page. The result set is bounded by `limit`,
+    /// and rows are ordered by `(created_at DESC, id DESC)` for a stable scan.
+    ///
+    /// # Errors
+    /// Returns the underlying [`sqlx::Error`] if the database query fails or
+    /// the connection cannot be acquired.
+    pub async fn search_with_cursor(
+        pool: &PgPool,
+        query: &str,
+        cursor: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> Result<Vec<super::SearchResult>, sqlx::Error> {
+        if let Some((cursor_time, cursor_id)) = cursor {
+            sqlx::query_as::<_, super::SearchResult>(
+                r"SELECT id, title, url, snippet, created_at
+                   FROM search_results
+                   WHERE fts @@ plainto_tsquery('english', $1)
+                     AND (created_at, id) < ($2, $3)
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT $4",
+            )
+            .bind(query)
+            .bind(cursor_time)
+            .bind(cursor_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        } else {
+            sqlx::query_as::<_, super::SearchResult>(
+                r"SELECT id, title, url, snippet, created_at
+                   FROM search_results
+                   WHERE fts @@ plainto_tsquery('english', $1)
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT $2",
+            )
+            .bind(query)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+    }
+
+    /// Base-64-url-encode `bytes` using the URL-safe no-pad alphabet.
+    ///
+    /// Thin wrapper around the `base64` crate's `URL_SAFE_NO_PAD` engine.
+    #[must_use]
+    pub fn base64url_encode(input: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(input)
+    }
+
+    /// Decode a base64url string back to bytes.
+    ///
+    /// Thin wrapper around the `base64` crate's `URL_SAFE_NO_PAD` engine.
+    ///
+    /// # Errors
+    /// Returns an error string if the input contains invalid base64url characters.
+    pub fn base64url_decode(input: &str) -> Result<Vec<u8>, String> {
+        URL_SAFE_NO_PAD
+            .decode(input)
+            .map_err(|e| format!("base64 decode failed: {e}"))
+    }
+
+    /// Encode a cursor as base64url of `"{timestamp_micros}|{uuid}"`.
+    #[must_use]
+    pub fn encode_cursor(created_at: DateTime<Utc>, id: Uuid) -> String {
+        let raw = format!("{}|{id}", created_at.timestamp_micros());
+        base64url_encode(raw.as_bytes())
+    }
+
+    /// Decode a cursor string back to `(DateTime<Utc>, Uuid)`.
+    ///
+    /// # Errors
+    /// Returns an error string if the base64 decoding fails, the parts are
+    /// missing, the timestamp is invalid, or the UUID is invalid.
+    pub fn decode_cursor(s: &str) -> Result<(DateTime<Utc>, Uuid), String> {
+        let bytes = base64url_decode(s)?;
+        let raw =
+            std::str::from_utf8(&bytes).map_err(|e| format!("invalid utf-8: {e}"))?;
+        let mut parts = raw.splitn(2, '|');
+        let ts_str = parts.next().ok_or_else(|| "missing timestamp".to_string())?;
+        let id_str = parts.next().ok_or_else(|| "missing uuid".to_string())?;
+        let micros: i64 = ts_str
+            .parse()
+            .map_err(|e| format!("invalid timestamp: {e}"))?;
+        let ts = DateTime::<Utc>::from_timestamp_micros(micros)
+            .ok_or_else(|| format!("invalid timestamp value: {micros}"))?;
+        let id: Uuid = id_str
+            .parse()
+            .map_err(|e| format!("invalid uuid: {e}"))?;
+        Ok((ts, id))
+    }
+
+    // ------------------------------------------------------------------
     // Tests
     // ------------------------------------------------------------------
 
@@ -486,10 +591,37 @@ mod server {
             );
             Ok(())
         }
+
+        #[test]
+        fn cursor_encode_decode_roundtrip() -> anyhow::Result<()> {
+            let original_time = Utc::now();
+            let original_id = Uuid::new_v4();
+            let encoded = super::encode_cursor(original_time, original_id);
+            let (decoded_time, decoded_id) =
+                super::decode_cursor(&encoded).map_err(|e| anyhow::anyhow!("decode failed: {e}"))?;
+            assert_eq!(
+                decoded_time.timestamp_micros(),
+                original_time.timestamp_micros()
+            );
+            assert_eq!(decoded_id, original_id);
+            Ok(())
+        }
+
+        #[test]
+        fn cursor_decode_rejects_garbage() {
+            assert!(super::decode_cursor("not-a-cursor").is_err());
+            assert!(super::decode_cursor("").is_err());
+            // Characters not in the base64url alphabet → decode failure
+            assert!(super::decode_cursor("!!!notbase64!!!").is_err());
+        }
+
     }
 }
 
 // Re-export server functions at the module level so callers can write
 // `db::create_pool(…)` etc. without changing import paths.
 #[cfg(feature = "ssr")]
-pub use server::{close_pool, create_pool, get_pool, run_pg_listener, run_watchdog, set_pool};
+pub use server::{
+    base64url_decode, base64url_encode, close_pool, create_pool, decode_cursor, encode_cursor,
+    get_pool, run_pg_listener, run_watchdog, search_with_cursor, set_pool,
+};

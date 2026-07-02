@@ -57,6 +57,7 @@ thiserror = { workspace = true }
 axum-prometheus = { workspace = true }
 moka = { workspace = true }
 leptos-forms-rs = { version = "1", features = ["ssr"] }
+base64 = { workspace = true }
 # OTel stack — gated behind `otel` feature
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -91,3 +92,11 @@ dev-tools = ["dep:console-subscriber"]
 
 [dev-dependencies]
 criterion = { workspace = true }
+
+[package.metadata.leptos]
+output-name = "live-search"
+bin-features = ["ssr"]
+lib-features = ["hydrate"]
+bin-default-features = false
+lib-default-features = false
+site-pkg-dir = "pkg"

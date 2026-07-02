@@ -173,6 +173,31 @@ pub fn App() -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
+// SearchErrorBoundary — wraps the result list in an ErrorBoundary that
+// catches rendering panics and provides a fallback error message.
+// ---------------------------------------------------------------------------
+
+#[component]
+fn SearchErrorBoundary(
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <ErrorBoundary
+            fallback=move |_errors| view! {
+                <div class="error-boundary" data-testid="error-boundary">
+                    <h3>"Something went wrong."</h3>
+                    <p>"Try reloading the page to recover."</p>
+                </div>
+            }
+        >
+            {children()}
+        </ErrorBoundary>
+    }
+}
+
+
+
+// ---------------------------------------------------------------------------
 // Search page – submit a query, display results from the server function
 // ---------------------------------------------------------------------------
 
@@ -228,45 +253,47 @@ pub fn SearchPage() -> impl IntoView {
             </button>
         </form>
 
-        <div id="results">
-            <Show when=move || action_value().is_none() fallback=|| ()>
-                <p>"Enter a query above to search."</p>
-            </Show>
+        <SearchErrorBoundary>
+            <div id="results">
+                <Show when=move || action_value().is_none() fallback=|| ()>
+                    <p>"Enter a query above to search."</p>
+                </Show>
 
-            {move || {
-                action_value()
-                    .and_then(Result::err)
-                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
-            }}
+                {move || {
+                    action_value()
+                        .and_then(Result::err)
+                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                }}
 
-            {move || {
-                action_value()
-                    .and_then(Result::ok)
-                    .map(|items| {
-                        if items.is_empty() {
-                            view! { <p>"No results found."</p> }.into_any()
-                        } else {
-                            items
-                                .iter()
-                                .cloned()
-                                .map(|r| {
-                                    let url = r.url.clone();
-                                    view! {
-                                        <div class=styles::result_item data-testid="result-item">
-                                            <h3 class=styles::result_title>
-                                                <a href=url>{r.title}</a>
-                                            </h3>
-                                            <p class=styles::result_snippet>{r.snippet}</p>
-                                            <small class=styles::result_url>{r.url}</small>
-                                        </div>
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .into_any()
-                        }
-                    })
-            }}
-        </div>
+                {move || {
+                    action_value()
+                        .and_then(Result::ok)
+                        .map(|items| {
+                            if items.is_empty() {
+                                view! { <p>"No results found."</p> }.into_any()
+                            } else {
+                                items
+                                    .iter()
+                                    .cloned()
+                                    .map(|r| {
+                                        let url = r.url.clone();
+                                        view! {
+                                            <div class=styles::result_item data-testid="result-item">
+                                                <h3 class=styles::result_title>
+                                                    <a href=url>{r.title}</a>
+                                                </h3>
+                                                <p class=styles::result_snippet>{r.snippet}</p>
+                                                <small class=styles::result_url>{r.url}</small>
+                                            </div>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .into_any()
+                            }
+                        })
+                }}
+            </div>
+        </SearchErrorBoundary>
     }
 }
 

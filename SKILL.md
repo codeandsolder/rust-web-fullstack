@@ -1479,6 +1479,122 @@ Pitfall 15 — feature-flag gating, config injection, server-fn prefix
 doubling, and `#[server]` body cfg-gating are the same whether the
 function lives in `live-search`, `i18n-demo`, or a brand-new crate.
 
+### Pattern 19: ErrorBoundary + ActionForm (Progressive Enhancement)
+
+Two complementary Leptos 0.8 patterns that make UI more robust:
+
+**ErrorBoundary** wraps a subtree and renders a fallback view when the subtree
+panics during rendering or a server function returns an unrecoverable error.
+Critical for production apps — without it, a single bad row in a list crashes
+the whole page.
+
+**ActionForm** is a `<form>` component that submits directly to a Leptos
+`Action` (server fn) via standard HTTP POST. The form works WITHOUT JavaScript
+(progressive enhancement) — even if WASM hydration fails, the form submits
+normally and the server fn handles the request.
+
+**ErrorBoundary example**: see `live-search/src/app.rs::SearchErrorBoundary`
+(wraps the result list, displays a recovery notice on panic).
+
+**ActionForm example**: see `live-search/src/app.rs::SearchPage` (uses a manual
+`<form on:submit>` because the action is also driven by a debounced
+`watch_debounced`; a pure `ActionForm` example is documented as a pattern option
+but not exercised in the live-search showcase because `ActionForm` requires
+`ServerAction<_>`, not `Action<_, _>`).
+
+When to use:
+- **ErrorBoundary**: every component that renders server-function results,
+  every `<For>` loop over data that might be malformed
+- **ActionForm**: any form where users without JS should still be able to
+  submit (public-facing sites, SEO-critical pages)
+
+### Pattern 20: Cursor-Based Pagination
+
+For result sets that may grow unbounded, never `LIMIT 20` and hope — use
+cursor-based pagination so clients can iterate without offset drift.
+
+**Server side**: the search query takes an optional cursor `(created_at, id)`
+and uses row-value comparison `(created_at, id) < ($2, $3)` in the WHERE
+clause. ORDER BY `created_at DESC, id DESC` for a stable scan.
+
+```rust
+sqlx::query_as::<_, SearchResult>(
+    r"SELECT id, title, url, snippet, created_at
+       FROM search_results
+       WHERE fts @@ plainto_tsquery('english', $1)
+         AND (created_at, id) < ($2, $3)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $4",
+)
+.bind(query)
+.bind(cursor_time)
+.bind(cursor_id)
+.bind(limit)
+.fetch_all(pool)
+.await
+```
+
+**Cursor format**: encode the last row's `(created_at, id)` as a base64url
+string of `"{timestamp_micros}|{uuid}"`. Clients pass it back as the
+`cursor` argument on the next request.
+
+```rust
+pub fn encode_cursor(created_at: DateTime<Utc>, id: Uuid) -> String;
+pub fn decode_cursor(s: &str) -> Result<(DateTime<Utc>, Uuid), String>;
+```
+
+Canonical implementation: `live-search/src/db.rs::search_with_cursor` and
+`live-search/src/db.rs::{encode_cursor, decode_cursor}`.
+
+When to use cursor vs offset:
+- **Cursor**: real-time data feeds, infinite scroll, large result sets
+- **Offset**: admin dashboards, paginated tables where users jump to page N
+
+### Pattern 21: Leptos Islands Architecture
+
+Leptos 0.8 supports an "islands" architecture where the server renders
+mostly static HTML and selectively hydrates small interactive regions.
+This is the inverse of full SSR+hydration — most of the page is plain HTML,
+and only the interactive parts become WASM.
+
+Use `#[island]` (instead of `#[component]`) for components that should
+hydrate on the client. The server still renders them as HTML, but only
+islands get the `data-island` attribute and are scheduled for hydration.
+
+```rust
+use leptos::prelude::*;
+
+#[island]
+pub fn Counter() -> impl IntoView {
+    let (count, set_count) = signal(0);
+    view! {
+        <button on:click=move |_| set_count.update(|n| *n += 1)>
+            "Count: " {count}
+        </button>
+    }
+}
+```
+
+> **Feature gate**: `#[island]` requires `leptos/experimental-islands` in
+> `Cargo.toml` features. Leptos 0.8.20+ exposes this feature; earlier
+> versions will fail to compile.
+
+Server-side rendering of an island produces the HTML; the client
+hydrates only the island, not the entire page. This is the right
+architecture for:
+- Content-heavy sites (blogs, docs, marketing pages)
+- Pages where 95% of the content is static and 5% is interactive
+- Reducing WASM bundle size and initial JS execution time
+
+When NOT to use islands:
+- Highly interactive apps (dashboards, editors) — full hydration is fine
+- Pages with heavy client-side state — islands add complexity for state
+  shared across components
+
+Live-search and i18n-demo do not currently use islands; the showcase
+demonstrates full hydration. Adopt islands when migrating to a
+content-heavy site.
+
 ---
 
 ## Common Pitfalls

@@ -43,3 +43,11 @@ proc-macro2 = "1"
 default = []
 ssr = ["dep:leptos_axum", "leptos/ssr", "leptos_i18n/ssr"]
 hydrate = ["leptos/hydrate", "leptos_i18n/hydrate"]
+
+[package.metadata.leptos]
+output-name = "i18n-demo"
+bin-features = ["ssr"]
+lib-features = ["hydrate"]
+bin-default-features = false
+lib-default-features = false
+site-pkg-dir = "pkg"
