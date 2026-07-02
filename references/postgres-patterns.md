@@ -1,3 +1,5 @@
+> Deep-dive companion to Pattern 3 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+
 # PostgreSQL + sqlx Patterns Reference
 
 ## Table of Contents

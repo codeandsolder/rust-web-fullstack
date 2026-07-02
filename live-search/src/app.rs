@@ -246,9 +246,9 @@ pub fn SearchPage() -> impl IntoView {
                         if items.is_empty() {
                             view! { <p>"No results found."</p> }.into_any()
                         } else {
-                            (*items)
-                                .clone()
-                                .into_iter()
+                            items
+                                .iter()
+                                .cloned()
                                 .map(|r| {
                                     let url = r.url.clone();
                                     view! {
@@ -335,7 +335,10 @@ pub fn LiveFeedPage() -> impl IntoView {
                                             };
                                             match serde_json::from_str::<SseEvent>(&data) {
                                                 Ok(event) => match event {
-                                                    SseEvent::Connected => {
+                                                    SseEvent::Connected {
+                                                        server_time: _,
+                                                        subscription_id: _,
+                                                    } => {
                                                         connected.set(true);
                                                     }
                                                     SseEvent::SearchResult {

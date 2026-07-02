@@ -19,6 +19,8 @@
 
 use std::sync::Arc;
 
+use jsonwebtoken::{DecodingKey, EncodingKey};
+
 use crate::pem::{ed25519_spki_der, pem_encode};
 
 /// `EdDSA` JWT issuer and audience value — shared between encoding and decoding.
@@ -50,6 +52,10 @@ pub struct Settings {
     pub jwt_private_key_pem: Arc<str>,
     /// Ed25519 public key in SPKI PEM format.
     pub jwt_public_key_pem: Arc<str>,
+    /// Pre-parsed `EdDSA` encoding key (derived from `jwt_private_key_pem`).
+    pub encoding_key: Arc<EncodingKey>,
+    /// Pre-parsed `EdDSA` decoding key (derived from `jwt_public_key_pem`).
+    pub decoding_key: Arc<DecodingKey>,
     /// Shared password that any `user_id` may submit to obtain a token.
     /// Replace with a real user database in production.
     pub default_admin_password: Arc<str>,
@@ -60,6 +66,8 @@ impl std::fmt::Debug for Settings {
         f.debug_struct("Settings")
             .field("jwt_private_key_pem", &"<redacted>")
             .field("jwt_public_key_pem", &"<redacted>")
+            .field("encoding_key", &"<redacted>")
+            .field("decoding_key", &"<redacted>")
             .field("default_admin_password", &"<redacted>")
             .finish()
     }
@@ -100,9 +108,20 @@ impl Settings {
             anyhow::bail!("ADMIN_PASSWORD must not be empty");
         }
 
+        let encoding_key = Arc::new(
+            EncodingKey::from_ed_pem(jwt_private_key_pem.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to parse EdDSA private key PEM: {e}"))?,
+        );
+        let decoding_key = Arc::new(
+            DecodingKey::from_ed_pem(jwt_public_key_pem.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to parse EdDSA public key PEM: {e}"))?,
+        );
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
+            encoding_key,
+            decoding_key,
             default_admin_password: Arc::from(default_admin_password.as_str()),
         })
     }
@@ -147,9 +166,20 @@ impl Settings {
              See settings.rs::Settings::load_dev_keys. ───"
         );
 
+        let encoding_key = Arc::new(
+            EncodingKey::from_ed_pem(private_pem.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to parse dev EdDSA private key PEM: {e}"))?,
+        );
+        let decoding_key = Arc::new(
+            DecodingKey::from_ed_pem(public_pem.as_bytes())
+                .map_err(|e| anyhow::anyhow!("failed to parse dev EdDSA public key PEM: {e}"))?,
+        );
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(private_pem.as_str()),
             jwt_public_key_pem: Arc::from(public_pem.as_str()),
+            encoding_key,
+            decoding_key,
             default_admin_password: Arc::from(admin_password),
         })
     }

@@ -1,3 +1,5 @@
+> Deep-dive companion to Pattern 1 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+
 # Leptos 0.8.x Patterns Reference
 
 ## Table of Contents

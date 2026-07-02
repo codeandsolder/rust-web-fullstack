@@ -1,3 +1,5 @@
+> Deep-dive companion to Pattern 6 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+
 # Architecture Patterns Reference
 
 ## Table of Contents

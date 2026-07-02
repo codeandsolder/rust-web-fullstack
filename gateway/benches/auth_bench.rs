@@ -15,6 +15,7 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use gateway_example::auth::{create_jwt, validate_jwt};
 use gateway_example::pem::{ed25519_pkcs8_der, ed25519_spki_der, pem_encode};
+use jsonwebtoken::{DecodingKey, EncodingKey};
 
 /// Fixed seed for deterministic benchmark keypair.
 const BENCH_SEED: [u8; 32] = [0x42u8; 32];
@@ -32,12 +33,16 @@ fn dev_keypair_pems() -> (String, String) {
 
 fn bench_sign_verify(c: &mut Criterion) {
     let (private_pem, public_pem) = dev_keypair_pems();
+    let encoding_key =
+        EncodingKey::from_ed_pem(private_pem.as_bytes()).expect("valid Ed25519 private key PEM");
+    let decoding_key =
+        DecodingKey::from_ed_pem(public_pem.as_bytes()).expect("valid Ed25519 public key PEM");
 
     c.bench_function("sign_verify", |b| {
         b.iter(|| {
-            let token = create_jwt("bench-user", black_box(&private_pem))
+            let token = create_jwt("bench-user", black_box(&encoding_key))
                 .expect("create_jwt should succeed");
-            let claims = validate_jwt(black_box(&token), black_box(&public_pem))
+            let claims = validate_jwt(black_box(&token), black_box(&decoding_key))
                 .expect("validate_jwt should succeed");
             black_box(claims.sub);
         });

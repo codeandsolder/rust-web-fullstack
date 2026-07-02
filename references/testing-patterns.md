@@ -1,3 +1,5 @@
+> Deep-dive companion to Pattern 4 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+
 # Testing Patterns Reference
 
 ## Table of Contents

@@ -75,8 +75,16 @@ fn locate_chrome() -> Option<PathBuf> {
         }
     }
     // 2. Probe Playwright cache, scanning for any chromium-NNNN subdir.
-    let base = std::env::var("PLAYWRIGHT_BROWSERS_PATH")
-        .unwrap_or_else(|_| "/home/jan/.cache/ms-playwright".to_string());
+    //
+    // The path is resolved at runtime (not hardcoded) so this works on
+    // any machine — PLAYWRIGHT_BROWSERS_PATH → $HOME/.cache/ms-playwright
+    // → /usr/share/ms-playwright (Debian package install).
+    let base = std::env::var("PLAYWRIGHT_BROWSERS_PATH").unwrap_or_else(|_| {
+        std::env::var("HOME").map_or_else(
+            |_| "/usr/share/ms-playwright".to_string(),
+            |h| format!("{h}/.cache/ms-playwright"),
+        )
+    });
     if let Ok(entries) = std::fs::read_dir(&base) {
         for entry in entries.flatten() {
             let name = entry.file_name();

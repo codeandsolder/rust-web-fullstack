@@ -42,14 +42,13 @@ fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
 
 /// Create a signed `EdDSA` JWT for the given `user_id`.
 ///
-/// The token expires 24 hours from creation. The PEM string is parsed on every
-/// call; for hot paths consider caching the [`EncodingKey`].
+/// The token expires 24 hours from creation. The caller is expected to provide
+/// a cached [`EncodingKey`] (e.g. from [`Settings::encoding_key`]).
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if the PEM key is malformed or encoding
-/// fails.
-pub fn create_jwt(user_id: &str, jwt_private_key_pem: &str) -> Result<String, AppError> {
+/// Returns [`AppError::Internal`] if encoding fails.
+pub fn create_jwt(user_id: &str, encoding_key: &EncodingKey) -> Result<String, AppError> {
     let now = Utc::now();
     let exp = unix_seconds(now + chrono::Duration::hours(24))?;
 
@@ -62,10 +61,7 @@ pub fn create_jwt(user_id: &str, jwt_private_key_pem: &str) -> Result<String, Ap
     };
 
     let header = Header::new(Algorithm::EdDSA);
-    let key = EncodingKey::from_ed_pem(jwt_private_key_pem.as_bytes())
-        .map_err(|e| AppError::internal("failed to parse `EdDSA` private key PEM", e))?;
-
-    encode(&header, &claims, &key).map_err(|e| AppError::internal("JWT encoding", e))
+    encode(&header, &claims, encoding_key).map_err(|e| AppError::internal("JWT encoding", e))
 }
 
 /// Validate an `EdDSA` JWT and return its [`Claims`].
@@ -74,18 +70,15 @@ pub fn create_jwt(user_id: &str, jwt_private_key_pem: &str) -> Result<String, Ap
 ///
 /// Returns [`AppError::TokenExpired`] if the token has expired,
 /// [`AppError::InvalidSignature`] if the signature is invalid, or
-/// [`AppError::Jwt`] for other decoding / PEM-parsing errors.
-pub fn validate_jwt(token: &str, jwt_public_key_pem: &str) -> Result<Claims, AppError> {
+/// [`AppError::Jwt`] for other decoding errors.
+pub fn validate_jwt(token: &str, decoding_key: &DecodingKey) -> Result<Claims, AppError> {
     use jsonwebtoken::errors::ErrorKind;
 
     let mut validation = Validation::new(Algorithm::EdDSA);
     validation.set_issuer(&[JWT_ISS]);
     validation.set_audience(&[JWT_ISS]);
 
-    let key = DecodingKey::from_ed_pem(jwt_public_key_pem.as_bytes())
-        .map_err(|e| AppError::internal("failed to parse `EdDSA` public key PEM", e))?;
-
-    decode::<Claims>(token, &key, &validation)
+    decode::<Claims>(token, decoding_key, &validation)
         .map(|data| data.claims)
         .map_err(|e| match e.kind() {
             ErrorKind::ExpiredSignature => AppError::TokenExpired(e),
@@ -114,12 +107,14 @@ mod tests {
     #[test]
     fn sign_and_verify_roundtrip() -> anyhow::Result<()> {
         let (private_pem, public_pem) = dev_keypair_pems()?;
+        let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
+        let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
         // Sign
-        let token = create_jwt("test-user", &private_pem)?;
+        let token = create_jwt("test-user", &encoding_key)?;
 
         // Verify
-        let claims = validate_jwt(&token, &public_pem)?;
+        let claims = validate_jwt(&token, &decoding_key)?;
         assert_eq!(claims.sub, "test-user");
         assert_eq!(claims.iss, JWT_ISS);
         assert_eq!(claims.aud, JWT_ISS);
@@ -130,6 +125,8 @@ mod tests {
     #[test]
     fn rejects_wrong_key() -> anyhow::Result<()> {
         let (private_pem, _) = dev_keypair_pems()?;
+        let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
+
         // Different seed → different key pair
         let wrong_seed = [2u8; 32];
         let wrong_key_pair = Ed25519KeyPair::from_seed_unchecked(&wrong_seed)?;
@@ -137,10 +134,11 @@ mod tests {
             "PUBLIC KEY",
             &ed25519_spki_der(wrong_key_pair.public_key().as_ref()),
         );
+        let wrong_decoding_key = DecodingKey::from_ed_pem(wrong_public_pem.as_bytes())?;
 
-        let token = create_jwt("test-user", &private_pem)?;
+        let token = create_jwt("test-user", &encoding_key)?;
 
-        let result = validate_jwt(&token, &wrong_public_pem);
+        let result = validate_jwt(&token, &wrong_decoding_key);
         assert!(result.is_err());
         assert!(matches!(result, Err(AppError::InvalidSignature(_))));
         Ok(())
@@ -149,7 +147,8 @@ mod tests {
     #[test]
     fn rejects_garbage_token() -> anyhow::Result<()> {
         let (_, public_pem) = dev_keypair_pems()?;
-        let result = validate_jwt("this.is.not.a.jwt", &public_pem);
+        let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
+        let result = validate_jwt("this.is.not.a.jwt", &decoding_key);
         assert!(result.is_err());
         Ok(())
     }
@@ -171,8 +170,10 @@ mod tests {
         let key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
         let token = jsonwebtoken::encode(&header, &expired, &key)?;
 
+        let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
+
         // Validate — should fail with TokenExpired
-        let result = validate_jwt(&token, &public_pem);
+        let result = validate_jwt(&token, &decoding_key);
         assert!(result.is_err());
         assert!(matches!(result, Err(AppError::TokenExpired(_))));
         Ok(())

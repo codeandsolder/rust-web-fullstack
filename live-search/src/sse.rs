@@ -9,6 +9,7 @@ use std::convert::Infallible;
 use std::sync::OnceLock;
 
 use axum::response::sse::{Event, KeepAlive, Sse};
+use chrono::Utc;
 use futures::Stream;
 use futures::StreamExt;
 use futures::future;
@@ -16,6 +17,7 @@ use futures::stream::{self, BoxStream};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use uuid::Uuid;
 
 use crate::events::SseEvent;
 
@@ -62,7 +64,10 @@ fn config_error_event() -> Event {
 )]
 pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // Emit a "Connected" event immediately, then forward broadcast events.
-    let connected = SseEvent::Connected;
+    let connected = SseEvent::Connected {
+        server_time: Utc::now(),
+        subscription_id: Uuid::new_v4(),
+    };
 
     let stream: BoxStream<'static, Result<Event, Infallible>> = get_broadcast().map_or_else(
         || {
@@ -98,7 +103,7 @@ pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>>
 /// so the operator notices (no silent swallowing).
 fn event_to_sse(event: &SseEvent) -> Event {
     let name = match event {
-        SseEvent::Connected => "connected",
+        SseEvent::Connected { .. } => "connected",
         SseEvent::SearchResult { .. } => "search_result",
         SseEvent::StreamLagged { .. } => "stream_lagged",
     };

@@ -111,6 +111,11 @@ fn init_tracing() {
         .init();
 }
 
+/// Health check endpoint (K8s/Docker liveness probe).
+async fn health_handler() -> impl IntoResponse {
+    (StatusCode::OK, "ok")
+}
+
 /// Fallback handler (404).
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
@@ -249,6 +254,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
             let lo = leptos_options.clone();
             move || app::shell(lo.clone())
         })
+        .route("/health", get(health_handler))
         .fallback(fallback_handler);
 
     // Prometheus metrics endpoint — available when `otel` feature is active.

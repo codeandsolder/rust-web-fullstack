@@ -12,7 +12,7 @@
 
 use axum::{
     Router,
-    response::{Html, Json},
+    response::{Json, Redirect},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
@@ -20,19 +20,6 @@ use utoipa::ToSchema;
 
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
-
-/// Static HTML page that redirects to `/health`.
-const REDIRECT_PAGE: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=/health">
-  <title>Gateway Monitor</title>
-</head>
-<body>
-  <p>Service status has moved to the <a href="/health">/health</a> endpoint.</p>
-</body>
-</html>"#;
 
 #[derive(Debug)]
 pub struct MonitorService;
@@ -72,17 +59,17 @@ pub struct MonitorHealthResponse {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Renders a redirect page pointing to `/health`.
+/// Redirects to the aggregate `/health` endpoint.
 #[utoipa::path(
     get,
     path = "/monitor/dashboard",
     responses(
-        (status = 200, description = "HTML redirect page", content_type = "text/html"),
+        (status = 303, description = "Redirect (303 SEE_OTHER) to /health"),
     ),
     tag = "monitor",
 )]
-async fn dashboard_handler() -> Html<&'static str> {
-    Html(REDIRECT_PAGE)
+async fn dashboard_handler() -> Redirect {
+    Redirect::to("/health")
 }
 
 /// Monitor service health check.
@@ -99,4 +86,39 @@ async fn monitor_health() -> Json<MonitorHealthResponse> {
         status: "ok".to_string(),
         service: "monitor".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn dashboard_redirects_to_health() -> anyhow::Result<()> {
+        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let state = crate::gateway::GatewayState {
+            tx: tokio::sync::broadcast::channel(16).0,
+            services: vec![],
+            modules: vec![],
+            settings,
+        };
+
+        let app = MonitorService.router().with_state(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/dashboard")
+                    .body(axum::body::Body::empty())?,
+            )
+            .await?;
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get("location").and_then(|v| v.to_str().ok()),
+            Some("/health"),
+        );
+        Ok(())
+    }
 }

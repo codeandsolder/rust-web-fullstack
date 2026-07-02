@@ -59,6 +59,8 @@ Last verified against the canonical `Cargo.lock` in this directory on 2026-06-29
 | `gloo-timers` | 0.4 | `futures` | `gloo_timers::future::sleep` requires the `futures` feature |
 | `tracing` | 0.1 | (default) | Structured logging — never `println!` or `log` |
 | `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` (Pattern 0) |
+| `lepticons` | 0.13 | (default) | Lucide icon set for Leptos |
+| `chrono` | 0.4 | `serde` | Timestamp arithmetic and serde roundtripping for `DateTime<Utc>` |
 
 ### Architecture Decision Tree
 
@@ -540,6 +542,34 @@ sqlx::query_as::<_, SearchResult>(
 ).bind(query_string).fetch_all(&pool).await?;
 ```
 
+#### Trigger that bridges INSERT → NOTIFY
+
+```sql
+-- From live-search/migrations/001_create_search_results.up.sql
+CREATE OR REPLACE FUNCTION notify_search_result()
+RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify(
+        'search_results',
+        json_build_object(
+            'type', 'SearchResult',
+            'id', NEW.id,
+            'title', NEW.title,
+            'created_at', NEW.created_at
+        )::text
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_search_result_notify
+    AFTER INSERT ON search_results
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_search_result();
+```
+
+The pipeline diagram in Pattern 2 only works because of this trigger — without it, `INSERT` rows never reach the PgListener.
+
 ### Pattern 4: E2E Test with chromiumoxide
 
 ```rust
@@ -738,6 +768,22 @@ fn build_gateway(state: GatewayState) -> Router {
 > `Jwt`, `Settings`, `LoginRateLimiter`, and aggregated health checks see
 > `./gateway/src/gateway.rs` and `./gateway/src/auth.rs`.
 
+#### Local dev keypair (`--dev-keys`)
+
+The `--dev-keys` flag generates an ephemeral EdDSA keypair for local
+development, removing the need to configure JWKS or real signing keys.
+
+- **Requires `ALLOW_DEV_KEYS=1`** env var (defence in depth — prevents
+  accidental use in deployment)
+- Generated keypair is held only in memory; only FNV-1a fingerprints are
+  logged for diagnostic correlation
+- **Never use in production** — the private key material is ephemeral and
+  cannot be rotated
+- See `gateway/src/settings.rs::Settings::load_dev_keys` for the
+  implementation. The binary entrypoint calls
+  `Settings::load_dev_keys_from_env` which reads `ADMIN_PASSWORD`
+  from the environment and delegates to `load_dev_keys`.
+
 ### Pattern 7: JavaScript-Driven SSE Detection (for Chrome DevTools MCP)
 
 ```javascript
@@ -916,6 +962,40 @@ pub mod server {
 > Both forms compile and behave identically at runtime — pick whichever fits
 > your routing style. See the `Router<S> → Router<()>` conversion at
 > `live-search/src/main.rs:215`.
+
+### Scoped CSS with stylance
+
+The workspace uses [`stylance`](https://crates.io/crates/stylance) for
+scoped CSS without a build-step dependency:
+
+```rust
+// In your Leptos component file
+stylance::import_style!(pub css, "styles.module.css");
+// `css` is a namespace module with typed identifiers:
+//   css::nav, css::container, css::search_input, etc.
+// Re-export for callers:
+pub use css::*;
+```
+
+Callers then write `styles::nav` instead of raw class name strings:
+
+```rust
+use crate::styles;
+
+view! {
+    <nav class=styles::nav>
+        <input class=styles::search_input type="text" />
+    </nav>
+}
+```
+
+Key properties:
+- **No `stylance-cli` build step needed** — the `stylance!` proc-macro
+  runs at compile time, rewriting class names directly in the generated
+  code
+- CSS files live next to their component (`styles.module.css`), co-located
+  with the Rust source
+- See `live-search/src/styles.rs` for the workspace's canonical usage
 
 ### Pattern 11: Action.value() vs Action.input()
 

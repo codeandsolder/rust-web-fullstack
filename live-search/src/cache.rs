@@ -18,9 +18,10 @@
 //! not affect this module. It is purely a `moka`-backed cache.
 
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::time::Instant;
 
 use moka::future::Cache;
 
@@ -63,10 +64,15 @@ pub async fn insert(query: String, results: Arc<Vec<SearchResult>>) {
 /// Rate-limit window: at most one full invalidation per second.  This
 /// prevents a burst of `NOTIFY` events (e.g. from a bulk INSERT) from
 /// hammering the cache when a single invalidation is sufficient.
-const INVALIDATE_COOLDOWN_MS: u64 = 1_000;
+const INVALIDATE_COOLDOWN: Duration = Duration::from_secs(1);
 
-/// Monotonic timestamp (ms since Unix epoch) of the last invalidation.
-static LAST_INVALIDATE_MS: AtomicU64 = AtomicU64::new(0);
+/// Monotonic instant of the last invalidation (or `None` on first call).
+///
+/// Uses `Instant` (monotonic clock) instead of `SystemTime` so that NTP
+/// clock jumps cannot silently reset the cooldown.  The `Mutex` guards
+/// the critical section so concurrent calls are serialised.
+static LAST_INVALIDATE: LazyLock<tokio::sync::Mutex<Option<Instant>>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(None));
 
 /// Invalidate every cached entry.
 ///
@@ -77,23 +83,15 @@ static LAST_INVALIDATE_MS: AtomicU64 = AtomicU64::new(0);
 /// Concurrent calls beyond the first within the window are silently
 /// dropped — one invalidation clears everything regardless of how many
 /// rows arrived.
-pub fn invalidate_all() {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| {
-            // u128→u64 truncation is acceptable here: the value is monotonic
-            // ms since epoch, which for the next 500 million years fits in
-            // 63 bits.  A u64 overflow would require ~584 million years.
-            #[allow(clippy::cast_possible_truncation)]
-            let ms = d.as_millis() as u64;
-            ms
-        })
-        .unwrap_or(0);
-    let last = LAST_INVALIDATE_MS.load(Ordering::Relaxed);
-    if now_ms.saturating_sub(last) < INVALIDATE_COOLDOWN_MS {
+pub async fn invalidate_all() {
+    let mut last = LAST_INVALIDATE.lock().await;
+    if let Some(prev) = *last
+        && prev.elapsed() < INVALIDATE_COOLDOWN
+    {
         return; // rate-limited
     }
-    LAST_INVALIDATE_MS.store(now_ms, Ordering::Relaxed);
+    *last = Some(Instant::now());
+    drop(last); // release lock early before the cache invalidation
     if let Some(cache) = SEARCH_CACHE.get() {
         cache.invalidate_all();
         tracing::debug!("search cache invalidated via NOTIFY");
@@ -181,7 +179,7 @@ mod tests {
         insert("test-inv-key1".to_string(), arc.clone()).await;
         insert("test-inv-key2".to_string(), arc.clone()).await;
         assert!(get("test-inv-key1").await.is_some());
-        invalidate_all();
+        invalidate_all().await;
         assert!(get("test-inv-key1").await.is_none());
         assert!(get("test-inv-key2").await.is_none());
     }

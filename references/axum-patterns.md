@@ -1,3 +1,5 @@
+> Deep-dive companion to Pattern 2 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+
 # Axum 0.8 Patterns Reference
 
 ## Table of Contents

@@ -153,7 +153,7 @@ mod server {
     /// Intentionally **not** `#[tracing::instrument]` — the record-via-current-span
     /// pattern is fragile because fmt layers **append** field values instead of
     /// replacing them; a single `tracing::debug!` at the call site avoids that.
-    fn forward_notification(
+    async fn forward_notification(
         tx: &broadcast::Sender<SseEvent>,
         notification: &sqlx::postgres::PgNotification,
     ) {
@@ -186,7 +186,7 @@ mod server {
 
                 // Data has changed — invalidate the search cache so the next
                 // search query re-fetches from the database.
-                cache::invalidate_all();
+                cache::invalidate_all().await;
             }
             Err(e) => {
                 // Do NOT log the full payload: it is unbounded user content and
@@ -322,7 +322,7 @@ mod server {
                         match recv {
                             Ok(notification) => {
                                 backoff = Duration::from_millis(BACKOFF_FLOOR_MS);
-                                forward_notification(&tx, &notification);
+                                forward_notification(&tx, &notification).await;
                             }
                             Err(e) => {
                                 tracing::error!(

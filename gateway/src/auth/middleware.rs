@@ -42,7 +42,7 @@ pub async fn auth_middleware(
     let claims = auth_header
         .and_then(|v| v.strip_prefix("Bearer "))
         .and_then(
-            |token| match validate_jwt(token, &state.settings.jwt_public_key_pem) {
+            |token| match validate_jwt(token, &state.settings.decoding_key) {
                 Ok(claims) => Some(claims),
                 Err(e) => {
                     // Log the validation failure at debug! — routine attacker

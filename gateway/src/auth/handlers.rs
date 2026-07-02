@@ -110,7 +110,7 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&user_id, &s.jwt_private_key_pem)?;
+    let token = create_jwt(&user_id, &s.encoding_key)?;
     Ok(Json(LoginResponse { token, user_id }))
 }
 
@@ -140,8 +140,8 @@ pub async fn refresh_handler(
         .and_then(|v| v.as_str())
         .ok_or(AppError::AuthError)?;
 
-    let claims = super::jwt::validate_jwt(token_str, &state.settings.jwt_public_key_pem)?;
-    let new_token = create_jwt(&claims.sub, &state.settings.jwt_private_key_pem)?;
+    let claims = super::jwt::validate_jwt(token_str, &state.settings.decoding_key)?;
+    let new_token = create_jwt(&claims.sub, &state.settings.encoding_key)?;
 
     Ok(Json(RefreshResponse { token: new_token }))
 }

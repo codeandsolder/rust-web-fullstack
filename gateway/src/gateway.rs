@@ -102,7 +102,9 @@ pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     settings: settings::Settings,
 ) -> Result<Router, anyhow::Error> {
-    let (tx, _rx) = broadcast::channel(100);
+    // 256 matches live-search's broadcast buffer size, providing room for ~256
+    // concurrent subscribers before lag events fire.
+    let (tx, _rx) = broadcast::channel(256);
 
     let service_infos: Vec<ServiceInfo> = modules
         .iter()
@@ -174,7 +176,7 @@ pub fn build_gateway_with_settings(
         .route("/auth/login", post(auth::login_handler))
         .layer(login_governor);
 
-    // --- Everything else ---
+    // --- Everything else (general governor wraps non-login routes only) ---
     let other_router = Router::new()
         .route("/health", get(health_handler))
         .route("/events", get(sse::sse_handler))
@@ -194,8 +196,7 @@ pub fn build_gateway_with_settings(
         )
         .merge(service_router)
         .merge(crate::openapi::swagger_ui_router())
-        .layer(general_governor)
-        .merge(login_router);
+        .layer(general_governor);
 
     // --- Assemble final router with shared middleware ---
     //
@@ -205,6 +206,7 @@ pub fn build_gateway_with_settings(
     //
     // Middleware added LAST runs FIRST on incoming requests.
     let app = other_router
+        .merge(login_router) // login governor runs before general governor
         .layer(csrf_layer)
         .layer(session_layer)
         .layer(TimeoutLayer::with_status_code(

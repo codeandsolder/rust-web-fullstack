@@ -9,7 +9,9 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Serialize or deserialize an `Arc<str>` as a plain JSON string.
 mod arc_str_serde {
@@ -41,7 +43,13 @@ mod arc_str_serde {
 #[serde(tag = "type")]
 #[non_exhaustive]
 pub enum SseEvent {
-    Connected,
+    Connected {
+        /// Monotonic server timestamp at the moment the connection was
+        /// established.
+        server_time: DateTime<Utc>,
+        /// Unique subscription identifier for this SSE connection.
+        subscription_id: Uuid,
+    },
     SearchResult {
         /// The three String fields are stored as `Arc<str>` so that
         /// `broadcast::Sender::send` only bumps a ref-count per subscriber
