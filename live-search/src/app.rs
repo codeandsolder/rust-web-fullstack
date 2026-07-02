@@ -151,16 +151,18 @@ pub fn App() -> impl IntoView {
         <Title text="Live Search" />
 
         <Router>
-            <nav class={styles::nav}>
-                <a class={styles::nav_link} href="/">
-                    <Icon glyph=LucideGlyph::Search size="16" />" Search"
+            <nav class=styles::nav>
+                <a class=styles::nav_link href="/">
+                    <Icon glyph=LucideGlyph::Search size="16" />
+                    " Search"
                 </a>
                 " | "
-                <a class={styles::nav_link} href="/live">
-                    <Icon glyph=LucideGlyph::Radio size="16" />" Live Feed"
+                <a class=styles::nav_link href="/live">
+                    <Icon glyph=LucideGlyph::Radio size="16" />
+                    " Live Feed"
                 </a>
             </nav>
-            <main class={styles::main}>
+            <main class=styles::main>
                 <FlatRoutes fallback=|| view! { <p>"Page not found."</p> }>
                     <Route path=path!("/") view=SearchPage />
                     <Route path=path!("/live") view=LiveFeedPage />
@@ -212,55 +214,58 @@ pub fn SearchPage() -> impl IntoView {
                 ev.prevent_default();
                 search_action.dispatch(query.get());
             }
-            class={styles::form}
+            class=styles::form
         >
             <input
                 type="text"
                 placeholder="Enter search query..."
                 bind:value=(query, set_query)
-                class={styles::input}
+                data-testid="search-input"
+                class=styles::input
             />
-            <button type="submit" class={styles::button}>
+            <button type="submit" data-testid="search-submit" class=styles::button>
                 "Search"
             </button>
         </form>
 
         <div id="results">
-            <Show when=move || action_value().is_none()
-                fallback=|| ()>
+            <Show when=move || action_value().is_none() fallback=|| ()>
                 <p>"Enter a query above to search."</p>
             </Show>
 
-            {move || action_value()
-                .and_then(Result::err)
-                .map(|e| view! { <p class="error">{e.to_string()}</p> })
-            }
+            {move || {
+                action_value()
+                    .and_then(Result::err)
+                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            }}
 
-            {move || action_value()
-                .and_then(Result::ok)
-                .map(|items| {
-                    if items.is_empty() {
-                        view! { <p>"No results found."</p> }.into_any()
-                    } else {
-                        (*items).clone()
-                            .into_iter()
-                            .map(|r| {
-                                let url = r.url.clone();
-                                view! {
-                                    <div class={styles::result_item}>
-                                        <h3 class={styles::result_title}>
-                                            <a href={url}>{r.title}</a>
-                                        </h3>
-                                        <p class={styles::result_snippet}>{r.snippet}</p>
-                                        <small class={styles::result_url}>{r.url}</small>
-                                    </div>
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .into_any()
-                    }
-                })
-            }
+            {move || {
+                action_value()
+                    .and_then(Result::ok)
+                    .map(|items| {
+                        if items.is_empty() {
+                            view! { <p>"No results found."</p> }.into_any()
+                        } else {
+                            (*items)
+                                .clone()
+                                .into_iter()
+                                .map(|r| {
+                                    let url = r.url.clone();
+                                    view! {
+                                        <div class=styles::result_item data-testid="result-item">
+                                            <h3 class=styles::result_title>
+                                                <a href=url>{r.title}</a>
+                                            </h3>
+                                            <p class=styles::result_snippet>{r.snippet}</p>
+                                            <small class=styles::result_url>{r.url}</small>
+                                        </div>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .into_any()
+                        }
+                    })
+            }}
         </div>
     }
 }
@@ -387,14 +392,22 @@ pub fn LiveFeedPage() -> impl IntoView {
 
     view! {
         <h2>"Live Feed"</h2>
-        <p>
-            "Results appear below in real time as they are inserted into the database."
-        </p>
+        <p>"Results appear below in real time as they are inserted into the database."</p>
         {move || {
             if connected.get() {
-                view! { <p class={styles::connected}>"✓ Connected to live feed"</p> }.into_any()
+                view! {
+                    <p class=styles::connected data-testid="sse-status">
+                        "✓ Connected to live feed"
+                    </p>
+                }
+                    .into_any()
             } else {
-                view! { <p class={styles::disconnected}>"Connecting …"</p> }.into_any()
+                view! {
+                    <p class=styles::disconnected data-testid="sse-status">
+                        "Connecting …"
+                    </p>
+                }
+                    .into_any()
             }
         }}
         <div id="live-results">
@@ -407,10 +420,10 @@ pub fn LiveFeedPage() -> impl IntoView {
                         .iter()
                         .map(|r| {
                             view! {
-                                <div class={styles::result_item}>
-                                    <h3 class={styles::result_title}>{r.title.clone()}</h3>
-                                    <p class={styles::result_snippet}>{r.snippet.clone()}</p>
-                                    <small class={styles::result_url}>{r.url.clone()}</small>
+                                <div class=styles::result_item data-testid="live-result">
+                                    <h3 class=styles::result_title>{r.title.clone()}</h3>
+                                    <p class=styles::result_snippet>{r.snippet.clone()}</p>
+                                    <small class=styles::result_url>{r.url.clone()}</small>
                                 </div>
                             }
                         })

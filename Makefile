@@ -1,4 +1,4 @@
-.PHONY: help db up down logs test test-e2e test-e2e-serial build clean nuke fmt clippy check seed
+.PHONY: help db up down logs test test-e2e test-e2e-serial build clean nuke fmt fmt-all clippy check seed
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -37,6 +37,16 @@ nuke: clean ## Full cleanup including Docker volumes
 	docker compose down -v
 
 fmt: ## Format all Rust code
+	cargo fmt --all
+
+fmt-all: ## Format all Rust code + view! macros
+	@if command -v leptosfmt >/dev/null 2>&1; then \
+		find live-search i18n-demo -name '*.rs' -print | while read -r f; do \
+			leptosfmt --rustfmt --stdin --quiet < "$$f" > "$$f.tmp" && mv "$$f.tmp" "$$f"; \
+		done; \
+	else \
+		echo "leptosfmt not installed; install with: cargo install leptosfmt --locked"; \
+	fi
 	cargo fmt --all
 
 clippy: ## Run clippy lints

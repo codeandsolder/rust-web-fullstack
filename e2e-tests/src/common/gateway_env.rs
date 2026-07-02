@@ -4,37 +4,27 @@
 //! session / governor middleware so that auth tests can POST without CSRF
 //! tokens.  The server is cleaned up when [`GatewayEnv`] is dropped.
 
-// Each e2e-tests/tests/*.rs binary compiles its own copy of this module.
-// Helper items used by some but not all binaries are kept public and
-// suppressed here rather than annotated individually.
-#![allow(dead_code, reason = "Some helpers unused per test-binary compilation")]
-
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    Router,
-    extract::State,
-    middleware,
-    response::Json,
+    Router, middleware,
     routing::{get, post},
 };
-use futures::future::join_all;
-use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use gateway_example::gateway::GatewayState;
+use gateway_example::gateway::{GatewayState, health_handler, root_handler};
 use gateway_example::module::{ServiceInfo, ServiceModule};
 use gateway_example::sse::GatewayEvent;
 
 /// Synthetic admin password used for in-test gateway launches.
 ///
 /// The gateway `Settings` requires some non-empty `default_admin_password`; the
-/// tests log in with this constant value via [`GatewayEnv::login`].
+/// tests log in with this constant value via the gateway's HTTP login endpoint
+/// (`POST /auth/login`).
 pub const TEST_ADMIN_PASSWORD: &str = "synthetic-gateway-test-password";
 
 /// RAII guard that runs a gateway server in the background on a random port.
@@ -224,10 +214,7 @@ fn build_test_gateway(
         settings,
     };
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = gateway_example::cors::cors_layer();
 
     Router::new()
         .route("/", get(root_handler))
@@ -253,49 +240,4 @@ fn build_test_gateway(
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
-}
-
-/// Inline root handler (replicates `gateway::root_handler` which is `pub(crate)`).
-async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
-    Json(json!({
-        "gateway": "Gateway Example",
-        "version": "0.1.0",
-        "services": state.services,
-    }))
-}
-
-/// Inline health handler (replicates `gateway::health_handler` which is `pub(crate)`).
-async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
-    let results = join_all(state.modules.iter().map(|module| async {
-        let status =
-            match tokio::time::timeout(std::time::Duration::from_secs(5), module.health_check())
-                .await
-            {
-                Ok(Ok(())) => "healthy",
-                Ok(Err(e)) => {
-                    tracing::warn!(name = module.name(), error = %e, "health check failed");
-                    "unhealthy"
-                }
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        name = module.name(),
-                        timeout_ms = 5000u64,
-                        "health check timed out"
-                    );
-                    "unhealthy"
-                }
-            };
-        json!({
-            "name": module.name(),
-            "path": module.path(),
-            "enabled": module.enabled(),
-            "status": status,
-        })
-    }))
-    .await;
-
-    Json(json!({
-        "gateway": "ok",
-        "services": results,
-    }))
 }

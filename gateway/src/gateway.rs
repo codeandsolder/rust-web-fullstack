@@ -19,6 +19,7 @@ use axum::middleware as axum_mw;
 use axum::{
     Router,
     extract::State,
+    http::StatusCode,
     middleware,
     response::Json,
     routing::{get, post},
@@ -28,7 +29,6 @@ use axum_tower_sessions_csrf::CsrfMiddleware;
 use futures::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tower_sessions::SessionManagerLayer;
@@ -89,10 +89,10 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
     build_gateway_with_settings(modules, settings)
 }
 
-/// Compose every `ServiceModule` with pre-loaded [`settings`].
+/// Compose every `ServiceModule` with pre-loaded [`settings::Settings`].
 ///
 /// Identical to [`build_gateway`] but accepts an already-constructed
-/// [`Settings`] value (useful when `--dev-keys` was passed at startup).
+/// [`settings::Settings`] value (useful when `--dev-keys` was passed at startup).
 ///
 /// # Errors
 ///
@@ -155,7 +155,7 @@ pub fn build_gateway_with_settings(
     // --- Session layer ---
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false)
+        .with_secure(secure_cookie_from_env())
         .with_same_site(tower_sessions::cookie::SameSite::Lax);
 
     // --- CSRF layer ---
@@ -167,10 +167,7 @@ pub fn build_gateway_with_settings(
     let csrf_layer = axum_mw::from_fn(CsrfMiddleware::middleware);
 
     // --- CORS ---
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = crate::cors::cors_layer();
 
     // --- Login route (with its own strict rate limiter) ---
     let login_router = Router::new()
@@ -223,24 +220,42 @@ pub fn build_gateway_with_settings(
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Whether the session cookie should carry the `Secure` flag.
+///
+/// Reads `SESSION_COOKIE_SECURE` from the environment.  Defaults to `true`
+/// (secure — fail safe).  Recognised "off" values: `0`, `false`, `no`, `off`.
+fn secure_cookie_from_env() -> bool {
+    std::env::var("SESSION_COOKIE_SECURE").map_or(true, |v| {
+        !matches!(v.as_str(), "0" | "false" | "no" | "off")
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
 /// Per-module health probe timeout.
-const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+pub const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Aggregate health check — probes every registered service module in
 /// parallel, each capped at [`HEALTH_CHECK_TIMEOUT`].
+///
+/// Returns `200 OK` when all services report healthy, `503 SERVICE_UNAVAILABLE`
+/// when any service is unhealthy or times out.
 #[utoipa::path(
     get,
     path = "/health",
     responses(
         (status = 200, description = "Gateway and all services healthy"),
+        (status = 503, description = "Gateway degraded — one or more services unhealthy"),
     ),
     tag = "gateway",
 )]
 #[instrument(skip(state))]
-pub(crate) async fn health_handler(State(state): State<GatewayState>) -> Json<Value> {
+pub async fn health_handler(State(state): State<GatewayState>) -> (StatusCode, Json<Value>) {
     let results = join_all(state.modules.iter().map(|module| async {
         let status = match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
             Ok(Ok(())) => "healthy",
@@ -270,10 +285,20 @@ pub(crate) async fn health_handler(State(state): State<GatewayState>) -> Json<Va
     }))
     .await;
 
-    Json(json!({
-        "gateway": "ok",
-        "services": results,
-    }))
+    let any_unhealthy = results.iter().any(|r| r["status"] != "healthy");
+    let gateway_status = if any_unhealthy { "degraded" } else { "ok" };
+    let http_status = if any_unhealthy {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    (
+        http_status,
+        Json(json!({
+            "gateway": gateway_status,
+            "services": results,
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -281,10 +306,65 @@ pub(crate) async fn health_handler(State(state): State<GatewayState>) -> Json<Va
 // ---------------------------------------------------------------------------
 
 /// Root endpoint — returns the list of available services.
-pub(crate) async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
+pub async fn root_handler(State(state): State<GatewayState>) -> Json<Value> {
     Json(json!({
         "gateway": "Gateway Example",
         "version": env!("CARGO_PKG_VERSION"),
         "services": state.services,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::State;
+    use futures::future::FutureExt;
+
+    struct FailingService;
+
+    impl crate::module::ServiceModule for FailingService {
+        fn name(&self) -> &'static str {
+            "failing"
+        }
+
+        fn description(&self) -> &'static str {
+            "always unhealthy (for tests)"
+        }
+
+        fn router(&self) -> axum::Router<GatewayState> {
+            axum::Router::new()
+        }
+
+        fn health_check(
+            &self,
+        ) -> futures::future::BoxFuture<'_, Result<(), crate::module::ServiceHealthError>> {
+            async {
+                Err(crate::module::ServiceHealthError {
+                    reason: "test-induced failure".into(),
+                })
+            }
+            .boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_returns_503_when_any_service_unhealthy() -> anyhow::Result<()> {
+        let (tx, _rx) = tokio::sync::broadcast::channel(100);
+        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let modules: Vec<Arc<dyn crate::module::ServiceModule>> = vec![Arc::new(FailingService)];
+        let state = GatewayState {
+            tx,
+            services: vec![],
+            modules,
+            settings,
+        };
+
+        let (status, _body) = health_handler(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        Ok(())
+    }
 }

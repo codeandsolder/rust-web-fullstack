@@ -79,7 +79,7 @@ impl IntoResponse for AppError {
                 unauthenticated("Authentication failed")
             }
             Self::TokenExpired(e) => {
-                tracing::warn!(kind = %jwt_kind(&e), "token expired");
+                tracing::debug!(kind = %jwt_kind(&e), "token expired");
                 unauthenticated("Token expired")
             }
             Self::InvalidSignature(e) => {

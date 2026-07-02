@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use moka::future::Cache;
@@ -59,11 +60,40 @@ pub async fn insert(query: String, results: Arc<Vec<SearchResult>>) {
     }
 }
 
+/// Rate-limit window: at most one full invalidation per second.  This
+/// prevents a burst of `NOTIFY` events (e.g. from a bulk INSERT) from
+/// hammering the cache when a single invalidation is sufficient.
+const INVALIDATE_COOLDOWN_MS: u64 = 1_000;
+
+/// Monotonic timestamp (ms since Unix epoch) of the last invalidation.
+static LAST_INVALIDATE_MS: AtomicU64 = AtomicU64::new(0);
+
 /// Invalidate every cached entry.
 ///
 /// Called on every `NOTIFY` from the `search_results` channel so that
 /// subsequent searches reflect the updated data.
+///
+/// Rate-limited to at most one call per second.
+/// Concurrent calls beyond the first within the window are silently
+/// dropped — one invalidation clears everything regardless of how many
+/// rows arrived.
 pub fn invalidate_all() {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| {
+            // u128→u64 truncation is acceptable here: the value is monotonic
+            // ms since epoch, which for the next 500 million years fits in
+            // 63 bits.  A u64 overflow would require ~584 million years.
+            #[allow(clippy::cast_possible_truncation)]
+            let ms = d.as_millis() as u64;
+            ms
+        })
+        .unwrap_or(0);
+    let last = LAST_INVALIDATE_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last) < INVALIDATE_COOLDOWN_MS {
+        return; // rate-limited
+    }
+    LAST_INVALIDATE_MS.store(now_ms, Ordering::Relaxed);
     if let Some(cache) = SEARCH_CACHE.get() {
         cache.invalidate_all();
         tracing::debug!("search cache invalidated via NOTIFY");

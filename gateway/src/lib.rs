@@ -8,21 +8,24 @@
 //!
 //! # Architecture
 //!
-//! * [`gateway`] — [`GatewayState`], [`build_gateway`], health / root
-//!   handlers
+//! * [`crate::gateway`] — [`crate::gateway::GatewayState`],
+//!   [`crate::gateway::build_gateway`], health / root handlers
 //! * [`auth`] — JWT creation / validation (`EdDSA`), auth middleware,
 //!   login / refresh / logout / protected handlers
-//! * [`module`] — [`ServiceModule`] trait, [`ServiceInfo`],
-//!   [`ServiceHealthError`]
-//! * [`services`] — concrete [`ServiceModule`] implementations with typed
-//!   DTOs
+//! * [`module`] — [`crate::module::ServiceModule`] trait,
+//!   [`crate::module::ServiceInfo`],
+//!   [`crate::module::ServiceHealthError`]
+//! * [`services`] — concrete [`crate::module::ServiceModule`] implementations
+//!   with typed DTOs
 //! * [`settings`] — environment-based configuration with redacted [`Debug`]
 //!   and `--dev-keys` ephemeral keypair generation
-//! * [`sse`] — Server-Sent Events via [`broadcast::Sender`]
+//! * [`sse`] — Server-Sent Events via [`tokio::sync::broadcast::Sender`]
 //! * [`openapi`] — `OpenAPI` schema generation via `utoipa`
-//! * [`otel`] — OpenTelemetry tracing setup (behind `otel` feature)
+//! * `otel` — OpenTelemetry tracing setup (behind `otel` feature,
+//!   only present when the feature is enabled — see [`cfg(feature = "otel")`])
 
 pub mod auth;
+pub mod cors;
 pub mod gateway;
 pub mod module;
 pub mod openapi;

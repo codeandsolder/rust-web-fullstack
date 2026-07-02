@@ -5,3 +5,18 @@ node_modules/
 .playwright/
 *.log
 tmp/
+
+# Per-crate build artifacts
+**/pkg/
+
+# CI scratch dirs
+.slim/
+.opencode/
+
+# Env files (never bake)
+.env
+.env.local
+
+# OS junk
+.DS_Store
+Thumbs.db

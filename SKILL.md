@@ -49,14 +49,14 @@ Last verified against the canonical `Cargo.lock` in this directory on 2026-06-29
 | `sqlx` | 0.9 | `postgres`, `runtime-tokio`, `tls-rustls`, `json`, `macros`, `migrate` | Canonical workspace uses *runtime* queries only (`sqlx::query_as::<_, T>(…)`); compile-time `query!` requires `cargo sqlx prepare` + `.sqlx/` cache |
 | `axum` | 0.8 | `json` | |
 | `tokio` | 1 | `full` | `JoinSet` and `tokio::time::Instant` come from `tokio` directly |
-| `tokio-util` | 0.7 | (no feature needed) | `CancellationToken` lives in `tokio_util::sync` and is reachable without any feature gate |
+| `tokio-util` | 0.7 | `["rt"]` | `CancellationToken` lives in `tokio_util::sync` and is reachable with the `rt` feature |
 | `tower-http` | 0.7 | per-crate: `trace` is workspace-default; live-search adds `fs` (for `ServeDir`); gateway adds `cors` | `fs` is required only by crates that mount `ServeDir` |
-| `jsonwebtoken` | 10 | **MUST** set `features = ["rust_crypto"]` or `["aws_lc_rs"]` | 10.x panics without explicit crypto provider — see Pitfall 10 |
+| `jsonwebtoken` | 10 | `["aws_lc_rs"]` (workspace choice) | 10.x panics without explicit crypto provider — see Pitfall 10 |
 | `reqwest` | 0.13 | `default-features = false`, `rustls`, `json`, `stream` | `default-features = false` avoids the `native-tls` conflict with `rustls`; `stream` enables `bytes_stream()` for SSE reading |
 | `chromiumoxide` | 0.9 | `default-features = false`, `bytes` | `default-features = false` keeps the tokio version compatible with the workspace pin; `bytes` is required for `Browser::launch(...)` |
 | `gloo-net` | 0.7 | `eventsource` | Client-side SSE reader |
 | `leptos_i18n` | 0.6 | `csr` + `hydrate` + `ssr` (all three required for full-stack i18n) | Workspace's `i18n-demo` crate wires these into the `ssr` and `hydrate` Cargo features. The `leptos_i18n_build` build-dep (same version) emits the typed `t!` / `t_string!` / `Locale` modules at compile time. |
-| `gloo-timers` | 0.3 | `futures` | `gloo_timers::future::sleep` requires the `futures` feature |
+| `gloo-timers` | 0.4 | `futures` | `gloo_timers::future::sleep` requires the `futures` feature |
 | `tracing` | 0.1 | (default) | Structured logging — never `println!` or `log` |
 | `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` (Pattern 0) |
 
@@ -98,6 +98,8 @@ Starting a Rust web project?
 9. **Integration tests must fail visibly**: if a required service, browser, database, fixture, or SSE event is missing, panic/assert with the actual status or error. Use `#[ignore]` for intentionally optional slow tests; do not return early and report success.
 10. **Background tasks need structured-concurrency wiring**: `pg_listener_task` and any other long-running `tokio::spawn`'d task MUST accept a `CancellationToken` and race its primary await against `shutdown.cancelled()` via `tokio::select!`. Dropping a `JoinHandle` does not cancel — only `token.cancel()` cooperatively stops the task. See Pattern 15.
     *If your binary has no `tokio::spawn` calls (the gateway, for example), `with_graceful_shutdown(graceful_shutdown_signal())` is sufficient and no `CancellationToken` is needed — `Pattern 15` is still relevant as a reference, but only its shutdown primitive applies.*
+
+11. **Postgres channel name vs EventSource event name are distinct namespaces.** The Postgres `LISTEN` channel (e.g. `"search_results"`) is the SQL identifier for `NOTIFY`; the EventSource event type (e.g. `"search_result"`) is the client-side selector for `addEventListener`. They happen to share a substring by convention but are different identifiers — see `live-search/src/db.rs:141` (LISTEN) and `live-search/src/app.rs:319` (subscribe).
 
 ---
 
@@ -180,6 +182,24 @@ For editor integration, point `rust-analyzer`'s formatter at it
 [rustfmt]
 overrideCommand = ["leptosfmt", "--stdin", "--rustfmt"]
 ```
+
+#### `leptosfmt --check` round-trip quirk
+
+`leptosfmt --check` is not a perfect superset of `cargo fmt --check`. The
+two formatters disagree about whitespace inside `view!` macro bodies in a
+small number of cases (notably, leptosfmt preserves trailing whitespace on
+comment-only lines that rustfmt strips). Concretely:
+
+- `cargo fmt --all -- --check` will sometimes fail with a tiny diff after
+  `leptosfmt --write` has run.
+- `leptosfmt --check` will sometimes fail with a tiny diff after
+  `cargo fmt --all` has run.
+
+**Resolution**: run `leptosfmt --rustfmt --stdin <file> > file` per file (the
+`--rustfmt` flag chains rustfmt after leptosfmt and converges both
+formatters' whitespace), then `cargo fmt --all`. The Makefile `fmt-all`
+target and `.woodpecker.yml` `leptosfmt` step use this exact sequence; the
+final authoritative check is `cargo fmt --all -- --check`.
 
 See [Pattern 18](#pattern-18-leptos-utility-ecosystem) for the full list of
 ecosystem tools the skill flags, and Pitfall 15 for the related
@@ -474,6 +494,22 @@ fn live_feed() -> impl IntoView {
     view! { <div id="live-data">{data}</div> }
 }
 ```
+
+> **Canonical implementation extends this pattern.** The simple form above is
+> the teaching prologue. The production `live-search/src/db.rs::run_pg_listener`
+> adds:
+> - Exponential backoff (`250 ms → 30 s`, doubling, reset on successful
+>   connect/recv).
+> - A separate `run_watchdog` task that increments a shared
+>   `Arc<AtomicU64>` reconnect counter if no notification arrives within
+>   `WATCHDOG_STALE_THRESHOLD` (90 s). The listener observes this counter
+>   on each `recv()` cycle and reconnects even when the connection looks
+>   healthy from the OS's perspective.
+> - `biased;` in the inner `select!` so shutdown always wins ties against
+>   an incoming NOTIFY.
+> - Cancellation safety by racing `recv()` against
+>   `shutdown.cancelled()` via `tokio::select!`, with `sleep_or_shutdown`
+>   for backoff intervals.
 
 ### Pattern 3: PostgreSQL FTS with tsvector/tsquery
 
@@ -1292,16 +1328,19 @@ Since 0.8.6, `<Show>` accepts the condition as a `Signal`:
 
 #### `ShowLet` component
 
-`<ShowLet>` is a single-bind shorthand:
+`<ShowLet>` is a single-bind shorthand that accepts an `Option<T>` signal via the `some` prop and destructures it for children:
 
 ```rust
 // Equivalent:
-<Show when=move || user.get() let=user>
-    <p>{move || user.name.to_string()}</p>
+<Show when=move || user.get()>
+    {move || user.get().map(|u| view! { <p>{u.name.to_string()}</p> })}
 </Show>
 
-<ShowLet when=move || user.get() let=user>
-    <p>{move || user.name.to_string()}</p>
+<ShowLet
+    some=move || user.get()    // Signal<Option<T>> in 0.8.8+
+    let:value
+>
+    <p>{value.name.to_string()}</p>
 </ShowLet>
 ```
 

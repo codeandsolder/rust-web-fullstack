@@ -24,6 +24,20 @@ use crate::pem::{ed25519_spki_der, pem_encode};
 /// `EdDSA` JWT issuer and audience value — shared between encoding and decoding.
 pub const JWT_ISS: &str = "gateway-example";
 
+/// FNV-1a 64-bit digest of `bytes`, formatted as 16 hex chars.
+///
+/// Used to produce a short, stable fingerprint of PEM key material without
+/// logging the full key (avoiding new dependencies like `sha2`).
+#[must_use]
+fn short_fingerprint(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64-bit offset basis
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3); // FNV prime
+    }
+    format!("{h:016x}")
+}
+
 /// Shared configuration loaded from environment variables.
 ///
 /// Secrets are stored as [`Arc<str>`] so cloning [`Settings`] (which
@@ -124,10 +138,14 @@ impl Settings {
         let private_pem = pem_encode("PRIVATE KEY", pkcs8_doc.as_ref());
         let public_pem = pem_encode("PUBLIC KEY", &ed25519_spki_der(public_key));
 
-        tracing::warn!("─── DEV KEYPAIR (ephemeral, do not use in production) ───");
-        tracing::warn!("JWT_PRIVATE_KEY_PEM={private_pem}");
-        tracing::warn!("JWT_PUBLIC_KEY_PEM={public_pem}");
-        tracing::warn!("─── END DEV KEYPAIR ───");
+        let priv_fp = short_fingerprint(private_pem.as_bytes());
+        let pub_fp = short_fingerprint(public_pem.as_bytes());
+        tracing::warn!(
+            priv_fingerprint = %priv_fp,
+            pub_fingerprint = %pub_fp,
+            "─── DEV KEYPAIR active (ephemeral, do not use in production). \
+             See settings.rs::Settings::load_dev_keys. ───"
+        );
 
         Ok(Self {
             jwt_private_key_pem: Arc::from(private_pem.as_str()),

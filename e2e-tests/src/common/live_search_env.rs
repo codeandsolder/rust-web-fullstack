@@ -4,8 +4,6 @@
 //! random local port.  All background tasks (HTTP server, `PgListener`, watchdog)
 //! run on a dedicated tokio runtime so they survive individual test lifetimes.
 
-#![allow(dead_code, reason = "Some helpers unused per test-binary compilation")]
-
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,8 +13,6 @@ use std::time::Instant;
 
 use axum::{
     Router,
-    body::Body,
-    extract::Request,
     http::{StatusCode, Uri},
     response::IntoResponse,
     routing::{any, get},
@@ -25,8 +21,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-use tracing::Instrument;
 
+use live_search::bootstrap::server_fn_handler;
 use live_search::events::SseEvent;
 
 /// RAII guard that runs a live-search server in the background on a random port.
@@ -95,7 +91,7 @@ impl LiveSearchEnv {
             let pkg_abs = pkg_dir
                 .canonicalize()
                 .unwrap_or_else(|_| pkg_dir.to_path_buf());
-            tracing::info!("Mounted /pkg/ from {}", pkg_abs.display());
+            eprintln!("[live-search] mounted /pkg from {}", pkg_abs.display());
         }
 
         router = router.fallback(fallback_handler);
@@ -156,37 +152,29 @@ impl LiveSearchEnv {
                         let pool_for_listener = bg_pool.clone();
                         let last_recv_for_listener = bg_last_recv.clone();
                         let reconnect_for_listener = bg_reconnect.clone();
-                        let listener_span = tracing::info_span!("pg_listener");
-                        tasks.spawn(
-                            async move {
-                                live_search::db::run_pg_listener(
-                                    pool_for_listener,
-                                    bg_tx,
-                                    listener_token,
-                                    reconnect_for_listener,
-                                    last_recv_for_listener,
-                                )
-                                .await;
-                                Ok(())
-                            }
-                            .instrument(listener_span),
-                        );
+                        tasks.spawn(async move {
+                            live_search::db::run_pg_listener(
+                                pool_for_listener,
+                                bg_tx,
+                                listener_token,
+                                reconnect_for_listener,
+                                last_recv_for_listener,
+                            )
+                            .await;
+                            Ok(())
+                        });
 
                         // ── Watchdog ──────────────────────────────────
                         let watchdog_token = bg_shutdown.child_token();
-                        let watchdog_span = tracing::info_span!("pg_listener_watchdog");
-                        tasks.spawn(
-                            async move {
-                                live_search::db::run_watchdog(
-                                    bg_last_recv,
-                                    bg_reconnect,
-                                    watchdog_token,
-                                )
-                                .await;
-                                Ok(())
-                            }
-                            .instrument(watchdog_span),
-                        );
+                        tasks.spawn(async move {
+                            live_search::db::run_watchdog(
+                                bg_last_recv,
+                                bg_reconnect,
+                                watchdog_token,
+                            )
+                            .await;
+                            Ok(())
+                        });
 
                         // Drive all tasks until shutdown
                         while tasks.join_next().await.is_some() {}
@@ -280,39 +268,4 @@ impl Drop for LiveSearchEnv {
 /// Fallback handler returning 404.
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
-}
-
-/// Server-function dispatch handler (Pattern 9 from the rust-web-fullstack
-/// skill).  Probes the exact path first; if not found, tries a doubled-prefix
-/// variant (e.g. `/api/search` when `#[server(endpoint = "/api/search")]`
-/// registered `/api/api/search`).
-async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
-    let method = req.method().clone();
-    let original_path = req.uri().path().to_string();
-    let (mut parts, body) = req.into_parts();
-
-    let path_to_try =
-        if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
-            && original_path.starts_with("/api/")
-        {
-            let doubled = format!("/api{original_path}");
-            if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
-                doubled
-            } else {
-                original_path
-            }
-        } else {
-            original_path
-        };
-
-    if path_to_try != parts.uri.path() {
-        // Path is derived from an existing valid URI; construction only fails
-        // for truly invalid inputs (null bytes, etc.) which cannot occur here.
-        if let Ok(uri) = Uri::try_from(&path_to_try) {
-            parts.uri = uri;
-        }
-    }
-
-    let req = Request::from_parts(parts, body);
-    leptos_axum::handle_server_fns(req).await
 }

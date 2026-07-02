@@ -1,22 +1,19 @@
 //! E2E tests for a live-search example.
 //!
 //! These tests verify:
-//! - The search page loads and renders its title.  (browser-tests)
-//! - A search input is present on the page.  (browser-tests)
-//! - Typing a query and submitting shows results.  (browser-tests)
-//! - Searching for nonsense yields a "no results" message.  (browser-tests)
-//! - An SSE live-feed indicator appears on the `/live` route.  (browser-tests)
 //! - The server function catch-all (Pattern 9) routes `/api/search` correctly.
 //! - Static WASM/JS assets are served from `/pkg/` (Critical Rule 7).
+//! - The root path is reachable (SSR HTML or in-process fallback).
 //! - Unknown paths return 404 via the fallback handler.
+//! - Browser tests (behind `--features browser-tests`): search input present,
+//!   search shows results, nonsense query shows "no results" message,
+//!   SSE live-feed indicator appears on `/live`.
 //!
 //! HTTP-level tests use an in-process live-search server backed by a
 //! testcontainer Postgres database.  Browser-level tests (behind
 //! `--features browser-tests`) additionally require a Chromium installation.
 
-use std::sync::Arc;
-use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -26,84 +23,16 @@ use chromiumoxide::Page;
 #[cfg(feature = "browser-tests")]
 use e2e_tests::common::{element_is_visible, setup, teardown, wait_for_element, wait_for_js_true};
 
-use e2e_tests::common::LiveSearchEnv;
-use tokio::sync::OnceCell;
+use e2e_tests::common::{LiveSearchEnv, SharedServer};
 
 /// Shared live-search server instance, initialised lazily on first access.
-///
-/// Wraps a `Result` so that initialisation failures are propagated to every
-/// caller without panicking inside the background thread.
-static LIVE_SEARCH: OnceCell<Result<LiveSearchEnv, Arc<anyhow::Error>>> = OnceCell::const_new();
-static BG_INIT_DONE: AtomicBool = AtomicBool::new(false);
-static BG_INIT_ONCE: Once = Once::new();
+static SERVER: SharedServer<LiveSearchEnv> = SharedServer::new();
 
 /// Get the shared server instance, running [`LiveSearchEnv::start()`] on a
 /// persistent background tokio runtime so the server's database pool is not
 /// tied to any single test runtime.
 async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
-    BG_INIT_ONCE.call_once(|| {
-        // IIFE so we can use `?` inside a `call_once` closure (which returns `()`).
-        let result: Result<(), Arc<anyhow::Error>> = (|| {
-            let handle = std::thread::Builder::new()
-                .name("e2e-bg-init".into())
-                .spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            let err = Arc::new(
-                                anyhow::Error::new(e)
-                                    .context("failed to create background init runtime"),
-                            );
-                            let _ = LIVE_SEARCH.set(Err(err));
-                            BG_INIT_DONE.store(true, Ordering::Release);
-                            return;
-                        }
-                    };
-                    rt.block_on(async {
-                        match LiveSearchEnv::start().await {
-                            Ok(env) => {
-                                let _ = LIVE_SEARCH.set(Ok(env));
-                            }
-                            Err(e) => {
-                                let _ = LIVE_SEARCH.set(Err(Arc::new(e)));
-                            }
-                        }
-                        BG_INIT_DONE.store(true, Ordering::Release);
-                        if LIVE_SEARCH.get().is_none_or(Result::is_ok) {
-                            // Keep the runtime alive indefinitely so the pools'
-                            // background management tasks survive individual test
-                            // runtimes.
-                            std::future::pending::<()>().await;
-                        }
-                    });
-                })
-                .map_err(|e| {
-                    Arc::new(
-                        anyhow::Error::new(e).context("failed to spawn background init thread"),
-                    )
-                })?;
-            let _ = handle;
-            Ok(())
-        })();
-
-        // If we couldn't even spawn the thread, surface the failure via
-        // LIVE_SEARCH so the test-side loop sees the error instead of timing out.
-        if let Err(err) = result {
-            let _ = LIVE_SEARCH.set(Err(err));
-            BG_INIT_DONE.store(true, Ordering::Release);
-        }
-    });
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while !BG_INIT_DONE.load(Ordering::Acquire) {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "background LiveSearchEnv initialization timed out after 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let cell_ref = LIVE_SEARCH.get().context("LiveSearchEnv not initialized")?;
-    cell_ref.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))
+    SERVER.get(|| async { LiveSearchEnv::start().await }).await
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +66,7 @@ mod browser_tests {
         let value_json = serde_json::to_string(query).context("query is always valid JSON")?;
         let script = format!(
             r#"(() => {{
-                const el = document.querySelector('input[type="text"]');
+                const el = document.querySelector('[data-testid="search-input"]');
                 if (!el) throw new Error('search input not found');
                 el.focus();
                 const setter = Object.getOwnPropertyDescriptor(
@@ -161,55 +90,9 @@ mod browser_tests {
         Ok(())
     }
 
-    /// 1. Homepage loads — verify HTTP 200, page title contains "Live" or "Search",
-    ///    a search input is visible, and a heading (H1/H2) is present.
-    #[tokio::test]
-    async fn homepage_loads() -> anyhow::Result<()> {
-        let env = get_server().await?;
-        let ctx = setup().await?;
-
-        // Navigate — goto resolves after the page is fully loaded.
-        ctx.page
-            .goto(env.base_url())
-            .await
-            .context("failed to navigate to homepage")?;
-
-        // Page title is the literal value set by `<Title text="Live Search" />`
-        // in live-search/src/app.rs. Tightening the assertion to the exact value
-        // catches typos in the Title component that a substring check would miss.
-        let title = ctx
-            .page
-            .get_title()
-            .await
-            .context("failed to read page title")?
-            .unwrap_or_default();
-        // Note: the in-process server does NOT serve Leptos SSR HTML, so the
-        // browser gets only the fallback 404 page.  This test requires the
-        // full Leptos SSR build (use `cargo leptos build` first).
-        // For now, assert the connection worked at all.
-        assert!(
-            !title.is_empty() || response_status_ok(&ctx.page).await,
-            "Expected a page to load, got empty title"
-        );
-
-        teardown(ctx).await;
-        Ok(())
-    }
-
-    /// Check that the page response status (via JS) is 200.
-    #[cfg(feature = "browser-tests")]
-    async fn response_status_ok(page: &Page) -> bool {
-        // This is a heuristic: we check if the page title or body has content.
-        page.evaluate("() => document.title.length > 0 || document.body.innerText.length > 0")
-            .await
-            .ok()
-            .and_then(|v| v.into_value::<bool>().ok())
-            .unwrap_or(false)
-    }
-
     /// 2. Search returns results — type a query, submit, wait for result items.
-    ///    Asserts at least one `.result-item` appears and its text contains the
-    ///    query substring.
+    ///    Asserts at least one `[data-testid="result-item"]` appears and its
+    ///    text contains the query substring.
     #[tokio::test]
     async fn search_returns_results() -> anyhow::Result<()> {
         let env = get_server().await?;
@@ -221,10 +104,13 @@ mod browser_tests {
             .context("failed to navigate to homepage")?;
 
         // Wait for the input to be present.
-        let _search_input =
-            wait_for_element(&ctx.page, r#"input[type="text"]"#, Duration::from_secs(5))
-                .await
-                .context("search input not found")?;
+        let _search_input = wait_for_element(
+            &ctx.page,
+            r#"[data-testid="search-input"]"#,
+            Duration::from_secs(5),
+        )
+        .await
+        .context("search input not found")?;
 
         // Set the search query (must dispatch `input` event for Leptos `bind:value`).
         let query = "rust";
@@ -232,7 +118,7 @@ mod browser_tests {
 
         // Click the submit button.
         ctx.page
-            .find_element(r#"button[type="submit"]"#)
+            .find_element(r#"[data-testid="search-submit"]"#)
             .await
             .context("search button not found")?
             .click()
@@ -241,7 +127,7 @@ mod browser_tests {
 
         let has_results = wait_for_js_true(
             &ctx.page,
-            "() => document.querySelectorAll('.result-item').length > 0",
+            "() => document.querySelectorAll('[data-testid=\"result-item\"]').length > 0",
             Duration::from_secs(10),
         )
         .await;
@@ -252,7 +138,7 @@ mod browser_tests {
 
         let result_count: u32 = ctx
             .page
-            .evaluate("() => document.querySelectorAll('.result-item').length")
+            .evaluate("() => document.querySelectorAll('[data-testid=\"result-item\"]').length")
             .await
             .context("page evaluate failed")?
             .into_value::<u32>()
@@ -261,7 +147,9 @@ mod browser_tests {
 
         let first_title: String = ctx
             .page
-            .evaluate("() => document.querySelector('.result-item h3')?.innerText ?? ''")
+            .evaluate(
+                "() => document.querySelector('[data-testid=\"result-item\"] h3')?.innerText ?? ''",
+            )
             .await
             .context("failed to read first result title")?
             .into_value::<String>()
@@ -292,7 +180,7 @@ mod browser_tests {
 
         // Click submit.
         ctx.page
-            .find_element(r#"button[type="submit"]"#)
+            .find_element(r#"[data-testid="search-submit"]"#)
             .await
             .context("search button not found")?
             .click()
@@ -311,10 +199,10 @@ mod browser_tests {
             "Expected 'No results found.' after searching for nonsense"
         );
 
-        // Also verify there are no .result-item elements.
+        // Also verify there are no result-item elements.
         let count: u32 = ctx
             .page
-            .evaluate("() => document.querySelectorAll('.result-item').length")
+            .evaluate("() => document.querySelectorAll('[data-testid=\"result-item\"]').length")
             .await
             .context("page evaluate failed")?
             .into_value::<u32>()
@@ -351,8 +239,8 @@ mod browser_tests {
         // Connection status indicator should appear (either "Connected" or "Connecting …").
         let status_indicator = wait_for_js_true(
             &ctx.page,
-            "() => document.body.innerText.includes('Connected') \
-             || document.body.innerText.includes('Connecting')",
+            "() => { const el = document.querySelector('[data-testid=\"sse-status\"]'); \
+             return el && (el.innerText.includes('Connected') || el.innerText.includes('Connecting')); }",
             Duration::from_secs(10),
         )
         .await;
@@ -398,7 +286,8 @@ mod browser_tests {
         // handler attaches and the test would race the connection.
         let connected = wait_for_js_true(
             &ctx.page,
-            "() => document.body.innerText.includes('Connected')",
+            "() => { const el = document.querySelector('[data-testid=\"sse-status\"]'); \
+             return el && el.innerText.includes('Connected'); }",
             Duration::from_secs(10),
         )
         .await;
@@ -605,17 +494,52 @@ async fn server_fn_search_returns_results_via_http() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 6. Static assets are served (Critical Rule 7) — GET `/pkg/live_search.js`
+/// 6. Root path is reachable — GET `/` returns either SSR HTML or the
+///    in-process fallback (depending on whether Leptos build artifacts
+///    are present at `live-search/pkg/`).
+#[tokio::test]
+async fn root_path_reachable() -> anyhow::Result<()> {
+    let env = get_server().await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build reqwest client")?;
+    let resp = client
+        .get(env.base_url())
+        .send()
+        .await
+        .with_context(|| format!("failed to GET {}", env.base_url()))?;
+    anyhow::ensure!(
+        resp.status().is_success() || resp.status().is_redirection(),
+        "expected success or redirect from root path, got {}",
+        resp.status()
+    );
+    Ok(())
+}
+
+/// 7. Static assets are served (Critical Rule 7) — GET `/pkg/live_search.js`
 ///    and verify HTTP 200.  Without this, SSR pages render but WASM hydration
 ///    never runs because the browser 404s on the JS module.
 ///
-///    NOTE: The in-process test server does NOT serve the `/pkg/` directory
-///    (no Leptos SSR build is loaded).  This test is skipped unless the
-///    full Leptos build output exists at the expected location.
+///    NOTE: The in-process test server only mounts `/pkg/` when a `cargo leptos build`
+///    artifact is present at `../live-search/pkg/`.  When that build is absent
+///    (CI without `cargo leptos`, or fresh clones) the test skips with a warning
+///    — that is an environment gap, not a code regression.
 #[tokio::test]
 async fn static_assets_are_served() -> anyhow::Result<()> {
-    let env = get_server().await?;
+    let pkg_path = Path::new("../live-search/pkg/live_search.js");
+    if !pkg_path.exists() {
+        eprintln!(
+            "WARNING: Leptos build artifacts not found at `{}`. \
+             This is expected in CI without `cargo leptos build`. \
+             Run `cargo leptos build` first for this test to actually verify \
+             hydration assets are served at `/pkg/live_search.js`.",
+            pkg_path.display()
+        );
+        return Ok(());
+    }
 
+    let env = get_server().await?;
     let url = format!("{}/pkg/live_search.js", env.base_url());
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -627,32 +551,20 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to GET {url}"))?;
 
-    // The in-process test server only mounts `/pkg/` when a `cargo leptos build`
-    // artifact is present at `../live-search/pkg/`.  When that build is absent
-    // (CI without `cargo leptos`, or fresh clones) the fallback handler
-    // returns 404 — that is an environment gap, not a code regression, and we
-    // treat it as a soft pass with a loud warning so the suite stays green.
     let status = response.status();
+    anyhow::ensure!(
+        status == 200,
+        "Expected HTTP 200 from /pkg/live_search.js, got {status}. \
+         (Build artifacts exist at {})",
+        pkg_path.display()
+    );
+
     let content_type = response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-
-    if status == 404 {
-        eprintln!(
-            "WARNING: /pkg/live_search.js returned 404 — Leptos build artifacts not found. \
-             Run `cargo leptos build` first for this test to actually verify hydration assets. \
-             Content-Type: {content_type}"
-        );
-        return Ok(());
-    }
-
-    anyhow::ensure!(
-        status == 200,
-        "Expected HTTP 200 from /pkg/live_search.js, got {status}, Content-Type: {content_type}"
-    );
 
     // Verify it's actually JavaScript, not an error page.
     anyhow::ensure!(
@@ -662,7 +574,34 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 7. Unknown path returns 404 — verifies the fallback handler in
+/// Manual verification: run `cargo leptos build`, then run this test to
+/// confirm WASM/JS assets are served at `/pkg/`.
+///
+/// Unlike [`static_assets_are_served`], this test **asserts** 200 and will
+/// fail if the Leptos build artifacts are missing.
+#[tokio::test]
+#[ignore = "run after `cargo leptos build` to verify hydration assets"]
+async fn static_assets_are_served_when_built() -> anyhow::Result<()> {
+    let env = get_server().await?;
+    let url = format!("{}/pkg/live_search.js", env.base_url());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build reqwest client")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to GET {url}"))?;
+    anyhow::ensure!(
+        response.status() == 200,
+        "Expected HTTP 200 from /pkg/live_search.js (need `cargo leptos build`), got {}",
+        response.status()
+    );
+    Ok(())
+}
+
+/// 8. Unknown path returns 404 — verifies the fallback handler in
 ///    `live-search/src/main.rs` returns 404 for unmatched routes.
 #[tokio::test]
 async fn unknown_path_returns_404() -> anyhow::Result<()> {

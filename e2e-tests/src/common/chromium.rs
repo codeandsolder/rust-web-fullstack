@@ -65,6 +65,45 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
     false
 }
 
+/// Probe multiple well-known locations for a Chromium/Chrome binary.
+fn locate_chrome() -> Option<PathBuf> {
+    // 1. Explicit env var override.
+    if let Ok(p) = std::env::var("CHROME_PATH") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // 2. Probe Playwright cache, scanning for any chromium-NNNN subdir.
+    let base = std::env::var("PLAYWRIGHT_BROWSERS_PATH")
+        .unwrap_or_else(|_| "/home/jan/.cache/ms-playwright".to_string());
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with("chromium-") {
+                let candidate = entry.path().join("chrome-linux64").join("chrome");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    // 3. System defaults (Debian/Ubuntu, Fedora, generic).
+    for default in &[
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ] {
+        let p = PathBuf::from(default);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Initialise chromiumoxide, launch a headless Chromium browser, create a page,
 /// and return a [`TestContext`].
 ///
@@ -77,16 +116,7 @@ pub async fn wait_for_server(url: &str, timeout: Duration) -> bool {
 /// Returns an error if the browser cannot launch, the page cannot be created,
 /// or the profile directory cannot be created.
 pub async fn setup() -> Result<TestContext> {
-    let chrome_path = std::env::var("CHROME_PATH").ok().or_else(|| {
-        let playwright_path = format!(
-            "{}/chromium-1208/chrome-linux64/chrome",
-            std::env::var("PLAYWRIGHT_BROWSERS_PATH")
-                .unwrap_or_else(|_| "/home/jan/.cache/ms-playwright".to_string())
-        );
-        std::path::Path::new(&playwright_path)
-            .exists()
-            .then_some(playwright_path)
-    });
+    let chrome_path = locate_chrome();
 
     let profile_dir = unique_profile_dir()?;
     std::fs::create_dir_all(&profile_dir).context("failed to create Chromium profile dir")?;

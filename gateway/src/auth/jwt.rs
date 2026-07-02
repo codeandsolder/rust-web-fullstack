@@ -9,8 +9,8 @@
 //! # Thread safety
 //!
 //! PEM parsing on every call is a few microseconds.  For hot paths the caller
-//! should cache the parsed [`SigningKey`] / [`VerifyingKey`] objects (see
-//! [`super::store`]).
+//! should cache the parsed [`jsonwebtoken::EncodingKey`] /
+//! [`jsonwebtoken::DecodingKey`] objects.
 
 use crate::settings::JWT_ISS;
 use chrono::Utc;

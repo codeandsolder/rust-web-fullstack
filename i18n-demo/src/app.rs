@@ -122,21 +122,14 @@ pub fn Home() -> impl IntoView {
 
         // --- locale toggle ---
         <p>
-            <button
-                class=styles::LOCALE_BTN
-                on:click=on_switch
-            >
+            <button class=styles::LOCALE_BTN on:click=on_switch>
                 {t!(i18n, search_button)}
             </button>
         </p>
 
         // --- search input ---
         <p>
-            <input
-                class=styles::SEARCH_INPUT
-                type="text"
-                placeholder={placeholder}
-            />
+            <input class=styles::SEARCH_INPUT type="text" placeholder=placeholder />
         </p>
 
         // --- counter section ---
@@ -144,31 +137,27 @@ pub fn Home() -> impl IntoView {
         // <Show when=has_clicked> — demonstrates signal-passing directly to
         // the `when` prop.
         <p>
-            <button
-                class=styles::COUNTER_BTN
-                on:click=inc
-            >
+            <button class=styles::COUNTER_BTN on:click=inc>
                 {"+1"}
             </button>
         </p>
 
-        // <Show when=move || ...> uses a closure (Leptos 0.8.x Show still
-        // expects Fn() -> bool; Signal::derive does not auto-coerce).
+        // <Show when=has_clicked> — since Leptos 0.8.6 the `when` prop accepts a
+        // `Signal<bool>` directly; the `move ||` closure form below is kept here
+        // for didactic clarity and exercises the pre-0.8.6 path explicitly.
         <Show when=move || has_clicked.get()>
             <p>
                 // <ShowLet some=signal> unwraps the Option, providing
                 // `value` to the children (Leptos 0.8.8+).
                 // The prop is `some`, not `when`.
-                <ShowLet
-                    some=maybe_count
-                    fallback=|| ()
-                    let:value
-                >
-                    {t!{ i18n, click_count, count = value }}
+                <ShowLet some=maybe_count fallback=|| () let:value>
+                    {
+                        t! {
+                            i18n, click_count, count = value
+                        }
+                    }
                     {" "}
-                    <span class=styles::CLICK_COUNT>
-                        {value}
-                    </span>
+                    <span class=styles::CLICK_COUNT>{value}</span>
                 </ShowLet>
             </p>
         </Show>

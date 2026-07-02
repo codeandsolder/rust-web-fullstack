@@ -6,6 +6,7 @@
 //! [`utoipa::ToSchema`] for `OpenAPI` documentation.
 
 use axum::{Router, extract::State, response::Json, routing::get};
+use futures::future::{BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -28,6 +29,16 @@ impl ServiceModule for SearchService {
         Router::new()
             .route("/", get(search_handler))
             .route("/health", get(search_health))
+    }
+
+    fn health_check(&self) -> BoxFuture<'_, Result<(), crate::module::ServiceHealthError>> {
+        async move {
+            // Simulate a backend round-trip (10 ms).  Real impl would probe a
+            // DB / cache / upstream endpoint.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            Ok(())
+        }
+        .boxed()
     }
 }
 

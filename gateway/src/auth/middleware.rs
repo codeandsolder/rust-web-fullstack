@@ -2,7 +2,7 @@
 //!
 //! The middleware extracts the `Authorization` header, strips the `Bearer `
 //! prefix, validates the token using the configured `EdDSA` public key, and
-//! injects the parsed [`Claims`] into request extensions.
+//! injects the parsed [`super::jwt::Claims`] into request extensions.
 //!
 //! # Usage
 //!
@@ -21,9 +21,9 @@ use crate::gateway::GatewayState;
 /// Axum middleware that validates a `Bearer` JWT from the `Authorization`
 /// header.
 ///
-/// On success the request is forwarded with [`Claims`] injected into the
-/// request extensions (accessible via `Extension<Claims>`).  On failure a
-/// 401 is returned.
+/// On success the request is forwarded with [`super::jwt::Claims`] injected
+/// into the request extensions (accessible via `Extension<Claims>`).  On
+/// failure a 401 is returned.
 ///
 /// Apply it with:
 /// ```ignore

@@ -1,9 +1,9 @@
 //! Database types, pool management, and `PostgreSQL` LISTEN/NOTIFY integration.
 //!
-//! The SSR binary uses a global [`PgPool`] (guarded by [`OnceLock`]) and a
-//! background listener task that subscribes to the `search_results` channel
-//! and forwards notifications into a [`broadcast::Sender`] consumed by the SSE
-//! handler.
+//! The SSR binary uses a global [`sqlx::PgPool`] (guarded by
+//! [`std::sync::OnceLock`]) and a background listener task that subscribes
+//! to the `search_results` channel and forwards notifications into a
+//! [`tokio::sync::broadcast::Sender`] consumed by the SSE handler.
 //!
 //! A parallel watchdog task monitors liveness of the `PgListener` and triggers
 //! a reconnection when no notifications have been received for a threshold
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A search result as stored in the database.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
 #[must_use]
 pub struct SearchResult {
@@ -68,7 +68,7 @@ mod server {
     /// task like [`run_pg_listener`] without owning contention.
     ///
     /// # Errors
-    /// Returns [`PoolInitError::AlreadyInitialized`] if startup tries to set
+    /// Returns `PoolInitError::AlreadyInitialized` if startup tries to set
     /// the pool more than once.
     pub fn set_pool(pool: PgPool) -> Result<(), PoolInitError> {
         POOL.set(pool)
@@ -380,7 +380,8 @@ mod server {
     }
 
     /// Monitors the `PgListener`'s liveness and triggers a reconnection when no
-    /// notifications have been received for [`WATCHDOG_STALE_THRESHOLD`].
+    /// notifications have been received for `WATCHDOG_STALE_THRESHOLD`
+    /// (90 seconds).
     ///
     /// This is a **separate parallel task** (per oracle I3), NOT inside the
     /// existing `biased;` select! in [`run_pg_listener`]. It has its own

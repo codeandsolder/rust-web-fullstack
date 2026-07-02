@@ -47,7 +47,8 @@ use crate::events::SseEvent;
 use crate::{cache, db, sse};
 
 /// Handle returned by [`run`]. The caller uses the [`CancellationToken`] to
-/// signal shutdown and the [`JoinSet`] / [`PgPool`] for graceful draining.
+/// signal shutdown and the [`tokio::task::JoinSet`] / [`sqlx::PgPool`]
+/// for graceful draining.
 #[derive(Debug)]
 #[must_use]
 pub struct ServerHandle {
@@ -117,11 +118,15 @@ async fn fallback_handler(uri: Uri) -> impl IntoResponse {
 
 /// Server-function dispatch handler (see main.rs for the rationale behind the
 /// doubled-prefix probe).
+///
+/// # Panics
+/// Panics only if the path-rewrite produces an invalid URI — in practice this
+/// is infallible because we only ever prepend `/api` to an existing valid URI.
 #[expect(
     clippy::expect_used,
     reason = "Path rewrite produces a valid URI by construction (prepending /api to a valid path)"
 )]
-async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
+pub async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
     let method = req.method().clone();
     let original_path = req.uri().path().to_string();
     let (mut parts, body) = req.into_parts();

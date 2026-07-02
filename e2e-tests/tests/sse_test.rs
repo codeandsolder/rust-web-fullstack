@@ -8,91 +8,20 @@
 //! All tests use an in-process live-search server backed by a testcontainer
 //! Postgres database, so no external services are required.
 
-use std::sync::Arc;
-use std::sync::Once;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
-use e2e_tests::common::LiveSearchEnv;
+use e2e_tests::common::{LiveSearchEnv, SharedServer};
 use futures::StreamExt;
-use tokio::sync::OnceCell;
 
 /// Shared live-search server instance, initialised lazily on first access.
-///
-/// Wraps a `Result` so that initialisation failures are propagated to every
-/// caller without panicking inside the background thread.
-static LIVE_SEARCH: OnceCell<Result<LiveSearchEnv, Arc<anyhow::Error>>> = OnceCell::const_new();
-static BG_INIT_DONE: AtomicBool = AtomicBool::new(false);
-static BG_INIT_ONCE: Once = Once::new();
+static SERVER: SharedServer<LiveSearchEnv> = SharedServer::new();
 
 /// Get the shared server instance, running [`LiveSearchEnv::start()`] on a
 /// persistent background tokio runtime so the server's database pool is not
 /// tied to any single test runtime.
 async fn get_server() -> anyhow::Result<&'static LiveSearchEnv> {
-    BG_INIT_ONCE.call_once(|| {
-        // IIFE so we can use `?` inside a `call_once` closure (which returns `()`).
-        let result: Result<(), Arc<anyhow::Error>> = (|| {
-            let handle = std::thread::Builder::new()
-                .name("e2e-bg-init".into())
-                .spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            let err = Arc::new(
-                                anyhow::Error::new(e)
-                                    .context("failed to create background init runtime"),
-                            );
-                            let _ = LIVE_SEARCH.set(Err(err));
-                            BG_INIT_DONE.store(true, Ordering::Release);
-                            return;
-                        }
-                    };
-                    rt.block_on(async {
-                        match LiveSearchEnv::start().await {
-                            Ok(env) => {
-                                let _ = LIVE_SEARCH.set(Ok(env));
-                            }
-                            Err(e) => {
-                                let _ = LIVE_SEARCH.set(Err(Arc::new(e)));
-                            }
-                        }
-                        BG_INIT_DONE.store(true, Ordering::Release);
-                        if LIVE_SEARCH.get().is_none_or(Result::is_ok) {
-                            // Keep the runtime alive indefinitely so the pools'
-                            // background management tasks survive individual test
-                            // runtimes.
-                            std::future::pending::<()>().await;
-                        }
-                    });
-                })
-                .map_err(|e| {
-                    Arc::new(
-                        anyhow::Error::new(e).context("failed to spawn background init thread"),
-                    )
-                })?;
-            let _ = handle;
-            Ok(())
-        })();
-
-        // If we couldn't even spawn the thread, surface the failure via
-        // LIVE_SEARCH so the test-side loop sees the error instead of timing out.
-        if let Err(err) = result {
-            let _ = LIVE_SEARCH.set(Err(err));
-            BG_INIT_DONE.store(true, Ordering::Release);
-        }
-    });
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while !BG_INIT_DONE.load(Ordering::Acquire) {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "background LiveSearchEnv initialization timed out after 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let cell_ref = LIVE_SEARCH.get().context("LiveSearchEnv not initialized")?;
-    cell_ref.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))
+    SERVER.get(|| async { LiveSearchEnv::start().await }).await
 }
 
 /// Helper: build a reqwest client with a short timeout.

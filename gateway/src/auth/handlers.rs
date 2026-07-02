@@ -25,6 +25,8 @@ use super::jwt::{Claims, create_jwt};
 // ---------------------------------------------------------------------------
 
 /// Login request payload.
+///
+/// The password must be at least 12 characters long (max 1024).
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
@@ -32,7 +34,7 @@ pub struct LoginRequest {
     #[validate(length(min = 1, max = 255))]
     pub user_id: String,
     /// User password.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 12, max = 1024))]
     pub password: String,
 }
 

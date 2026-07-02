@@ -9,8 +9,8 @@
 //! Pass `--dev-keys` as the first argument to generate an ephemeral `EdDSA`
 //! keypair at startup (keys are logged at `warn!` level).  Do not use
 //! `--dev-keys` in production — the keypair changes on every restart and is
-//! logged in plain text.  `--dev-keys` requires `ADMIN_PASSWORD` to be set in
-//! the environment.
+//! logged in plain text.  `--dev-keys` requires `ALLOW_DEV_KEYS=1` to be set
+//! in the environment as a deliberate guard against accidental use.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,6 +24,12 @@ use gateway_example::{gateway, module, services};
 async fn main() -> anyhow::Result<()> {
     // Handle `--dev-keys` flag before loading settings.
     let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
+    if dev_keys && std::env::var("ALLOW_DEV_KEYS").ok().as_deref() != Some("1") {
+        anyhow::bail!(
+            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start. \
+             This is a deliberate guard against accidentally enabling ephemeral keys."
+        );
+    }
 
     // ---- Telemetry / tracing ----
     //

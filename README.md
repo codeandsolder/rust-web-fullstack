@@ -142,16 +142,27 @@ export JWT_PRIVATE_KEY_PEM="$(cat jwt-private.pem)"
 export JWT_PUBLIC_KEY_PEM="$(cat jwt-public.pem)"
 ```
 
-**`--dev-keys` fallback**: for local exploration, start the gateway binary with `--dev-keys` to generate an ephemeral key pair at startup (with a `tracing::warn!`). Never use `--dev-keys` in production — keys vanish on restart and clients cannot verify old tokens.
+Both environment variables must be set; `Settings::load` rejects empty or non-PEM values with a descriptive error.
+
+**`--dev-keys` fallback**: for local exploration only, start the gateway binary with `ALLOW_DEV_KEYS=1 --dev-keys` (both required). The guard exists to prevent accidentally booting the gateway with ephemeral keys in production. When enabled, the startup logs FNV-1a fingerprints of the generated keys (not the keys themselves); the private key never leaves process memory or logs. Keys vanish on restart and clients cannot verify old tokens.
 
 **Security note**: never commit private keys. `.gitignore` already excludes `.env`; keep it that way. CI uses a fixed test pair under `scripts/test-keys/` that is **not** suitable for any non-test deployment.
+
+## Benchmarks
+
+Criterion benchmarks ship with the live-search and gateway crates:
+
+- `cargo bench -p live-search` — search-result FTS query throughput.
+- `cargo bench -p gateway-example` — JWT sign/verify throughput.
+
+Run either with the criterion HTML reports enabled (`features = ["html_reports"]` is workspace-default).
 
 ## What's New (v3 Showcase Upgrade)
 
 This version brings the project to a high-end Rust 2026 showcase standard:
 
 - **EdDSA JWT** with `aws-lc-rs` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
-- **DB-backed refresh tokens** — `refresh_tokens` table (jti UUID PK, subject, hashed token, expiry, revocation tracking) with rotation and reuse detection.
+- **Refresh token scaffolding** — `refresh_tokens` migration ships (jti UUID PK, subject, hashed token, expiry, revocation tracking) but the gateway handler wiring is TODO. The current `refresh_handler` / `logout_handler` are documented stubs. Wire them up via a follow-up PR.
 - **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
 - **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
 - **tower-governor** — rate limiting on gateway auth routes (two governor instances for login vs. refresh).
@@ -186,43 +197,99 @@ The `.woodpecker.yml` workflow runs:
 
 ```
 rust-web-fullstack/
-├── Cargo.toml                  # Workspace manifest
+├── Cargo.toml                  # Workspace root (edition 2024, lints table)
+├── rust-toolchain.toml         # Pinned Rust 1.94.0 + WASM target
 ├── Cargo.lock
-├── docker-compose.yml          # PostgreSQL + both services
-├── live-search.Dockerfile      # Multi-stage build for live-search
-├── gateway.Dockerfile          # Multi-stage build for gateway
+├── clippy.toml                 # Strict clippy lints for crates & examples
+├── docker-compose.yml          # Postgres + live-search + i18n-demo + gateway
 ├── Makefile                    # Common development commands
+├── ci/
+│   └── leptosfmt.Dockerfile    # CI image with leptosfmt preinstalled
+├── .woodpecker.yml             # CI pipeline (check, clippy, fmt, audit, e2e)
 ├── .env.example                # Environment variable template
-├── .woodpecker.yml             # CI workflow (Forgejo / Woodpecker)
-├── .gitignore
+├── .dockerignore               # Docker build exclusions
 ├── LICENSE                     # MIT
 ├── README.md                   # ← you are here
 ├── scripts/
-│   ├── init-db.sql             # PostgreSQL schema + triggers
-│   ├── seed-db.sh              # Sample data seeder
-│   └── test-e2e.sh             # E2E test runner
-├── live-search/                # Leptos SSR + PostgreSQL FTS + SSE
-│   ├── Cargo.toml
-│   ├── migrations/             # sqlx migrations
+│   ├── init-db.sql             # PostgreSQL extensions (pg_trgm, pgcrypto, pg_stat_statements)
+│   ├── seed-db.sh              # Idempotent seed data
+│   └── test-e2e.sh             # Local E2E test runner
+├── references/                 # Reference patterns referenced by SKILL.md
+│   ├── architecture-patterns.md
+│   ├── axum-patterns.md
+│   ├── leptos-patterns.md
+│   ├── postgres-patterns.md
+│   └── testing-patterns.md
+├── live-search/                # Leptos SSR + WASM hydrate + sqlx + SSE
+│   ├── Cargo.toml              # ssr / hydrate / otel / dev-tools features
+│   ├── migrations/             # sqlx migrations (search_results, trigram)
+│   ├── benches/
+│   │   └── db_bench.rs         # Criterion benchmark for FTS queries
 │   └── src/
-│       ├── main.rs             # Axum server entrypoint
-│       ├── lib.rs              # Leptos app + routing
-│       ├── db.rs               # sqlx queries + PgListener
-│       ├── sse.rs              # SSE stream handler
-│       └── app.rs              # Leptos components and routes
-├── gateway/                    # ServiceModule trait + JWT auth
-│   ├── Cargo.toml
+│       ├── main.rs             # Thin launcher → bootstrap → shutdown
+│       ├── lib.rs              # Public module surface + hydrate entry
+│       ├── app.rs              # Leptos components + server functions
+│       ├── bootstrap.rs        # Pool, migrations, listener, axum router
+│       ├── db.rs               # PgPool + PgListener + watchdog
+│       ├── cache.rs            # moka in-memory search cache
+│       ├── events.rs           # SseEvent types
+│       ├── sse.rs              # SSE handler (broadcast → text/event-stream)
+│       ├── shutdown.rs         # Graceful shutdown drain
+│       ├── otel.rs             # OpenTelemetry init (feature-gated)
+│       └── styles.rs           # stylance-scoped CSS classes
+├── gateway/                    # Pure axum + JWT + service registry
+│   ├── Cargo.toml              # package name `gateway-example`
+│   ├── migrations/             # refresh_tokens table (wiring is TODO)
+│   ├── benches/
+│   │   └── auth_bench.rs       # Criterion JWT sign/verify benchmark
 │   └── src/
-│       ├── main.rs             # Axum server with modular routes
-│       ├── auth.rs             # JWT middleware
-│       ├── services/           # ServiceModule implementations
-│       └── gateway.rs          # Dynamic route composition
-└── e2e-tests/                  # chromiumoxide end-to-end tests
-    ├── Cargo.toml
-    └── tests/
-        ├── live_search_test.rs # UI interaction tests
-        ├── sse_test.rs         # SSE stream validation
-        └── gateway_test.rs     # Gateway API tests
+│       ├── main.rs             # Bin entry point + ALLOW_DEV_KEYS guard
+│       ├── lib.rs              # Public module surface
+│       ├── gateway.rs          # GatewayState + router composition
+│       ├── module.rs           # ServiceModule trait + ServiceHealthError
+│       ├── cors.rs             # Shared CORS layer (ALLOWED_ORIGINS env)
+│       ├── pem.rs              # PKCS#8 / SPKI DER / PEM encode
+│       ├── settings.rs         # env-based Settings + --dev-keys
+│       ├── sse.rs              # GatewayEvent + SSE broadcast
+│       ├── openapi.rs          # utoipa schema + Swagger UI at /docs
+│       ├── otel.rs             # OpenTelemetry init (feature-gated)
+│       ├── auth/
+│       │   ├── mod.rs          # Re-exports
+│       │   ├── error.rs        # AppError + IntoResponse
+│       │   ├── jwt.rs          # EdDSA JWT create/validate
+│       │   ├── handlers.rs     # login / refresh / logout / protected
+│       │   └── middleware.rs   # Bearer-token validation
+│       └── services/
+│           ├── mod.rs
+│           ├── search.rs       # SearchService + health_check probe
+│           ├── proxy.rs        # ProxyService + check_history
+│           └── monitor.rs      # MonitorService dashboard
+├── i18n-demo/                  # Compile-time-checked i18n showcase
+│   ├── Cargo.toml              # ssr / hydrate features
+│   ├── build.rs                # leptos_i18n codegen
+│   ├── locales/                # JSON locale files (en.json, de.json)
+│   └── src/
+│       ├── main.rs             # SSR server
+│       ├── lib.rs              # Public module surface + hydrate entry
+│       ├── app.rs              # Leptos components (t! macros)
+│       ├── i18n.rs             # Generated t!/Locale module
+│       └── styles.rs           # CSS constants + include_str!
+└── e2e-tests/                  # chromiumoxide-based browser E2E
+    ├── Cargo.toml              # browser-tests feature
+    ├── tests/
+    │   ├── live_search_test.rs # SSR + search + live feed + SSE
+    │   ├── sse_test.rs         # SSE event delivery + insta snapshot
+    │   └── gateway_test.rs     # Gateway endpoints + auth
+    └── src/
+        ├── lib.rs              # Shared helpers (base_url, join_url)
+        └── common/
+            ├── mod.rs          # Public re-exports
+            ├── once.rs         # SharedServer<T> lazy one-shot bootstrap
+            ├── chromium.rs     # setup/teardown + locate_chrome()
+            ├── live_search_env.rs   # In-process live-search launcher
+            ├── gateway_env.rs       # In-process gateway launcher
+            ├── db.rs           # testcontainer Postgres fixture
+            └── json.rs         # (any JSON helpers)
 ```
 
 ## Crate Details

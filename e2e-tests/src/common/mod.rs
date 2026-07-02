@@ -12,6 +12,7 @@ pub mod db;
 pub mod gateway_env;
 pub mod json;
 pub mod live_search_env;
+pub mod once;
 
 // Convenience re-exports — flatten `common::chromium::setup` to
 // `common::setup`, etc. so tests can do `use e2e_tests::common::{setup, ...}`.
@@ -21,3 +22,4 @@ pub use chromium::{
 pub use db::TestEnv;
 pub use gateway_env::GatewayEnv;
 pub use live_search_env::LiveSearchEnv;
+pub use once::SharedServer;
