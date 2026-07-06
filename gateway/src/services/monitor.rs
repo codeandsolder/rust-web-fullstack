@@ -90,6 +90,8 @@ async fn monitor_health() -> Json<MonitorHealthResponse> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
@@ -103,6 +105,7 @@ mod tests {
             services: vec![],
             modules: vec![],
             settings,
+            proxy_upstream_url: Arc::from("https://ipapi.co"),
         };
 
         let app = MonitorService.router().with_state(state);

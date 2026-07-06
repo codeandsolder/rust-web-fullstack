@@ -1,19 +1,31 @@
-//! Mock proxy / VPN check service.
+//! Proxy / VPN check service.
 //!
-//! Simulates IP proxy checks and publishes SSE events with RFC3339
-//! timestamps for live dashboards.
+//! Forwards IP geolocation / threat queries to a configurable upstream API
+//! (default: <https://ipapi.co>) and publishes SSE events for live dashboards.
+//!
+//! The upstream URL is set via the `PROXY_UPSTREAM_URL` environment variable
+//! and stored in [`GatewayState::proxy_upstream_url`].
 //!
 //! # DTOs
 //!
 //! All response types implement [`Serialize`], [`Deserialize`], and
-//! [`utoipa::ToSchema`] for `OpenAPI` documentation.
+//! `utoipa::ToSchema` for `OpenAPI` documentation.
 
-use axum::{Router, extract::State, response::Json, routing::get};
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use axum::{
+    Router,
+    extract::{Query, State},
+    response::Json,
+    routing::get,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 
+use crate::auth::AppError;
 use crate::gateway::GatewayState;
 use crate::module::ServiceModule;
 use crate::sse::{self, GatewayEvent};
@@ -27,7 +39,7 @@ impl ServiceModule for ProxyService {
     }
 
     fn description(&self) -> &'static str {
-        "Mock proxy / VPN check service"
+        "IP proxy / VPN check via upstream API"
     }
 
     fn router(&self) -> Router<GatewayState> {
@@ -47,7 +59,7 @@ impl ServiceModule for ProxyService {
 pub struct ProxyCheckResponse {
     /// The checked IP address.
     pub ip: String,
-    /// Country code.
+    /// Country name.
     pub country: String,
     /// Whether the IP is a known proxy / VPN.
     pub proxy: bool,
@@ -82,34 +94,89 @@ pub struct ProxyHealthResponse {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Run a mock proxy check and publish an SSE event.
+/// Run an IP proxy check against the configured upstream API and publish an
+/// SSE event so live dashboards can react.
+///
+/// Accepts an optional `?ip=` query parameter (defaults to `8.8.8.8`).
 #[utoipa::path(
     get,
     path = "/proxy/check",
     responses(
         (status = 200, description = "Proxy check result", body = ProxyCheckResponse),
+        (status = 400, description = "Invalid request parameters"),
+        (status = 503, description = "Upstream API unavailable"),
     ),
     tag = "proxy",
 )]
-async fn check_handler(State(state): State<GatewayState>) -> Json<ProxyCheckResponse> {
-    // Each check publishes an SSE event so live dashboards can react.
+async fn check_handler(
+    State(state): State<GatewayState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<ProxyCheckResponse>, AppError> {
+    let ip = params
+        .get("ip")
+        .cloned()
+        .unwrap_or_else(|| "8.8.8.8".to_string());
+
+    // Defensive: reject implausibly long IP strings. The upstream API will
+    // validate format; this is a cheap early-exit for abuse.
+    if ip.len() > 64 {
+        return Err(AppError::BadRequest("ip parameter too long".into()));
+    }
+
+    let client = reqwest_client();
+    let url = format!("{}/{ip}/json/", state.proxy_upstream_url);
+    let upstream = client.get(&url).send().await.map_err(|e| {
+        tracing::warn!(error = %e, upstream_url = %url, "upstream fetch failed");
+        AppError::internal("upstream fetch failed", e)
+    })?;
+
+    if !upstream.status().is_success() {
+        return Err(AppError::internal(
+            "upstream returned non-2xx",
+            std::io::Error::other(format!("upstream returned status {}", upstream.status())),
+        ));
+    }
+
+    let body: serde_json::Value = upstream.json().await.map_err(|e| {
+        AppError::internal("upstream response parse failed", e)
+    })?;
+
+    let country = body
+        .get("country_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Unknown")
+        .to_string();
+    let proxy = body
+        .get("threat")
+        .and_then(|v| v.get("is_proxy"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let risk_score = body
+        .get("threat")
+        .and_then(|v| v.get("score"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+
+    // Publish an SSE event for live dashboards
     sse::publish_event(
         &state.tx,
         GatewayEvent::Custom(
             "proxy_check",
             json!({
                 "timestamp": Utc::now().to_rfc3339(),
-                "status": "ok",
+                "ip": ip,
+                "country": country,
+                "proxy": proxy,
             }),
         ),
     );
 
-    Json(ProxyCheckResponse {
-        ip: "192.168.1.1".to_string(),
-        country: "US".to_string(),
-        proxy: false,
-        risk_score: 0.02,
-    })
+    Ok(Json(ProxyCheckResponse {
+        ip,
+        country,
+        proxy,
+        risk_score,
+    }))
 }
 
 /// Return mock proxy check history.
@@ -149,5 +216,28 @@ async fn proxy_health() -> Json<ProxyHealthResponse> {
     Json(ProxyHealthResponse {
         status: "ok".to_string(),
         service: "proxy".to_string(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Reusable reqwest client
+// ---------------------------------------------------------------------------
+
+static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Get the singleton reqwest client with a 5-second timeout.
+#[expect(
+    clippy::expect_used,
+    reason = "reqwest client build only fails if the runtime is broken or the TLS backend is missing (the workspace uses rustls)"
+)]
+fn reqwest_client() -> &'static reqwest::Client {
+    REQWEST_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect(
+                "reqwest client build only fails if the runtime is broken or \
+                 the TLS backend is missing (the workspace uses rustls)",
+            )
     })
 }

@@ -33,6 +33,10 @@ pub enum AppError {
     #[error("invalid signature")]
     InvalidSignature(#[source] jsonwebtoken::errors::Error),
 
+    /// Bad request (e.g. invalid parameter).
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
     /// Internal error that should not leak details to the client.
     #[error("internal error: {context}")]
     Internal {
@@ -85,6 +89,10 @@ impl IntoResponse for AppError {
             Self::InvalidSignature(e) => {
                 tracing::warn!(kind = %jwt_kind(&e), "invalid JWT signature");
                 unauthenticated("Invalid signature")
+            }
+            Self::BadRequest(msg) => {
+                tracing::debug!(message = %msg, "bad request");
+                (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
             }
             Self::Internal { context, source } => {
                 // `?source` uses `Debug` and walks the chain via `tracing-error`

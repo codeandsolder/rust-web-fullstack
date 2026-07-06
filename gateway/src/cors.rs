@@ -1,6 +1,6 @@
-//! Shared CORS configuration for gateway and tests.
+//! Shared CORS and CSP configuration for gateway and tests.
 
-use axum::http::HeaderValue;
+use axum::http::{HeaderName, HeaderValue};
 use tower_http::cors::{Any, CorsLayer};
 
 /// Default CORS allowlist used when `ALLOWED_ORIGINS` is unset or empty.
@@ -64,4 +64,40 @@ pub fn cors_layer() -> CorsLayer {
         .allow_methods(Any)
         .allow_headers(Any)
         .allow_origin(origins)
+}
+
+/// Build a CSP middleware suitable for the gateway's HTML pages.
+///
+/// Default policy:
+/// - `default-src 'self'`
+/// - `script-src 'self' 'unsafe-inline'` (Leptos SSR hydration)
+/// - `style-src 'self' 'unsafe-inline'`
+/// - `img-src 'self' data:`
+/// - `connect-src 'self' ws: wss:` (WebSocket + `EventSource`)
+/// - `frame-ancestors 'none'`
+///
+/// Implemented as a plain `axum::middleware::from_fn` rather than
+/// `tower_http::set_header::SetResponseHeaderLayer` because the latter's
+/// body-type bound (Body: Clone) is not satisfied by axum 0.8's
+/// `Body` type. The `if-not-present` semantics of the layer are
+/// preserved by checking for an existing header before inserting.
+pub async fn csp_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    const POLICY: HeaderValue = HeaderValue::from_static(
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-inline'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; \
+         connect-src 'self' ws: wss:; \
+         frame-ancestors 'none'",
+    );
+    const HEADER: HeaderName = HeaderName::from_static("content-security-policy");
+
+    let mut response = next.run(request).await;
+    if !response.headers().contains_key(&HEADER) {
+        response.headers_mut().insert(HEADER, POLICY);
+    }
+    response
 }

@@ -212,6 +212,7 @@ fn build_test_gateway(
         services: service_infos,
         modules,
         settings,
+        proxy_upstream_url: std::sync::Arc::from("https://ipapi.co"),
     };
 
     let cors = gateway_example::cors::cors_layer();

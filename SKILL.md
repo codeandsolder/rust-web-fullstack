@@ -1389,6 +1389,29 @@ async fn get_user(
 This catches at compile time: passing an `OrgId` where a `UserId` is
 expected, swapping path param order in a route, etc.
 
+### Cross-cutting Concerns: CSRF, CSP, CORS
+
+Three security headers and policies the gateway enforces by default:
+
+- **CORS** (`gateway/src/cors.rs`): allowlist-driven via `ALLOWED_ORIGINS`
+  env var. Default is the dev localhost allowlist (`:3000`, `:3001`, `:3002`).
+  Special value `*` permits any origin (debug only — emits a `warn!`).
+- **CSRF** (`axum-tower-sessions-csrf`): Synchronizer Token Pattern.
+  Server stores a CSRF token in the session; the client must echo it back
+  on state-changing requests. The CSRF middleware validates the token with
+  constant-time comparison. Configured in `gateway/src/gateway.rs` via
+  `CsrfMiddleware::middleware`.
+- **CSP** (`gateway/src/cors.rs::csp_layer`): Content-Security-Policy
+  header set via `tower_http::set_header::SetResponseHeaderLayer`. The
+  default policy allows self-hosted scripts/styles, `'unsafe-inline'` for
+  Leptos SSR, and `ws:`/`wss:` for WebSocket/SSE connections.
+
+Production checklist:
+1. Override `ALLOWED_ORIGINS` to your actual domain(s).
+2. Override `SESSION_COOKIE_SECURE=true` (the default is `true` already).
+3. Verify CSP allows any required external script/style sources.
+4. Don't use `ALLOWED_ORIGINS=*` outside local development.
+
 ### Pattern 17: Leptos 0.8.x Knowledge Patch
 
 Three Leptos 0.8.x features added after most training cutoffs. Use them

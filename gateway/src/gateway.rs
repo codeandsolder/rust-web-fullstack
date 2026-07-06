@@ -55,6 +55,8 @@ pub struct GatewayState {
     pub modules: Vec<Arc<dyn ServiceModule>>,
     /// Application settings loaded from environment variables at startup.
     pub settings: settings::Settings,
+    /// Base URL for the proxy upstream API (default: <https://ipapi.co>).
+    pub proxy_upstream_url: Arc<str>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -64,6 +66,7 @@ impl std::fmt::Debug for GatewayState {
             .field("services", &self.services)
             .field("modules", &format_args!("[{} modules]", self.modules.len()))
             .field("settings", &self.settings)
+            .field("proxy_upstream_url", &self.proxy_upstream_url)
             .finish()
     }
 }
@@ -124,11 +127,16 @@ pub fn build_gateway_with_settings(
         }
     }
 
+    let proxy_upstream_url: Arc<str> = std::env::var("PROXY_UPSTREAM_URL")
+        .unwrap_or_else(|_| "https://ipapi.co".to_string())
+        .into();
+
     let state = GatewayState {
         tx,
         services: service_infos,
         modules,
         settings,
+        proxy_upstream_url,
     };
 
     // --- Prometheus metrics ---
@@ -216,6 +224,7 @@ pub fn build_gateway_with_settings(
         .layer(prometheus_layer)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(axum::middleware::from_fn(crate::cors::csp_middleware))
         .with_state(state);
 
     Ok(app)
@@ -363,6 +372,7 @@ mod tests {
             services: vec![],
             modules,
             settings,
+            proxy_upstream_url: Arc::from("https://ipapi.co"),
         };
 
         let (status, _body) = health_handler(State(state)).await;

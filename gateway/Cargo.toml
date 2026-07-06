@@ -36,7 +36,8 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tower = { workspace = true }
-tower-http = { workspace = true, features = ["trace", "cors", "timeout"] }
+tower-http = { workspace = true, features = ["trace", "cors", "timeout", "set-header"] }
+reqwest = { workspace = true }
 tower-sessions = { workspace = true }
 tower-sessions-memory-store = "0.15"
 tower_governor = { workspace = true }
