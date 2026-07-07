@@ -109,6 +109,38 @@ mod server {
         POOL.get()
     }
 
+    /// Pool-tuning knobs as the `db` module understands them.
+    ///
+    /// This struct is the local mirror of `rwf_config::LiveSearchConfig`'s
+    /// pool fields, flattened so callers (mostly bootstrap) can pass in the
+    /// tunables without depending on `rwf-config` from inside `db`. A
+    /// `From<&LiveSearchConfig>` impl lives in the `bootstrap` module.
+    #[derive(Debug, Clone, Copy)]
+    pub struct PoolTunables {
+        /// Hard cap on connections the pool will open.
+        pub max_connections: u32,
+        /// Pre-warmed connections maintained in the background.
+        pub min_connections: u32,
+        /// Max time to wait for a free connection before timing out.
+        pub acquire_timeout_secs: u64,
+        /// Close idle connections older than this.
+        pub idle_timeout_secs: u64,
+        /// Close and replace connections older than this.
+        pub max_lifetime_secs: u64,
+    }
+
+    impl Default for PoolTunables {
+        fn default() -> Self {
+            Self {
+                max_connections: 20,
+                min_connections: 2,
+                acquire_timeout_secs: 5,
+                idle_timeout_secs: 600,
+                max_lifetime_secs: 1800,
+            }
+        }
+    }
+
     /// Create a new connection pool from the given database URL.
     ///
     /// At all times one pool connection is held by the [`PgListener`] task,
@@ -116,23 +148,28 @@ mod server {
     /// `max_connections` includes that connection; total handler-request
     /// capacity is `max_connections - 1` under load.
     ///
-    /// Hardening applied:
+    /// Hardening applied (all fields overridable via [`PoolTunables`]):
     /// - `test_before_acquire(true)` — verifies a connection is alive before
     ///   handing it to a request handler.
-    /// - `idle_timeout(600s)` — closes idle connections after 10 minutes.
-    /// - `max_lifetime(1800s)` — recycles connections after 30 minutes.
+    /// - `idle_timeout(cfg.idle_timeout_secs)` — closes idle connections
+    ///   after that many seconds.
+    /// - `max_lifetime(cfg.max_lifetime_secs)` — recycles connections after
+    ///   that many seconds.
     ///
     /// # Errors
     /// Returns the underlying [`sqlx::Error`] if connecting to `PostgreSQL`
     /// fails.
-    pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    pub async fn create_pool(
+        database_url: &str,
+        tunables: &PoolTunables,
+    ) -> Result<PgPool, sqlx::Error> {
         PgPoolOptions::new()
-            .max_connections(20)
-            .min_connections(2)
-            .acquire_timeout(Duration::from_secs(5))
+            .max_connections(tunables.max_connections)
+            .min_connections(tunables.min_connections)
+            .acquire_timeout(Duration::from_secs(tunables.acquire_timeout_secs))
             .test_before_acquire(true)
-            .idle_timeout(Duration::from_secs(600))
-            .max_lifetime(Duration::from_secs(1800))
+            .idle_timeout(Duration::from_secs(tunables.idle_timeout_secs))
+            .max_lifetime(Duration::from_secs(tunables.max_lifetime_secs))
             .connect(database_url)
             .await
     }
@@ -650,6 +687,6 @@ mod server {
 // `db::create_pool(…)` etc. without changing import paths.
 #[cfg(feature = "ssr")]
 pub use server::{
-    base64url_decode, base64url_encode, close_pool, create_pool, decode_cursor, encode_cursor,
-    get_pool, run_pg_listener, run_watchdog, search_with_cursor, set_pool,
+    PoolTunables, base64url_decode, base64url_encode, close_pool, create_pool, decode_cursor,
+    encode_cursor, get_pool, run_pg_listener, run_watchdog, search_with_cursor, set_pool,
 };

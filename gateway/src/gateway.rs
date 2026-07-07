@@ -54,6 +54,10 @@ pub struct GatewayState {
     /// Optional `sqlx::PgPool` for refresh-token rotation. `None` means
     /// the legacy stateless `/auth/refresh` semantics are used.
     pub db_pool: Option<sqlx::PgPool>,
+    /// Lifetime of freshly-issued refresh tokens, in seconds. Loaded from
+    /// `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS` at startup; the historical
+    /// default in `auth/refresh::REFRESH_TOKEN_TTL_SECONDS` is the floor.
+    pub refresh_token_ttl_secs: i64,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -65,6 +69,7 @@ impl std::fmt::Debug for GatewayState {
             .field("settings", &self.settings)
             .field("proxy_upstream_url", &self.proxy_upstream_url)
             .field("db_pool", &self.db_pool.as_ref().map(|_| "PgPool { .. }"))
+            .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
             .finish()
     }
 }
@@ -87,7 +92,18 @@ impl std::fmt::Debug for GatewayState {
 #[instrument(skip(modules))]
 pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
     let settings = settings::Settings::load()?;
-    build_gateway_with_settings(modules, settings, "https://ipapi.co".to_string(), None)
+    // Load `rwf-config` for the refresh-token TTL default. Bypassing the
+    // workspace `Config::load` here keeps this constructor dependency-free
+    // for tests; production `main.rs` calls `build_gateway_with_settings`
+    // directly with the loaded value.
+    let cfg = rwf_config::Config::load().unwrap_or_default();
+    build_gateway_with_settings(
+        modules,
+        settings,
+        "https://ipapi.co".to_string(),
+        None,
+        cfg.gateway.refresh_token_ttl_secs.cast_signed(),
+    )
 }
 
 /// Compose every `ServiceModule` with pre-loaded [`settings::Settings`].
@@ -104,9 +120,10 @@ pub fn build_gateway_with_settings(
     settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
+    refresh_token_ttl_secs: i64,
 ) -> Result<Router, anyhow::Error> {
-    // 256 matches live-search's broadcast buffer size, providing room for ~256
-    // concurrent subscribers before lag events fire.
+    // 256 is the documented default; production can override via
+    // `RWF_GATEWAY__SSE_BROADCAST_BUFFER` (see `main.rs`).
     let (tx, _rx) = broadcast::channel(256);
 
     let service_infos: Vec<ServiceInfo> = modules
@@ -136,6 +153,7 @@ pub fn build_gateway_with_settings(
         settings,
         proxy_upstream_url,
         db_pool,
+        refresh_token_ttl_secs,
     };
 
     // --- Prometheus metrics ---
@@ -368,6 +386,7 @@ mod tests {
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             db_pool: None,
+            refresh_token_ttl_secs: 60 * 60 * 24 * 30,
         };
 
         let (status, _body) = health_handler(State(state)).await;

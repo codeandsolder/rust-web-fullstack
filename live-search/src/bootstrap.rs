@@ -137,7 +137,20 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     // ---- database pool & migration ---------------------------------------
 
-    let pool = db::create_pool(&database_url)
+    // Project `rwf_config::LiveSearchConfig` into the local `db::PoolTunables`
+    // struct so `db` does not need to depend on `rwf-config` directly
+    // (which would be a circular dependency — `rwf-config` is upstream of
+    // every binary that uses it).
+    let pool_tunables = db::PoolTunables {
+        max_connections: cfg.live_search.pool_max_connections,
+        min_connections: cfg.live_search.pool_min_connections,
+        acquire_timeout_secs: cfg.live_search.pool_acquire_timeout_secs,
+        idle_timeout_secs: cfg.live_search.pool_idle_timeout_secs,
+        max_lifetime_secs: cfg.live_search.pool_max_lifetime_secs,
+    };
+    tracing::info!("{}", cfg.live_search.connection_budget_summary());
+
+    let pool = db::create_pool(&database_url, &pool_tunables)
         .await
         .context("failed to create database pool")?;
 
@@ -155,7 +168,8 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     // ---- broadcast channel for SSE ----------------------------------------
 
-    let (tx, _rx) = tokio::sync::broadcast::channel::<SseEvent>(256);
+    let (tx, _rx) =
+        tokio::sync::broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
     sse::set_broadcast(tx.clone())?;
 
     // ---- cancellation token & task set ------------------------------------

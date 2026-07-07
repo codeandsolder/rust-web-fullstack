@@ -214,6 +214,8 @@ fn build_test_gateway(
         settings,
         proxy_upstream_url: std::sync::Arc::from("https://ipapi.co"),
         db_pool: None,
+        // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
+        refresh_token_ttl_secs: 60 * 60 * 24 * 30,
     };
 
     let cors = gateway_example::cors::cors_layer();

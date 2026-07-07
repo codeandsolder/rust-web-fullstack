@@ -27,7 +27,12 @@ pub struct RotationResult {
     pub subject: Uuid,
 }
 
-/// Default lifetime for newly issued refresh tokens (30 days).
+/// Default lifetime for newly issued refresh tokens.
+///
+/// The constant is the historical 30-day default; production deployments
+/// override this through `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS` (see
+/// `rwf_config::GatewayConfig::refresh_token_ttl_secs`). Tests that don't
+/// load `rwf-config` get this value as the floor.
 pub const REFRESH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 30;
 
 /// Errors that can occur in refresh-token DB operations.
@@ -89,6 +94,9 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
 /// revoked or expired — the caller maps this to 401 to indicate the
 /// credential chain is broken.
 ///
+/// `ttl_secs` controls the lifetime of the freshly-issued token; pass
+/// `cfg.gateway.refresh_token_ttl_secs as i64` for production behaviour.
+///
 /// # Errors
 /// Returns [`RefreshError::OsRng`] when entropy cannot be fetched, or
 /// [`RefreshError::Sqlx`] for DB failures.
@@ -96,6 +104,7 @@ pub async fn rotate(
     pool: &PgPool,
     raw_token: &str,
     now: DateTime<Utc>,
+    ttl_secs: i64,
 ) -> Result<Option<RotationResult>, RefreshError> {
     let hashed = hash_refresh_token(raw_token);
     let mut tx = pool.begin().await?;
@@ -135,7 +144,7 @@ pub async fn rotate(
 
     // Insert a brand-new refresh token with the same subject.
     let (new_raw, new_jti) = generate_raw_refresh_token()?;
-    let new_expires_at = now + chrono::Duration::seconds(REFRESH_TOKEN_TTL_SECONDS);
+    let new_expires_at = now + chrono::Duration::seconds(ttl_secs);
     let new_hashed = hash_refresh_token(&new_raw).to_vec();
     sqlx::query(
         "

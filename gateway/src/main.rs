@@ -79,11 +79,16 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(services::monitor::MonitorService),
     ];
 
+    // Load workspace config once for tunables that don't fit in `Settings`
+    // (refresh-token TTL, broadcast buffer size, etc.).
+    let rwf_cfg = rwf_config::Config::load().unwrap_or_default();
+
     let app = gateway::build_gateway_with_settings(
         service_modules,
         settings,
         proxy_upstream_url,
         create_db_pool().await?,
+        rwf_cfg.gateway.refresh_token_ttl_secs.cast_signed(),
     )?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

@@ -161,7 +161,7 @@ pub async fn refresh_handler(
             .ok_or(AppError::AuthError)?;
 
         let now = chrono::Utc::now();
-        let rotation = super::refresh::rotate(pool, raw, now)
+        let rotation = super::refresh::rotate(pool, raw, now, state.refresh_token_ttl_secs)
             .await
             .map_err(|e| AppError::internal("refresh-token rotation", e))?
             .ok_or(AppError::AuthError)?;

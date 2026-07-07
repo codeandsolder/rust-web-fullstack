@@ -107,6 +107,8 @@ mod tests {
             modules: vec![],
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
+            // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
+            refresh_token_ttl_secs: 60 * 60 * 24 * 30,
         };
 
         let app = MonitorService.router().with_state(state);

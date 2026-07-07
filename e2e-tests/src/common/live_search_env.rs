@@ -57,9 +57,10 @@ impl LiveSearchEnv {
         let conn_str = db.connection_string().to_string();
 
         // ── 2. Create server database pool ────────────────────────────────
-        let server_pool = live_search::db::create_pool(&conn_str)
-            .await
-            .context("Failed to create live-search database pool")?;
+        let server_pool =
+            live_search::db::create_pool(&conn_str, &live_search::db::PoolTunables::default())
+                .await
+                .context("Failed to create live-search database pool")?;
 
         // ── 3. Set global pool (OnceLock) ─────────────────────────────────
         live_search::db::set_pool(server_pool.clone()).context("set_pool already initialized")?;
