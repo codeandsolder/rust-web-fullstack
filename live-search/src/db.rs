@@ -502,19 +502,18 @@ mod server {
     /// missing, the timestamp is invalid, or the UUID is invalid.
     pub fn decode_cursor(s: &str) -> Result<(DateTime<Utc>, Uuid), String> {
         let bytes = base64url_decode(s)?;
-        let raw =
-            std::str::from_utf8(&bytes).map_err(|e| format!("invalid utf-8: {e}"))?;
+        let raw = std::str::from_utf8(&bytes).map_err(|e| format!("invalid utf-8: {e}"))?;
         let mut parts = raw.splitn(2, '|');
-        let ts_str = parts.next().ok_or_else(|| "missing timestamp".to_string())?;
+        let ts_str = parts
+            .next()
+            .ok_or_else(|| "missing timestamp".to_string())?;
         let id_str = parts.next().ok_or_else(|| "missing uuid".to_string())?;
         let micros: i64 = ts_str
             .parse()
             .map_err(|e| format!("invalid timestamp: {e}"))?;
         let ts = DateTime::<Utc>::from_timestamp_micros(micros)
             .ok_or_else(|| format!("invalid timestamp value: {micros}"))?;
-        let id: Uuid = id_str
-            .parse()
-            .map_err(|e| format!("invalid uuid: {e}"))?;
+        let id: Uuid = id_str.parse().map_err(|e| format!("invalid uuid: {e}"))?;
         Ok((ts, id))
     }
 
@@ -597,8 +596,8 @@ mod server {
             let original_time = Utc::now();
             let original_id = Uuid::new_v4();
             let encoded = super::encode_cursor(original_time, original_id);
-            let (decoded_time, decoded_id) =
-                super::decode_cursor(&encoded).map_err(|e| anyhow::anyhow!("decode failed: {e}"))?;
+            let (decoded_time, decoded_id) = super::decode_cursor(&encoded)
+                .map_err(|e| anyhow::anyhow!("decode failed: {e}"))?;
             assert_eq!(
                 decoded_time.timestamp_micros(),
                 original_time.timestamp_micros()
@@ -614,7 +613,6 @@ mod server {
             // Characters not in the base64url alphabet → decode failure
             assert!(super::decode_cursor("!!!notbase64!!!").is_err());
         }
-
     }
 }
 

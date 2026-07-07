@@ -137,9 +137,10 @@ async fn check_handler(
         ));
     }
 
-    let body: serde_json::Value = upstream.json().await.map_err(|e| {
-        AppError::internal("upstream response parse failed", e)
-    })?;
+    let body: serde_json::Value = upstream
+        .json()
+        .await
+        .map_err(|e| AppError::internal("upstream response parse failed", e))?;
 
     let country = body
         .get("country_name")

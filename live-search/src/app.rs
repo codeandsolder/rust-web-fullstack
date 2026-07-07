@@ -178,9 +178,7 @@ pub fn App() -> impl IntoView {
 // ---------------------------------------------------------------------------
 
 #[component]
-fn SearchErrorBoundary(
-    children: Children,
-) -> impl IntoView {
+fn SearchErrorBoundary(children: Children) -> impl IntoView {
     view! {
         <ErrorBoundary
             fallback=move |_errors| view! {
@@ -194,8 +192,6 @@ fn SearchErrorBoundary(
         </ErrorBoundary>
     }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Search page – submit a query, display results from the server function

@@ -19,6 +19,7 @@ use anyhow::Context;
 use tokio::signal;
 
 use gateway_example::{gateway, module, services};
+use rwf_config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,6 +31,18 @@ async fn main() -> anyhow::Result<()> {
              This is a deliberate guard against accidentally enabling ephemeral keys."
         );
     }
+
+    // Load layered config: config.toml + RWF_* env var overrides.
+    // The port comes from config.gateway.port; the existing
+    // GATEWAY_PORT env var is checked as a fallback for backward
+    // compatibility (it takes precedence over config.toml).
+    let cfg = Config::load().context("failed to load workspace config")?;
+    let port: u16 = std::env::var("GATEWAY_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(cfg.gateway.port);
+    let proxy_upstream_url = std::env::var("PROXY_UPSTREAM_URL")
+        .unwrap_or_else(|_| cfg.gateway.proxy_upstream_url.clone());
 
     // ---- Telemetry / tracing ----
     //
@@ -66,12 +79,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(services::monitor::MonitorService),
     ];
 
-    let app = gateway::build_gateway_with_settings(service_modules, settings)?;
+    let app = gateway::build_gateway_with_settings(service_modules, settings, proxy_upstream_url)?;
 
-    let port: u16 = std::env::var("GATEWAY_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3001);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     tracing::info!("gateway-example starting on {addr}");

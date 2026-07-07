@@ -119,7 +119,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
-            response.headers().get("location").and_then(|v| v.to_str().ok()),
+            response
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok()),
             Some("/health"),
         );
         Ok(())

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["gateway", "live-search", "i18n-demo", "e2e-tests"]
+members = ["crates/config", "gateway", "live-search", "i18n-demo", "e2e-tests"]
 
 [workspace.package]
 version = "0.1.0"
@@ -70,6 +70,10 @@ insta = "1"
 proptest = "1"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
+# Layered config: TOML file + RWF_* environment variable overrides.
+# The `config` crate gives us typed deserialization + per-source priority
+# without needing unsafe or hand-rolled merge logic.
+config = { version = "0.14", default-features = false, features = ["toml"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

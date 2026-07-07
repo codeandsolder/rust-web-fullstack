@@ -1,0 +1,44 @@
+# rust-web-fullstack workspace config
+#
+# Layered configuration for the gateway and live-search binaries.
+# Each binary loads this file via the `config` crate; per-environment
+# overrides are read from `RWF_*` environment variables.
+#
+# Resolution order (highest priority wins):
+#   1. RWF_* environment variables (e.g. RWF_GATEWAY_PORT=4000)
+#   2. This TOML file
+#   3. Hard-coded defaults in the binary
+#
+# Required keys are checked at startup; missing keys produce a clear
+# error message rather than a silent fallback.
+
+[gateway]
+# Port the gateway binds to. Overridable via RWF_GATEWAY_PORT.
+port = 3001
+
+# Upstream base URL for the proxy / VPN check service.
+# Overridable via RWF_PROXY_UPSTREAM_URL.
+proxy_upstream_url = "https://ipapi.co"
+
+[gateway.cors]
+# Comma-separated allowlist. Special value "*" permits any origin
+# (debug only). Overridable via RWF_ALLOWED_ORIGINS.
+allowed_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+
+[gateway.session]
+# Whether the session cookie carries the `Secure` flag.
+# Overridable via RWF_SESSION_COOKIE_SECURE.
+cookie_secure = true
+
+[live_search]
+# Port live-search binds to. Overridable via RWF_LIVE_SEARCH_PORT.
+port = 3000
+
+# Database URL — the only required setting for live-search.
+# Overridable via RWF_DATABASE_URL.
+database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
+
+[otel]
+# OTLP endpoint for the optional `otel` feature. When unset, the
+# telemetry layer is skipped.
+endpoint = "http://localhost:4317"

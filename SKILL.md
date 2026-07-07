@@ -1412,6 +1412,67 @@ Production checklist:
 3. Verify CSP allows any required external script/style sources.
 4. Don't use `ALLOWED_ORIGINS=*` outside local development.
 
+### Pattern 22: Layered config (TOML file + RWF_* env overrides)
+
+All workspace binaries read their configuration through the
+`rwf-config` crate (`crates/config/`). This avoids per-binary
+ad-hoc `std::env::var` chains and the hand-rolled merge logic that
+sometimes tempted people toward `unsafe` to satisfy the borrow checker.
+
+**Resolution order** (highest priority wins):
+
+1. `RWF_*` environment variables — e.g. `RWF_GATEWAY__PORT=4000`
+2. `config.toml` at workspace root (or `RWF_CONFIG=/path/to/config.toml`)
+3. Defaults baked into the `Config` structs
+
+The `__` separator addresses nested keys (`gateway.cors.allowed_origins`
+becomes `RWF_GATEWAY__CORS__ALLOWED_ORIGINS`).
+
+**Usage in a binary:**
+
+```rust
+use rwf_config::Config;
+
+let cfg = Config::load().context("failed to load workspace config")?;
+let port = std::env::var("PORT")
+    .ok()
+    .and_then(|p| p.parse().ok())
+    .unwrap_or(cfg.gateway.port);
+```
+
+**Reference `config.toml`:**
+
+```toml
+[gateway]
+port = 3001
+proxy_upstream_url = "https://ipapi.co"
+
+[gateway.cors]
+allowed_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+
+[live_search]
+port = 3000
+database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
+```
+
+When adding a new setting:
+
+1. Add the field to the appropriate section struct in
+   `crates/config/src/lib.rs` (with a `Default` impl if it should be
+   optional).
+2. Add `set_default(...)` for it in `Config::load()` so the loader has
+   a fallback.
+3. Add the key to `config.toml` at the workspace root so contributors
+   can see it.
+4. Add a `#[expect(clippy::derivable_impls)]`-free default — the
+   pedantic lint will catch it.
+
+`Config::load()` returns a `Result<Config, ConfigError>` with two
+variants: `Load(config::ConfigError)` for parser/IO failures and
+`ConfigPathNotFound(String)` when `RWF_CONFIG` was set but the file
+doesn't exist. **Never silently fall back** — both variants propagate
+the failure to the user so misconfigurations are immediately obvious.
+
 ### Pattern 17: Leptos 0.8.x Knowledge Patch
 
 Three Leptos 0.8.x features added after most training cutoffs. Use them

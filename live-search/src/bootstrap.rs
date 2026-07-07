@@ -168,8 +168,10 @@ pub async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
 pub async fn run() -> anyhow::Result<ServerHandle> {
     init_tracing();
 
-    let database_url =
-        std::env::var("DATABASE_URL").context("DATABASE_URL environment variable must be set")?;
+    let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .unwrap_or_else(|| cfg.live_search.database_url.clone());
 
     // ---- database pool & migration ---------------------------------------
 
@@ -279,7 +281,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(3000);
+        .unwrap_or(cfg.live_search.port);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("Live search server listening on {addr}");
 

@@ -89,7 +89,13 @@ impl std::fmt::Debug for GatewayState {
 #[instrument(skip(modules))]
 pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
     let settings = settings::Settings::load()?;
-    build_gateway_with_settings(modules, settings)
+    let proxy_upstream_url =
+        std::env::var("PROXY_UPSTREAM_URL").unwrap_or_else(|_| "https://ipapi.co".to_string());
+    let _port: u16 = std::env::var("GATEWAY_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3001);
+    build_gateway_with_settings(modules, settings, proxy_upstream_url)
 }
 
 /// Compose every `ServiceModule` with pre-loaded [`settings::Settings`].
@@ -104,6 +110,7 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
 pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     settings: settings::Settings,
+    proxy_upstream_url: String,
 ) -> Result<Router, anyhow::Error> {
     // 256 matches live-search's broadcast buffer size, providing room for ~256
     // concurrent subscribers before lag events fire.
@@ -127,9 +134,7 @@ pub fn build_gateway_with_settings(
         }
     }
 
-    let proxy_upstream_url: Arc<str> = std::env::var("PROXY_UPSTREAM_URL")
-        .unwrap_or_else(|_| "https://ipapi.co".to_string())
-        .into();
+    let proxy_upstream_url: Arc<str> = proxy_upstream_url.into();
 
     let state = GatewayState {
         tx,
