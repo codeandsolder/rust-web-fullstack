@@ -127,29 +127,9 @@ mod tests {
         assert!(json.contains("\"skipped\":42"));
     }
 
-    /// The `connected` / `search_result` / `stream_lagged` event-name
-    /// mapping is hard-coded in `event_to_sse` via the SSE `event:`
-    /// field of the rendered wire format. Axum 0.8's `Event` struct is
-    /// opaque (no `pub` accessors for the event name or data), so the
-    /// end-to-end mapping is best verified at the integration-test
-    /// layer (e2e-tests/tests/sse_test.rs), which subscribes via a
-    /// real `EventSource` and asserts on the parsed event names.
-    #[expect(
-        clippy::expect_used,
-        reason = "test fixture: chrono::from_timestamp(0,0) is infallible on a sound system clock"
-    )]
-    #[test]
-    fn sse_event_variants_are_all_reachable() {
-        // Compile-time check that all three variants still exist (regression
-        // guard against accidental removal in a future refactor).
-        let epoch =
-            chrono::DateTime::from_timestamp(0, 0).expect("unix epoch is always representable");
-        let _ = SseEvent::Connected { server_time: epoch };
-        let _ = SseEvent::SearchResult {
-            title: "t".into(),
-            url: "u".into(),
-            snippet: "s".into(),
-        };
-        let _ = SseEvent::StreamLagged { skipped: 1 };
-    }
+    // (sse_event_variants_are_all_reachable removed in round 5: the
+    // exhaustive `match` inside `event_to_sse` already enforces the
+    // presence of every variant at compile time. A separate runtime
+    // "construct each variant" test only verified that the source
+    // file had been kept around — noise.)
 }

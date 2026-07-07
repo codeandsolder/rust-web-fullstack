@@ -233,7 +233,18 @@ fn build_test_gateway(
             "/auth/refresh",
             post(gateway_example::auth::refresh_handler),
         )
-        .route("/auth/logout", post(gateway_example::auth::logout_handler))
+        // `/auth/logout` requires the auth middleware in scope; without
+        // it, `Extension<Claims>::from_request` returns 500 instead of
+        // 401. Mirror the production gateway's wiring.
+        .route(
+            "/auth/logout",
+            post(gateway_example::auth::logout_handler).route_layer(
+                middleware::from_fn_with_state(
+                    state.clone(),
+                    gateway_example::auth::auth_middleware,
+                ),
+            ),
+        )
         .route(
             "/auth/protected",
             get(gateway_example::auth::protected_handler).route_layer(

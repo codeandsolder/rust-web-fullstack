@@ -215,7 +215,19 @@ pub fn build_gateway_with_settings(
     let other_router = Router::new()
         .route("/health", get(health_handler))
         .route("/events", get(sse::sse_handler))
-        .route("/auth/logout", post(auth::logout_handler))
+        // `/auth/logout` requires a valid Bearer token (the handler
+        // extracts `Extension<Claims>` to identify the subject whose
+        // refresh tokens are being revoked). Without the auth middleware
+        // in scope, `Extension::from_request` returns 500 instead of
+        // 401 — a regression that Round 5a was supposed to fix but
+        // missed. Mirror the `/auth/protected` pattern.
+        .route(
+            "/auth/logout",
+            post(auth::logout_handler).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::auth_middleware,
+            )),
+        )
         .route("/", get(root_handler))
         .route(
             "/auth/protected",

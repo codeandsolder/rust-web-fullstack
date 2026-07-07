@@ -1502,6 +1502,7 @@ lifecycle into two functions — `bootstrap::run()` and `shutdown::wait()`
 **`bootstrap::run()` (abridged, canonical source comments stripped)**:
 
 ```rust
+use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -1519,19 +1520,40 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     // 1. Tracing subscriber (plain fmt or with OTel via `otel` feature).
     init_tracing();
 
-    // 2. Pool, migrations, cache, broadcast channel.
-    let pool = db::create_pool(&database_url).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
-    db::set_pool(pool.clone())?;
-    cache::init_cache();
-    let (tx, _rx) = tokio::sync::broadcast::channel::<SseEvent>(256);
-    sse::set_broadcast(tx.clone())?;
+    // 2. Workspace config (overridable via RWF_* env vars and
+    //    config.toml — see Pattern 22).
+    let cfg = rwf_config::Config::load()?;
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .unwrap_or_else(|| cfg.live_search.database_url.clone());
 
-    // 3. Cancellation token + JoinSet.
+    // 3. Pool with rwf-config tunables.
+    let pool_tunables = db::PoolTunables {
+        max_connections: cfg.live_search.pool_max_connections,
+        min_connections: cfg.live_search.pool_min_connections,
+        acquire_timeout_secs: cfg.live_search.pool_acquire_timeout_secs,
+        idle_timeout_secs: cfg.live_search.pool_idle_timeout_secs,
+        max_lifetime_secs: cfg.live_search.pool_max_lifetime_secs,
+    };
+    let pool = db::create_pool(&database_url, &pool_tunables).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    // 4. Cache + broadcast channel + AppContext. Round 5f replaced
+    //    the previous `cache::init_cache()` / `db::set_pool(...)` /
+    //    `sse::set_broadcast(...)` OnceLock pattern with a single
+    //    `AppContext` plumbed through `state::set()` (server fns)
+    //    and `leptos::provide_context()` (SSR component tree).
+    let cache_handle = CacheHandle::default();
+    let (tx, _rx) =
+        tokio::sync::broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
+    let ctx = Arc::new(state::AppContext::new(pool.clone(), tx.clone(), cache_handle.clone()));
+    state::set(Arc::clone(&ctx))?;
+
+    // 5. Cancellation token + JoinSet.
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
 
-    // 4. Spawn long-lived tasks with child tokens (PG listener, watchdog,
+    // 6. Spawn long-lived tasks with child tokens (PG listener, watchdog,
     //    HTTP server, etc. — see source for full list).
     let listener_token = shutdown.child_token();
     let watchdog_token = shutdown.child_token();

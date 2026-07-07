@@ -283,11 +283,64 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
     use super::*;
+
+    /// Process-wide serialisation mutex for env-mutating tests.
+    ///
+    /// Tests in a single binary run on multiple threads by default
+    /// (`cargo test --test-threads = N CPU cores`). Without this lock,
+    /// the env-var-mutating test races with `defaults_match_documented_values`
+    /// (which reads `RWF_CONFIG` indirectly) and produces ~20% flaky
+    /// failures. Acquire the lock at the top of every test that touches
+    /// the process env. `PoisonError::into_inner` is used so a panic in
+    /// one test doesn't lock out the rest.
+    fn env_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Temporarily set `key` to `value` for the duration of `f`, then
+    /// restore the previous value (or remove the var if it was unset).
+    ///
+    /// SAFETY: requires the caller to hold [`env_test_lock`] for the
+    /// duration of the closure so concurrent tests don't observe the
+    /// mutation. Tests within a single `cargo test` binary run on
+    /// multiple threads by default.
+    fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let original = std::env::var(key).ok();
+        // SAFETY: process-env mutation is safe because the env_test_lock
+        // serialises every test that calls this helper.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        let result = f();
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var(key, v);
+            },
+            None => unsafe {
+                std::env::remove_var(key);
+            },
+        }
+        result
+    }
 
     #[test]
     fn defaults_match_documented_values() {
-        // Defaults load even when config.toml is absent.
+        // The env-mutating tests acquire `env_test_lock`; this one
+        // does not need to touch the env but DOES depend on
+        // `RWF_CONFIG` being unset (the loader returns ConfigPathNotFound
+        // if it points to a missing file). Hold the lock so we read a
+        // deterministic env state.
+        let _guard = env_test_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cfg = Config::load().expect("load should succeed with defaults");
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);
@@ -302,27 +355,14 @@ mod tests {
     /// (not a silent fallback).
     #[test]
     fn rwf_config_missing_path_errors() {
-        let original = std::env::var("RWF_CONFIG").ok();
-        // SAFETY: tests in a single binary are run on a single thread by
-        // cargo's default; this is the documented `std::env::set_var`
-        // precondition.
-        unsafe {
-            std::env::set_var("RWF_CONFIG", "/this/path/does/not/exist.toml");
-        }
-        let result = Config::load();
+        let _guard = env_test_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = with_env_var("RWF_CONFIG", "/this/path/does/not/exist.toml", Config::load);
         assert!(
             matches!(result, Err(ConfigError::ConfigPathNotFound(_))),
             "expected ConfigPathNotFound for nonexistent RWF_CONFIG, got {result:?}",
         );
-        // Restore.
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("RWF_CONFIG", v);
-            },
-            None => unsafe {
-                std::env::remove_var("RWF_CONFIG");
-            },
-        }
     }
 
     /// `connection_budget_summary` round-trips the configured pool values

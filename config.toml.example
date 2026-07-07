@@ -15,7 +15,11 @@
 # The double-underscore __ separates nested section keys:
 #
 #   RWF_GATEWAY__PORT=4000
+#   RWF_GATEWAY__SSE_BROADCAST_BUFFER=512
+#   RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS=2592000
 #   RWF_LIVE_SEARCH__DATABASE_URL=postgres://user:pass@host/db
+#   RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50
+#   RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER=512
 #   RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://example.com
 #   RWF_GATEWAY__SESSION__COOKIE_SECURE=false
 #   RWF_OTEL__ENDPOINT=https://otlp.example.com:4317
@@ -34,6 +38,16 @@
 port = 3001
 proxy_upstream_url = "https://ipapi.co"
 
+# Buffer size for the gateway's SSE broadcast channel. Increase if many
+# concurrent EventSource consumers are expected.
+# Environment: RWF_GATEWAY__SSE_BROADCAST_BUFFER
+sse_broadcast_buffer = 256
+
+# Lifetime of newly-issued refresh tokens, in seconds. The historical
+# default is 30 days (2_592_000 s).
+# Environment: RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS
+refresh_token_ttl_secs = 2592000
+
 # CORS allowlist
 # Environment: RWF_GATEWAY__CORS__ALLOWED_ORIGINS
 [gateway.cors]
@@ -49,6 +63,22 @@ cookie_secure = true
 [live_search]
 port = 3000
 database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
+
+# Database connection pool tunables — all overridable via
+# RWF_LIVE_SEARCH__POOL_*. At all times one pool connection is held by
+# the PgListener task; total request-handler capacity is
+# pool_max_connections - 1 under load.
+# Environment: RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS / __POOL_MIN_CONNECTIONS / etc.
+pool_max_connections = 20
+pool_min_connections = 2
+pool_acquire_timeout_secs = 5
+pool_idle_timeout_secs = 600
+pool_max_lifetime_secs = 1800
+
+# Buffer size for the live-search SSE broadcast channel. Same semantics
+# as gateway.sse_broadcast_buffer.
+# Environment: RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER
+sse_broadcast_buffer = 256
 
 # OpenTelemetry exporter endpoint
 # Set to a gRPC endpoint (e.g. "https://otlp.example.com:4317") to enable
