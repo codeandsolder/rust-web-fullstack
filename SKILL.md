@@ -1495,86 +1495,108 @@ For binaries that spawn more than one long-lived task, routing the
 full triad (server, PgListener, background housekeepers) through
 `main()` quickly becomes boilerplate. This pattern extracts the
 lifecycle into two functions — `bootstrap::run()` and `shutdown::wait()`
-— that mirror the `bootstrap` / `shutdown` split seen in the
-`live-search` crate.
+— that mirror the actual `bootstrap` / `shutdown` split in the
+`live-search` crate. Code below is copied verbatim from
+`live-search/src/bootstrap.rs` / `live-search/src/shutdown.rs`.
 
-**`bootstrap::run()`** (`live-search/src/bootstrap.rs`):
+**`bootstrap::run()` (abridged, canonical source comments stripped)**:
 
 ```rust
-use tokio::sync::CancellationToken;
 use tokio::task::JoinSet;
-use rwf_config::Config;
+use tokio_util::sync::CancellationToken;
 
+/// Handle returned by `run()`. The caller uses the `CancellationToken`
+/// to signal shutdown and the `JoinSet` / `PgPool` for graceful draining.
+#[derive(Debug)]
+#[must_use]
 pub struct ServerHandle {
     pub shutdown: CancellationToken,
     pub tasks: JoinSet<anyhow::Result<()>>,
     pub pool: sqlx::PgPool,
-    pub cache: Option<Config>,
 }
 
 pub async fn run() -> anyhow::Result<ServerHandle> {
-    // 1. Build config, pool, broadcast channel, cache
-    let cfg = Config::load()?;
-    let pool = /* build pool */;
-    let (tx, _) = tokio::sync::broadcast::channel(256);
-    let cache = /* optional in-memory cache */;
+    // 1. Tracing subscriber (plain fmt or with OTel via `otel` feature).
+    init_tracing();
 
+    // 2. Pool, migrations, cache, broadcast channel.
+    let pool = db::create_pool(&database_url).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    db::set_pool(pool.clone())?;
+    cache::init_cache();
+    let (tx, _rx) = tokio::sync::broadcast::channel::<SseEvent>(256);
+    sse::set_broadcast(tx.clone())?;
+
+    // 3. Cancellation token + JoinSet.
     let shutdown = CancellationToken::new();
-
-    // 2. Spawn signal handler (same as Pattern 15)
-    let sig = shutdown.clone();
-    tokio::spawn(async move {
-        // signal::ctrl_c(), signal::unix::SignalKind::terminate()
-        // … see Pattern 15 for the canonical handler …
-        sig.cancel();
-    });
-
-    // 3. Spawn long-lived tasks into a JoinSet with child tokens
     let mut tasks = JoinSet::new();
-    tasks.spawn(pg_listener_task(
-        pool.clone(),
-        tx.clone(),
-        shutdown.child_token(),
-    ));
-    // … more tasks as needed: cache warmers, metrics exporters, …
 
-    Ok(ServerHandle { shutdown, tasks, pool, cache: None })
+    // 4. Spawn long-lived tasks with child tokens (PG listener, watchdog,
+    //    HTTP server, etc. — see source for full list).
+    let listener_token = shutdown.child_token();
+    let watchdog_token = shutdown.child_token();
+    // ...tasks.spawn(...).instrument(span)...
+
+    Ok(ServerHandle { shutdown, tasks, pool })
 }
 ```
 
-**`shutdown::wait()`** (`live-search/src/shutdown.rs`):
+**`shutdown::wait()` (abridged)**:
 
 ```rust
-use std::time::Duration;
-use tokio::task::JoinSet;
-use rwf_config::Config;
-
 pub async fn wait(
     shutdown: CancellationToken,
     tasks: &mut JoinSet<anyhow::Result<()>>,
     pool: &sqlx::PgPool,
-) {
-    // 1. Cancel the token — all tasks racing against it will see this.
-    shutdown.cancel();
-
-    // 2. Close the pool with a timeout (force-closes PgListener's
-    //    borrowed connection).
-    pool.close();
-
-    let pool_timeout = tokio::time::timeout(Duration::from_secs(5), async {
-        while pool.emit_termination_notifications() { /* … */ }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+) -> anyhow::Result<()> {
+    // 1. Install the Ctrl+C / SIGTERM handler. Closes the gap between
+    //    "signal arrived" and "shutdown token cancelled".
+    let signal_token = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = async { signal::ctrl_c().await.expect(...) };
+        #[cfg(unix)] let terminate = /* SIGTERM handler */;
+        let _ = /* tokio::select! { ctrl_c, terminate } */;
+        signal_token.cancel();
     });
-    let _ = pool_timeout.await;
 
-    // 3. Drain JoinSet with a 10-second grace period.
-    let _ = tokio::time::timeout(Duration::from_secs(10), async {
-        while tasks.join_next().await.is_some() {}
-    })
-    .await;
+    // 2. Block until the token fires.
+    shutdown.cancelled().await;
 
-    // 4. Force-flush any OTel providers so telemetry is not lost.
-    opentelemetry::global::shutdown_tracer_provider();
+    // 3. Close the DB pool with a 5 s timeout (PgListener's borrowed
+    //    connection is force-released on `pool.close()`).
+    db::close_pool(pool).await;
+
+    // 4. Drain the JoinSet with a 10 s timeout; abort on timeout.
+    shutdown.cancel();
+    match tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(error = %e, "task error"),
+                Err(join_err) if join_err.is_panic() =>
+                    tracing::error!(error = ?join_err, "task panicked"),
+                Err(join_err) =>
+                    tracing::warn!(error = ?join_err, "task did not complete cleanly"),
+            }
+        }
+    }).await {
+        Ok(()) => {}
+        Err(_elapsed) => tasks.abort_all(),
+    }
+
+    // 5. Force-flush any OTel providers (5 s timeout each) so telemetry
+    //    isn't lost on exit.
+    #[cfg(feature = "otel")]
+    if let Some(provider) = crate::bootstrap::get_tracer_provider() {
+        let provider = provider.clone();
+        let _ = tokio::time::timeout(Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                let _ = provider.force_flush();
+                let _ = provider.shutdown();
+            })).await;
+    }
+
+    Ok(())
 }
 ```
 
@@ -1583,11 +1605,8 @@ pub async fn wait(
 ```rust
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
-    let handle = bootstrap::run().await?;
-    graceful_shutdown_signal().await; // Ctrl+C / SIGTERM
-    shutdown::wait(handle.shutdown, &mut handle.tasks, &handle.pool).await;
-    Ok(())
+    let mut handle = bootstrap::run().await?;
+    shutdown::wait(handle.shutdown, &mut handle.tasks, &handle.pool).await
 }
 ```
 
@@ -1597,10 +1616,11 @@ async fn main() -> anyhow::Result<()> {
   `JoinSet::spawn`). The gateway, which has zero spawned tasks, does
   **not** need this — `with_graceful_shutdown(signal_future)` is
   sufficient.
-- You want a single call site for OTel shutdown so telemetry is
-  never lost on exit.
+- You want a single call site for OTel shutdown so telemetry is never
+  lost on exit.
 - You are writing tests that need to start and stop the full server
-  lifecycle without a process restart.
+  lifecycle without a process restart (call `handle.shutdown.cancel()`
+  then `shutdown::wait(...)` to tear down).
 
 **Cross-link to Pattern 15**: Pattern 15 covers the raw structured
 concurrency triad (`CancellationToken` + `JoinSet` + `select!`) for

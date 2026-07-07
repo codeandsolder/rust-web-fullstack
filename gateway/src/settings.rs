@@ -23,8 +23,20 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 
 use crate::pem::{ed25519_spki_der, pem_encode};
 
-/// `EdDSA` JWT issuer and audience value — shared between encoding and decoding.
+/// `EdDSA` JWT issuer value — published in the `iss` claim.
+///
+/// The issuer identifies the party that minted the token (this gateway).
 pub const JWT_ISS: &str = "gateway-example";
+
+/// `EdDSA` JWT audience value — published in the `aud` claim.
+///
+/// The audience identifies the intended consumer of the token. By RFC 7519
+/// §4.1.3 the audience should be distinct from the issuer unless the producer
+/// and consumer are the same entity; we follow the standard practice here
+/// (`gateway-example` for the issuer, `gateway-example-api` for the audience)
+/// so future token-replay scenarios across cooperating services can
+/// differentiate their accept policies without changing JWT minting.
+pub const JWT_AUD: &str = "gateway-example-api";
 
 /// FNV-1a 64-bit digest of `bytes`, formatted as 16 hex chars.
 ///

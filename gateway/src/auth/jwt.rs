@@ -12,7 +12,7 @@
 //! should cache the parsed [`jsonwebtoken::EncodingKey`] /
 //! [`jsonwebtoken::DecodingKey`] objects.
 
-use crate::settings::JWT_ISS;
+use crate::settings::{JWT_AUD, JWT_ISS};
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ pub fn create_jwt(user_id: &Uuid, encoding_key: &EncodingKey) -> Result<String, 
         sub: *user_id,
         iat: unix_seconds(now)?,
         exp,
-        aud: JWT_ISS.to_string(),
+        aud: JWT_AUD.to_string(),
         iss: JWT_ISS.to_string(),
         jti: Uuid::new_v4(),
     };
@@ -81,7 +81,7 @@ pub fn validate_jwt(token: &str, decoding_key: &DecodingKey) -> Result<Claims, A
 
     let mut validation = Validation::new(Algorithm::EdDSA);
     validation.set_issuer(&[JWT_ISS]);
-    validation.set_audience(&[JWT_ISS]);
+    validation.set_audience(&[JWT_AUD]);
 
     decode::<Claims>(token, decoding_key, &validation)
         .map(|data| data.claims)
@@ -121,7 +121,8 @@ mod tests {
         let claims = validate_jwt(&token, &decoding_key)?;
         assert_eq!(claims.sub, user_uuid);
         assert_eq!(claims.iss, JWT_ISS);
-        assert_eq!(claims.aud, JWT_ISS);
+        assert_eq!(claims.aud, JWT_AUD);
+        assert_ne!(claims.iss, claims.aud);
         assert!(claims.exp > claims.iat);
         assert_ne!(claims.jti, Uuid::nil());
         Ok(())
@@ -167,7 +168,7 @@ mod tests {
             sub: user_uuid,
             exp: 0,
             iat: 0,
-            aud: JWT_ISS.to_string(),
+            aud: JWT_AUD.to_string(),
             iss: JWT_ISS.to_string(),
             jti: Uuid::new_v4(),
         };
