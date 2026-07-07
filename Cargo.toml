@@ -27,7 +27,13 @@ leptos_router = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# sqlx 0.9 has no `tracing` feature; per-query spans come from sqlx-otel.
+# sqlx 0.9 has no built-in `tracing` feature. `sqlx-otel` would be the
+# natural drop-in for per-query spans, BUT `sqlx-otel 0.3.0` predates sqlx 0.9
+# and pulls in `sqlx 0.8.6` + `opentelemetry 0.31.0` alongside the workspace's
+# `sqlx 0.9` + `opentelemetry 0.32`. The dep is kept here as a placeholder for
+# the eventual 0.9-compatible release — do NOT enable `--features otel` on
+# `live-search` until upstream ships a compatible version, or until you verify
+# your OTel collector accepts the dual-versioned tree.
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0.18"
@@ -71,7 +77,7 @@ testcontainers-modules = { version = "0.15", features = ["postgres"] }
 # Layered config: TOML file + RWF_* environment variable overrides.
 # The `config` crate gives us typed deserialization + per-source priority
 # without needing unsafe or hand-rolled merge logic.
-config = { version = "0.14", default-features = false, features = ["toml"] }
+config = { version = "0.15", default-features = false, features = ["toml"] }
 
 # Shared domain types (no framework dependencies).
 rwf-domain = { path = "crates/domain" }

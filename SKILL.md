@@ -7,7 +7,7 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 ## Contents
 
 ### Quick Reference
-- [Crate Versions (June 2026)](#crate-versions-june-2026)
+- [Crate Versions](#crate-versions)
 - [Architecture Decision Tree](#architecture-decision-tree)
 - [When NOT to use this skill](#when-not-to-use-this-skill)
 - [Critical Rules](#critical-rules)
@@ -38,7 +38,7 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 - [Pattern 5: JSONB Storage with Compile-Time Checking](#pattern-5-jsonb-storage-with-compile-time-checking)
 - [Pattern 6: Gateway with ServiceModule Trait](#pattern-6-gateway-with-servicemodule-trait)
 - [Pattern 7: JavaScript-Driven SSE Detection (for Chrome DevTools MCP)](#pattern-7-javascript-driven-sse-detection-for-chrome-devtools-mcp)
-- [Pattern 8: TTL Cleanup via pg_cron](#pattern-8-ttl-cleanup-via-pg_cron)
+- [Pattern 8: TTL Cleanup via pg_cron](#pattern-8-ttl-cleanup-via-pgcron)
 - [Pattern 9: Server-Fn Catch-All Route (Leptos 0.8 Doubled-Prefix Bug)](#pattern-9-server-fn-catch-all-route-leptos-08-doubled-prefix-bug)
 - [Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)](#pattern-10-ssr--hydration-setup-same-crate-as-both-bin--lib)
 - [Scoped CSS with stylance](#scoped-css-with-stylance)
@@ -49,15 +49,15 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 - [Pattern 15: Structured Concurrency Triad (CancellationToken + JoinSet + select!)](#pattern-15-structured-concurrency-triad-cancellationtoken-joinset-select)
 - [Pattern 16: Newtype IDs for Type-Safe Web Params](#pattern-16-newtype-ids-for-type-safe-web-params)
 - [Cross-cutting Concerns: CSRF, CSP, CORS](#cross-cutting-concerns-csrf-csp-cors)
-- [Pattern 25: Modular Server Lifecycle (`bootstrap::run` + `shutdown::wait`)](#pattern-25-modular-server-lifecycle-bootstraprun--shutdownwait)
-- [Pattern 22: Layered config (TOML file + RWF_* env overrides)](#pattern-22-layered-config-toml-file-rwf_-env-overrides)
 - [Pattern 17: Leptos 0.8.x Knowledge Patch](#pattern-17-leptos-08x-knowledge-patch)
 - [Pattern 18: Leptos Utility Ecosystem](#pattern-18-leptos-utility-ecosystem)
-- [Pattern 19: ErrorBoundary + ActionForm (Progressive Enhancement)](#pattern-19-errorboundary-actionform-progressive-enhancement)
+- [Pattern 19: ErrorBoundary + ActionForm (Progressive Enhancement)](#pattern-19-errorboundary--actionform-progressive-enhancement)
 - [Pattern 20: Cursor-Based Pagination](#pattern-20-cursor-based-pagination)
 - [Pattern 21: Leptos Islands Architecture](#pattern-21-leptos-islands-architecture)
+- [Pattern 22: Layered config (TOML file + RWF_* env overrides)](#pattern-22-layered-config-toml-file-rwf_-env-overrides)
 - [Pattern 23: Atomic Refresh-Token Rotation (PostgreSQL)](#pattern-23-atomic-refresh-token-rotation-postgresql)
 - [Pattern 24: WebSocket Chat via static broadcast hub](#pattern-24-websocket-chat-via-static-broadcast-hub)
+- [Pattern 25: Modular Server Lifecycle (`bootstrap::run` + `shutdown::wait`)](#pattern-25-modular-server-lifecycle-bootstraprun--shutdownwait)
 
 ### Common Pitfalls
 - [Pitfall 1: PgListener connection leak](#common-pitfalls)
@@ -97,7 +97,7 @@ This skill ships with a complete, runnable reference workspace next to it. Every
 | `./i18n-demo.Dockerfile` + `./docker-compose.yml` `i18n-demo` service on `:3002` | Same multi-stage Leptos build pattern as `live-search`, dedicated port (Postgres-free crate) |
 | `./gateway.Dockerfile` + `./live-search.Dockerfile` + `./docker-compose.yml` | Multi-stage Leptos build with `cargo-leptos`, runtime slim image, Postgres + pgAdmin + Chromium |
 | `./e2e-tests/` | chromiumoxide-based Playwright replacement for browser-driven E2E |
-| `./.woodpecker.yml` `fmt` step (existing) + `leptosfmt` step (new) | Edition 2024 + Rust 1.94 + `--all-targets` + strict clippy with `-D warnings` + `leptosfmt --check .` after `cargo fmt --check` to format `view!` macro bodies |
+| `./.woodpecker.yml` `fmt` step (existing) + `leptosfmt` step (per-file piped form, see below) | Edition 2024 + Rust 1.94 + `--all-targets` + strict clippy with `-D warnings` + per-file `leptosfmt --rustfmt --stdin <file>` for `view!` macro bodies, then `cargo fmt --check` as authoritative whitespace check |
 | `./Cargo.toml` | Workspace Edition 2024 with strict `[workspace.lints]` table |
 
 Build it yourself:
@@ -114,9 +114,10 @@ Or via the symlink at `~/projects/rust-web-fullstack` (alias for the same direct
 
 ## Quick Reference
 
-### Crate Versions (June 2026)
+### Crate Versions
 
-Last verified against the canonical `Cargo.lock` in this directory on 2026-06-29.
+Last verified against the canonical `Cargo.lock` in this directory. Re-verify
+after any `cargo update` or workspace member addition.
 
 | Crate | Version | Features | Notes |
 |-------|---------|----------|-------|
@@ -126,17 +127,22 @@ Last verified against the canonical `Cargo.lock` in this directory on 2026-06-29
 | `axum` | 0.8 | `json` | |
 | `tokio` | 1 | `full` | `JoinSet` and `tokio::time::Instant` come from `tokio` directly |
 | `tokio-util` | 0.7 | `["rt"]` | `CancellationToken` lives in `tokio_util::sync` and is reachable with the `rt` feature |
-| `tower-http` | 0.7 | per-crate: `trace` is workspace-default; live-search adds `fs` (for `ServeDir`); gateway adds `cors` | `fs` is required only by crates that mount `ServeDir` |
+| `tower-http` | 0.7 | workspace enables `["trace", "cors", "fs", "timeout"]`; `live-search` and `i18n-demo` add `fs` for `ServeDir`; `gateway` adds `set-header` for `SetResponseHeaderLayer` (currently documented but not yet imported — see `gateway/src/cors.rs:80-83` for the `axum 0.8 Body` compatibility note) | Per-crate feature lists are additive on top of the workspace set; drop a feature from a crate's own `[dependencies] table` to disable it there |
 | `jsonwebtoken` | 10 | `["aws_lc_rs"]` (workspace choice) | 10.x panics without explicit crypto provider — see Pitfall 10 |
 | `reqwest` | 0.13 | `default-features = false`, `rustls`, `json`, `stream` | `default-features = false` avoids the `native-tls` conflict with `rustls`; `stream` enables `bytes_stream()` for SSE reading |
 | `chromiumoxide` | 0.9 | `default-features = false`, `bytes` | `default-features = false` keeps the tokio version compatible with the workspace pin; `bytes` is required for `Browser::launch(...)` |
 | `gloo-net` | 0.7 | `eventsource` | Client-side SSE reader |
-| `leptos_i18n` | 0.6 | `csr` + `hydrate` + `ssr` (all three required for full-stack i18n) | Workspace's `i18n-demo` crate wires these into the `ssr` and `hydrate` Cargo features. The `leptos_i18n_build` build-dep (same version) emits the typed `t!` / `t_string!` / `Locale` modules at compile time. |
+| `leptos_i18n` | 0.6 | `csr` + `hydrate` + `ssr` (all three required for full-stack i18n) | Workspace's `i18n-demo` crate wires these into the `ssr` and `hydrate` Cargo features. The `leptos_i18n_build` build-dep (same version) emits the typed `t!` / `t_string!` / `Locale` modules at compile time. Note: `leptos_i18n 0.6.2` transitively pulls `leptos-use 0.18.3` — harmless, that version is only compiled for the i18n-demo target. |
 | `gloo-timers` | 0.4 | `futures` | `gloo_timers::future::sleep` requires the `futures` feature |
 | `tracing` | 0.1 | (default) | Structured logging — never `println!` or `log` |
-| `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` (Pattern 0) |
+| `tracing-subscriber` | 0.3 | `env-filter`, `fmt` | `env-filter` required to read `RUST_LOG`; install once in `main` — see [Tracing Subscriber Init](#tracing-subscriber-init) below |
 | `lepticons` | 0.13 | (default) | Lucide icon set for Leptos |
 | `chrono` | 0.4 | `serde` | Timestamp arithmetic and serde roundtripping for `DateTime<Utc>` |
+| `config` | 0.15 | `default-features = false`, `toml` | Layered workspace config in `crates/config` (TOML file + `RWF_*` env overrides) — see [Pattern 22](#pattern-22-layered-config-toml-file-rwf_-env-overrides). Earlier versions of the workspace used 0.14; migrated in this revision. |
+| `leptos-use` | 0.19 | (default) | `live-search::SearchPage` uses `watch_debounced` for the debounced search box. Two `leptos-use` versions coexist in `Cargo.lock` (`0.18.3` transitive from `leptos_i18n 0.6.2`, `0.19.0` direct) — harmless, each compiles on its own target. |
+| `sqlx-otel` | 0.3 | (default) | Optional, behind `live-search`'s `otel` feature. **Compatibility caveat:** `sqlx-otel 0.3.0` pulls `sqlx 0.8.6` + `opentelemetry 0.31.0` alongside the workspace's `sqlx 0.9` + `opentelemetry 0.32`. Do not enable `--features otel` on `live-search` until upstream `sqlx-otel` ships a sqlx-0.9-compatible release. |
+| `tower_governor` | 0.8 | `axum` | Rate limiting on `gateway` auth routes (two governor instances for login vs. refresh). **Note:** `tower_governor 0.8 → governor 0.10.4 → {rand 0.9.4, getrandom 0.3.4, web-time}` — the `getrandom 0.3.4` you may see in `cargo tree` comes from here, NOT from `leptos-use`. Compiles fine for the SSR binary. |
+| `moka` | 0.12 | `future` | In-memory search-query cache in `live-search` (60s TTL, 1000 entries). |
 
 ### Architecture Decision Tree
 
@@ -231,24 +237,36 @@ that is `leptosfmt`'s job. Without it, CI's `cargo fmt --check` step
 silently passes while `view!` blocks drift in style.
 
 Install once with `cargo install leptosfmt --locked`, then format the
-workspace:
+workspace. **`leptosfmt --check .` is NOT used by CI** — the two formatters
+disagree on whitespace inside `view!` macro bodies, so `leptosfmt --check .`
+and `cargo fmt --check` cannot both pass simultaneously. CI uses the
+per-file piped form below so the two formatters converge:
 
 ```bash
-leptosfmt .                                 # write mode
-leptosfmt --check .                         # CI mode (exits 1 if dirty)
+# Workspace helper (equivalent to the CI command) — uses the Makefile target.
+make fmt-all
 ```
 
-The canonical `.woodpecker.yml` chains this after `cargo fmt --check`:
+The canonical `.woodpecker.yml` uses the per-file piped form on a custom
+Docker image (with `leptosfmt` preinstalled):
 
 ```yaml
   fmt:
-    # … existing cargo fmt --check commands
-
-  leptosfmt:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
-      - cargo install leptosfmt --locked
-      - leptosfmt --check .
+      - cargo fmt --all -- --check
+
+  leptosfmt:
+    image: woodpecker-rust-leptosfmt:latest
+    commands:
+      # Scope to workspace crates explicitly. `leptosfmt .` would also walk
+      # any in-tree gitignored snapshots (.slim/worktrees/, .opencode/, etc.)
+      # which may have stale, intentionally-unformatted copies.
+      # Run leptosfmt per-file via stdin (so `--rustfmt` chains rustfmt
+      # afterwards) so the two formatters converge on whitespace inside
+      # `view!` macro bodies.
+      - find live-search i18n-demo -name '*.rs' | while read f; do leptosfmt --rustfmt --stdin --quiet < "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
+      - cargo fmt --all -- --check
     depends_on:
       - fmt
 ```
@@ -361,6 +379,18 @@ Load these as needed for deep patterns:
 | `references/testing-patterns.md` | Writing tests, visual testing, CI | Chrome MCP + chromiumoxide workflows |
 | `references/architecture-patterns.md` | Multi-service gateway, shared crates | Architecture patterns from warpproxy/proxytest/searxrs2 |
 
+### Bundle of Patterns (for AI model loading)
+
+When you need deeper patterns, load the relevant reference file. Keep the
+following quick links handy — they map human questions to the canonical
+SKILL.md section.
+
+- **Writing Leptos code?** → `references/leptos-patterns.md` (Patterns 1, 10, 11, 17, 19, 21 in SKILL.md)
+- **Setting up PostgreSQL?** → `references/postgres-patterns.md` (Patterns 3, 5, 8, 20, 23)
+- **Configuring axum routes?** → `references/axum-patterns.md` (Patterns 1, 2, 9, 14, 15, 25)
+- **Writing tests?** → `references/testing-patterns.md` (Patterns 4, 12, 13, 15)
+- **Designing architecture?** → `references/architecture-patterns.md` (Patterns 1, 2, 6, 22, 25)
+
 ---
 
 ## Core Patterns (Keep in SKILL.md)
@@ -378,7 +408,7 @@ use sqlx::postgres::PgPoolOptions;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(21) // 20 for queries + 1 for PgListener (see Critical Rule 3)
         .connect("postgresql://localhost/mydb")
         .await
         .context("failed to connect to PostgreSQL")?;
@@ -440,6 +470,11 @@ async fn main() -> anyhow::Result<()> {
 
 **Server side (axum handler + PgListener)**:
 
+> The `pg_listener_task` below is a long-lived `tokio::spawn`'d task. For
+> cancellation-safe structured concurrency (signal handler + `CancellationToken`
+> + `biased;` shutdown semantics), see [Pattern 15](#pattern-15-structured-concurrency-triad-cancellationtoken-joinset-select).
+> The canonical implementation lives in `live-search/src/db.rs::run_pg_listener`.
+
 ```rust
 use tokio::sync::broadcast;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -456,8 +491,24 @@ async fn sse_handler(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.tx.subscribe();
-    let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-        .filter_map(|r| async move { r.ok() });
+    // Surface broadcast lag as an explicit SSE event so slow consumers can
+    // see they've fallen behind — silently dropping messages masks real
+    // backpressure issues in production. Canonical full version with the
+    // publisher + Event struct lives in references/axum-patterns.md §6.
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(
+        |result| async move {
+            match result {
+                Ok(event) => Some(Ok(event)),
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(lagged = n, "SSE client lagged; skipping old events");
+                    Some(Ok(Event::default()
+                        .event("stream_lagged")
+                        .data(format!("lagged:{n}"))))
+                }
+                Err(broadcast::error::RecvError::Closed) => None,
+            }
+        },
+    );
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
@@ -1130,24 +1181,20 @@ compile error in Leptos 0.8.x because `value()` returns a signal, not an
 ### Pattern 12: chromiumoxide E2E Helpers
 
 ```rust
-// tests/common.rs — shared helpers
+// e2e-tests/src/common/chromium.rs — canonical helpers
 
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub fn unique_profile_dir() -> std::path::PathBuf {
-    // Per-process counter combined with nanos-since-epoch guarantees uniqueness
-    // even when two threads/tests call this at the same monotonic instant.
-    // (Plain `Instant::now().elapsed()` would return ~0 because the Instant
-    // was just created — a real correctness bug.)
+    // A pure per-process atomic counter is sufficient and safer than the
+    // previously-shown `SystemTime::now()` approach: `SystemTime` is not
+    // monotonic (NTP jumps, manual clock changes can repeat nanos values
+    // across parallel tests) and there's no failure path to handle.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock must be after Unix epoch")
-        .as_nanos();
-    let dir = format!("/tmp/chromiumoxide-{pid}-{nanos}-{n}", pid = std::process::id());
+    let dir = format!("/tmp/chromiumoxide-{pid}-{n}", pid = std::process::id());
     std::path::PathBuf::from(dir)
 }
 
@@ -1244,7 +1291,9 @@ Use the `CHROME_PATH` environment variable rather than hardcoding paths.
 Common locations: Playwright cache (`$PLAYWRIGHT_BROWSERS_PATH/chromium-1208/chrome-linux64/chrome`),
 system installation (`/usr/bin/chromium`), or local download.
 
-Verified stable: Chromium **1208** (Playwright 1.50 era).
+Verified stable on this host: Chromium **1208** (Playwright 1.50 era). If you
+hit launch crashes on a newer Chromium build, pin via `CHROME_PATH` rather than
+chasing the latest.
 Crashes observed: Chromium **1223** (Playwright 1.51+ on this host).
 
 ### Pattern 14: SSE JSON Injection in Rust Raw Strings
@@ -1308,6 +1357,9 @@ async fn main() -> anyhow::Result<()> {
         };
         #[cfg(not(unix))]
         let terminate = std::future::pending::<()>();
+        // No `biased;` here: both branches are symmetric shutdown signals,
+        // so whichever fires first cancels the token. (See Pattern 15's
+        // `biased;` section for cases where branch priority matters.)
         tokio::select! {
             _ = ctrl_c => {},
             _ = terminate => {},
@@ -1797,7 +1849,7 @@ caveat column.
 | [`leptos_i18n`](https://crates.io/crates/leptos_i18n) (0.6) | Compile-time-checked translations, JSON locales, `t!` / `t_string!` macros, runtime `set_locale` | Tier 1 | **Used.** Workspace `i18n-demo` crate shows the full pattern (5 keys, EN + DE, locale switcher). | Requires `leptos_i18n_build` build-dep and a `locales/*.json` tree; build.rs runs `Config::new("en")?.add_locale("de")?` and emits the typed module. |
 | [`leptosfmt`](https://crates.io/crates/leptosfmt) | `view!` macro formatter; chains with `rustfmt --rustfmt` | Tier 1 | **Used.** `.woodpecker.yml` runs `leptosfmt --check .` after `cargo fmt --check`. | `cargo install leptosfmt --locked`. Editor integration via `rust-analyzer.toml`'s `overrideCommand`. |
 | `gloo-net` (0.7) | Client-side EventSource + reconnect loop | Tier 1 | **Used.** `live-search::LiveFeedPage` consumes `/api/events` via `gloo_net::eventsource::futures::EventSource` with a 2 s reconnect; preserves the `Arc<str>` payload shape. | Hand-rolled cleanup signal via `RwSignal<bool>` + `on_cleanup` because the WASM target has no automatic cancellation. |
-| [`leptos-use`](https://leptos-use.rs/) (~90 hooks) | `use_event_source`, `use_cookie`, `use_debounce_fn`, `use_intersection_observer`, `use_media_query`, etc. | Tier 1 | **NOT used** in this workspace — see caveat. | **Transitive `getrandom 0.3.4` issue:** `leptos-use → leptos → nonce → rand 0.9 → rand_core 0.9.5 → getrandom 0.3.4`, and `getrandom 0.3.4` does not compile under Rust 1.94 on `wasm32-unknown-unknown` (it expects a `getrandom_backend` cfg that the workspace can't satisfy without invasive patches). For the live-feed use case, `gloo-net` + an `Effect` reconnect is roughly the same code; `leptos-use` is still a strong choice for fresh projects where you control the rustc version. |
+| [`leptos-use`](https://leptos-use.rs/) (~90 hooks) | `use_event_source`, `use_cookie`, `use_debounce_fn`, `use_intersection_observer`, `use_media_query`, etc. | Tier 1 | **Used.** `live-search/src/app.rs:22` imports `use leptos_use::watch_debounced;` for the debounced search box. | Two `leptos-use` versions coexist in `Cargo.lock` (0.18.3 transitive from `leptos_i18n 0.6.2`, 0.19.0 direct). Neither pulls `getrandom`. The `getrandom 0.3.4` you may see in `cargo tree` comes from `governor 0.10.4` (via `tower_governor 0.8`), and is benign on Linux native + wasm32 because `governor` is only compiled for the SSR binary. |
 | [`leptos_sse`](https://github.com/messense/leptos_sse) | Server-pushed reactive signals over SSE, with JSON-patch sync | Tier 2 | **Not used.** | Different pattern than Pattern 2: `leptos_sse` is for "the server holds state and the client gets a mirror signal", **not** for raw client-side SSE consumption. Use `gloo-net::EventSource` for raw event protocols; use `leptos_sse::create_sse_signal` when you want automatic JSON-patch state replication. |
 | [`tailwind-fuse`](https://github.com/gaucho-labs/tailwind-fuse) | `tw_merge!` / `tw_join!` plus `#[derive(TwClass)]` / `#[derive(TwVariant)]` macros | Tier 1 | **Not used.** | Skill projects use inline `style="…"` attrs throughout. `tailwind-fuse` is the recommended merge-and-variant helper if/when you adopt Tailwind — install with `cargo add tailwind-fuse --features variant` once your `class="…"` strings appear. |
 | [`leptos-declarative`](https://github.com/jquesada2016/leptos-declarative) | Auto-generates `#[component]` prop structs from inner struct fields | Tier 2 | Mentioned as a "fewer boilerplate for many components" footnote next to component-heavy projects. | Use when components outgrow manual `(signal, set_signal)` plumbing; not in this skill since the demo crates are small. |
@@ -1988,6 +2040,11 @@ chat endpoint backed by a single static `tokio::sync::broadcast::Sender`.
 The pattern is deliberately minimal so the deployment shape is easy
 to recognise before swapping in a real pub/sub backend.
 
+> This demo uses a single static `broadcast::Sender` and does not spawn
+> background tasks, so it does NOT need `CancellationToken` wiring. If you
+> extend the hub with a separate publisher task, follow
+> [Pattern 15](#pattern-15-structured-concurrency-triad-cancellationtoken-joinset-select).
+
 **Server side:**
 
 ```rust
@@ -2061,6 +2118,11 @@ ws.onopen = () => ws.send("hello");
 14. **Background tasks missing CancellationToken wiring**: `tokio::spawn(pg_listener_task(pool, tx))` without a `CancellationToken` parameter cannot be cancelled — the task runs forever even when the server is shutting down. The `recv().await` future IS cancel-safe (sqlx 0.9 PgListener drops the TCP read cleanly), so wrap the loop in `tokio::select!` against `token.cancelled()`, then fire the token from a Ctrl+C/SIGTERM handler in `main()`. See Pattern 15.
 15. **`#[server]` body not cfg-gated on `feature = "ssr"`**: if the function body uses items gated by `#[cfg(feature = "ssr")]` (e.g. `crate::db::get_pool`, or a `sqlx::FromRow` derive that lives behind `#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]`) without an *explicit* `#[cfg(feature = "ssr")]` block on the body, then `cargo check --workspace --all-targets` (which compiles `live-search`'s lib with no features active) fails with `unresolved import crate::db::get_pool` / `the trait bound SearchResult: FromRow is not satisfied`. The `#[server]` macro does **not** auto-gate the body — gate it yourself, and add `#[allow(clippy::unused_async, reason = "...the non-ssr branch is a sync error stub...")]` so the empty non-ssr body stays compliant with `clippy::pedantic = "deny"`. Canonical fix in `./live-search/src/app.rs::search`.
 
+> **TODO (deferred from council review):**
+> - **Test cleanup on panic**: Pattern 4 / Pattern 12 in this skill use `std::fs::remove_dir_all` in test teardown. If the test panics before the cleanup block, the profile dir leaks. Migrate to `tempfile::TempDir` for panic-safe cleanup.
+> - **`replace()` over `serde_json::json!()` for SSE JSON**: Pattern 14 shows `format!` + `{{ }}` escaping and `replace()` as primary. For complex JSON, `serde_json::json!()` is safer and easier to read. Reverse the recommendation.
+> See `.slim/deepwork/skill-review-and-upgrades.md` for the full review history.
+
 ---
 
 ## Test Strategy
@@ -2088,10 +2150,6 @@ your host (Pattern 13).
 
 ## Bundle of Patterns (for AI model loading)
 
-When you need deeper patterns, load the relevant reference file:
-
-- **Writing Leptos code?** → `references/leptos-patterns.md`
-- **Setting up PostgreSQL?** → `references/postgres-patterns.md`
-- **Configuring axum routes?** → `references/axum-patterns.md`
-- **Writing tests?** → `references/testing-patterns.md`
-- **Designing architecture?** → `references/architecture-patterns.md`
+> This section now lives right after the [Reference Files](#reference-files)
+> table earlier in the document — see [Bundle of Patterns](#bundle-of-patterns-for-ai-model-loading).
+> Kept here as a one-line stub so any old inbound anchor link still resolves.

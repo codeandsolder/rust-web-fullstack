@@ -1,4 +1,4 @@
-> Deep-dive companion to Pattern 4 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+> Deep-dive companion to the testing patterns in [SKILL.md](../SKILL.md) (Patterns 4, 12, 13, 15). Start there for the condensed view, then return here for the full cookbook.
 
 # Testing Patterns Reference
 
@@ -145,17 +145,14 @@ use std::time::Duration;
 
 // CRITICAL: unique user_data_dir per test — see Pitfall #1
 fn unique_profile_dir() -> std::path::PathBuf {
-    // Per-process counter + nanos-since-epoch ensures uniqueness even when
-    // two threads/tests call this at the same monotonic instant.
-    // (Plain `Instant::now().elapsed()` would return ~0 because the Instant
-    // was just created — a real correctness bug.)
+    // A pure per-process atomic counter is sufficient. The earlier
+    // SystemTime::now() + nanos-since-epoch approach is incorrect because
+    // SystemTime is not monotonic — NTP/manual clock adjustments can produce
+    // duplicate nanos values across parallel tests, and there's no failure
+    // path to handle with the counter alone.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock must be after Unix epoch")
-        .as_nanos();
-    let dir = format!("/tmp/chromiumoxide-{pid}-{nanos}-{n}", pid = std::process::id());
+    let dir = format!("/tmp/chromiumoxide-{pid}-{n}", pid = std::process::id());
     std::path::PathBuf::from(dir)
 }
 
@@ -334,7 +331,9 @@ BrowserConfig::builder()
 
 Use `CHROME_PATH` env var rather than hardcoding. Common locations: Playwright cache,
 system `/usr/bin/chromium`, or local download.
-Verified stable: Chromium **1208** (Playwright 1.50 era). Chromium 1223+ has crashed on this host.
+Verified stable on this host: Chromium **1208** (Playwright 1.50 era). Newer
+Chromium 1223+ has crashed during launch on this host — pin via `CHROME_PATH`
+rather than chasing the latest.
 
 ### Limitations
 

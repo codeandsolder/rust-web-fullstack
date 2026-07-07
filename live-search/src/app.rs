@@ -181,16 +181,14 @@ pub fn App() -> impl IntoView {
 #[component]
 fn SearchErrorBoundary(children: Children) -> impl IntoView {
     view! {
-        <ErrorBoundary
-            fallback=move |_errors| view! {
+        <ErrorBoundary fallback=move |_errors| {
+            view! {
                 <div class="error-boundary" data-testid="error-boundary">
                     <h3>"Something went wrong."</h3>
                     <p>"Try reloading the page to recover."</p>
                 </div>
             }
-        >
-            {children()}
-        </ErrorBoundary>
+        }>{children()}</ErrorBoundary>
     }
 }
 

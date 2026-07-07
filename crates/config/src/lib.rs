@@ -257,10 +257,15 @@ impl Config {
                 default_live_search_sse_broadcast_buffer() as i64,
             )?
             .set_default("otel.endpoint", "")?
-            // Layer 2: TOML file (if present).
+            // Layer 2: TOML file (if present). `config` 0.15 requires the
+            // format to be specified explicitly (0.14's `File::with_name`
+            // inferred it from the extension).
             .add_source(
-                config::File::with_name(config_path.as_deref().unwrap_or("config.toml"))
-                    .required(false),
+                config::File::new(
+                    config_path.as_deref().unwrap_or("config.toml"),
+                    config::FileFormat::Toml,
+                )
+                .required(false),
             )
             // Layer 3: RWF_* env vars (highest priority).
             .add_source(

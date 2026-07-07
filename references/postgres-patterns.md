@@ -1,4 +1,4 @@
-> Deep-dive companion to Pattern 3 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+> Deep-dive companion to the PostgreSQL/sqlx patterns in [SKILL.md](../SKILL.md) (Patterns 3, 5, 8, 20, 23). Start there for the condensed view, then return here for the full cookbook.
 
 # PostgreSQL + sqlx Patterns Reference
 
@@ -257,6 +257,15 @@ while let Some(notification) = stream.try_next().await? {
 ### Send Notifications
 
 ```rust
+// Define this in your application's error module:
+#[derive(Debug, thiserror::Error)]
+pub enum NotifyError {
+    #[error("notify payload serialization failed: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error("pg_notify failed: {0}")]
+    Notify(#[from] sqlx::Error),
+}
+
 // From any connection — propagate the serialize error instead of unwrapping.
 // `serde_json::to_string` can fail for non-UTF-8 map keys, NaN/Inf floats,
 // and exotic serializer edge cases; silently unwrapping crashes the calling

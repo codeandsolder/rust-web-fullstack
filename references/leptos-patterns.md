@@ -1,4 +1,4 @@
-> Deep-dive companion to Pattern 1 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+> Deep-dive companion to the Leptos patterns in [SKILL.md](../SKILL.md) (Patterns 1, 10, 11, 17, 19, 21). Start there for the condensed view, then return here for the full cookbook.
 
 # Leptos 0.8.x Patterns Reference
 
@@ -110,10 +110,12 @@ let save_data = ArcAction::new(|task: &String| {
     send_new_todo_to_api(task.clone())
 });
 save_data.dispatch("My todo".to_string());
-// .input() -> Option<I> (current in-flight arg)
-// .value() -> Option<O> (last result)
-// .pending() -> Memo<bool>
-// .version() -> RwSignal<usize> (increments on success)
+// In Leptos 0.8.x, all four are signal-wrapper types — call `.get()` to read.
+// .input()   -> ArcMappedSignal<Option<I>>   (current in-flight arg)
+// .value()   -> ArcMappedSignal<Option<O>>   (last result; None while in-flight)
+// .pending() -> ArcMemo<bool>                (true while the action is running)
+// .version() -> ArcRwSignal<usize>           (increments on success — pair with
+//                                            a `Resource` source to refetch)
 
 // For server functions specifically:
 let action = ServerAction::<AddTodo>::new();
@@ -398,18 +400,25 @@ During OutOfOrder SSR, Suspense sends the fallback immediately, then a `<script>
 
 ### Session Auth with Axum
 
-Based on `projects/session_auth_axum` example:
+> **Workspace status:** `axum-sessions` is **not** a workspace dependency of
+> this skill — the gateway uses hand-rolled JWT (EdDSA) middleware instead
+> (`gateway/src/auth/`). The snippet below is **external-reference code** based
+> on the upstream `axum-sessions` `projects/session_auth_axum` example, not
+> workspace-canonical. When pairing with PostgreSQL, swap `SessionSqlitePool`
+> and `SqlitePool` for `SessionPgPool` and `sqlx::PgPool` (the trait shape is
+> the same).
 
 ```rust
+// External reference — not built or tested by this workspace.
 let session_config = SessionConfig::default().with_table_name("axum_sessions");
 let auth_config = AuthConfig::<i64>::default();
-let session_store = SessionStore::<SessionSqlitePool>::new(
-    Some(SessionSqlitePool::from(pool.clone())), session_config,
+let session_store = SessionStore::<SessionPgPool>::new(
+    Some(SessionPgPool::from(pool.clone())), session_config,
 ).await.unwrap();
 
 let app = Router::new()
     .leptos_routes(&app_state, routes, move || shell(options.clone()))
-    .layer(AuthSessionLayer::<User, i64, SessionSqlitePool, SqlitePool>::new(...))
+    .layer(AuthSessionLayer::<User, i64, SessionPgPool, sqlx::PgPool>::new(...))
     .layer(SessionLayer::new(session_store))
     .with_state(app_state);
 ```
@@ -620,15 +629,10 @@ cargo leptos end-to-end # build + run playwright tests
 
 ## 11. ErrorBoundary + ActionForm
 
-Both are Leptos 0.8 essentials for production UI:
-
-- **`<ErrorBoundary>`** — catches rendering panics and server-fn errors in
-  its subtree; renders a `fallback` view (closure `|errors| -> impl IntoView`).
-  Place around any `<For>` over server-returned data.
-
-- **`<ActionForm action={some_action}>`** — like `<form>` but submits to
-  the bound `Action` via standard HTTP POST. Works with JS disabled
-  (progressive enhancement). Pair with `#[server]` server functions.
-
-Canonical implementations: `live-search/src/app.rs::SearchErrorBoundary` and the
-manual `<form on:submit>` in `live-search/src/app.rs::SearchPage`.
+Canonical coverage lives in [SKILL.md Pattern 19](../SKILL.md#pattern-19-errorboundary--actionform-progressive-enhancement).
+This reference file repeats only the workspace-specific pointers: the canonical
+implementations are `live-search/src/app.rs::SearchErrorBoundary` and the
+manual `<form on:submit>` in `live-search/src/app.rs::SearchPage` (note:
+`live-search` uses a manual `<form on:submit>` because the search action is
+also driven by a debounced `watch_debounced`; a pure `ActionForm` example is
+documented in SKILL.md Pattern 19 but not exercised in this showcase).

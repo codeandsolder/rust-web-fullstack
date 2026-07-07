@@ -95,7 +95,11 @@ DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
 # 4. In another terminal, run the gateway
 cargo run -p gateway-example
 
-# 5. Open http://localhost:3000
+# 5. In another terminal, run the i18n-demo (no DB needed)
+cargo run -p i18n-demo --features ssr
+
+# 6. Open http://localhost:3000 (live-search), http://localhost:3001/health (gateway),
+#    http://localhost:3002 (i18n-demo)
 ```
 
 ## Tests
@@ -125,7 +129,7 @@ The workspace defines **per-crate** Cargo feature flags that opt in to observabi
 
 ## EdDSA JWT Keys
 
-The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the 2026 canonical choice for EdDSA in Rust. Each running gateway needs a key pair. Each issued JWT contains a unique `jti` (UUID) claim; combined with DB-backed refresh tokens this provides revocation support.
+The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the recommended high-performance crypto provider for EdDSA in Rust. Each running gateway needs a key pair. Each issued JWT contains a unique `jti` (UUID) claim; combined with DB-backed refresh tokens this provides revocation support.
 
 Generate a fresh key pair with OpenSSL:
 

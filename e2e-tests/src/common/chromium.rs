@@ -32,21 +32,16 @@ pub struct TestContext {
     pub shutdown: CancellationToken,
 }
 
-/// Generate a unique Chromium user-data-dir path using PID, nanos-since-epoch,
-/// and an atomic counter.  The counter ensures uniqueness even when two threads
-/// call this at the same monotonic instant.
-fn unique_profile_dir() -> Result<PathBuf> {
+/// Generate a unique Chromium user-data-dir path using PID + a per-process
+/// atomic counter.  The counter is monotonic and conflict-free even when two
+/// threads call this at the same wall-clock instant; no `SystemTime` is
+/// involved because `SystemTime` is not monotonic (NTP jumps or manual clock
+/// changes can repeat nanos values across parallel tests).
+fn unique_profile_dir() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("system clock must be after Unix epoch")?
-        .as_nanos();
-    let dir = format!(
-        "/tmp/chromiumoxide-{pid}-{nanos}-{n}",
-        pid = std::process::id(),
-    );
-    Ok(PathBuf::from(dir))
+    let dir = format!("/tmp/chromiumoxide-{pid}-{n}", pid = std::process::id());
+    PathBuf::from(dir)
 }
 
 /// Poll a server until it responds with an HTTP 2xx / 3xx status, or the timeout
@@ -126,7 +121,7 @@ fn locate_chrome() -> Option<PathBuf> {
 pub async fn setup() -> Result<TestContext> {
     let chrome_path = locate_chrome();
 
-    let profile_dir = unique_profile_dir()?;
+    let profile_dir = unique_profile_dir();
     std::fs::create_dir_all(&profile_dir).context("failed to create Chromium profile dir")?;
 
     let mut builder = BrowserConfig::builder()

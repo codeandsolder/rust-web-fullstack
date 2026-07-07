@@ -1,4 +1,4 @@
-> Deep-dive companion to Pattern 6 in [SKILL.md](../SKILL.md) — start there for the condensed version.
+> Deep-dive companion to the architecture patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 6, 22, 25). Start there for the condensed view, then return here for the full cookbook.
 
 # Architecture Patterns Reference
 
@@ -45,11 +45,20 @@ rust-web-fullstack/
 ├── e2e-tests/                  # chromiumoxide-based browser E2E
 │   ├── Cargo.toml
 │   ├── tests/
-│   │   ├── common.rs           # Shared helpers (unique_profile_dir, wait_for_js_true)
 │   │   ├── live_search_test.rs # Leptos SSR + search form tests
 │   │   ├── sse_test.rs         # SSE live update tests
-│   │   └── gateway_test.rs     # Gateway health + auth tests
-│   └── screenshots/            # Baseline screenshots for diff testing
+│   │   ├── gateway_test.rs     # Gateway health + auth tests
+│   │   └── snapshots/          # `insta` snapshot files (e.g. SSE payloads)
+│   └── src/
+│       ├── lib.rs              # Public helpers (base_url, join_url)
+│       └── common/
+│           ├── mod.rs          # Re-exports the per-concern modules below
+│           ├── chromium.rs     # Browser launch + unique_profile_dir
+│           ├── db.rs           # testcontainers Postgres fixture
+│           ├── gateway_env.rs  # In-process gateway launcher
+│           ├── live_search_env.rs # In-process live-search launcher
+│           ├── once.rs         # SharedServer<T> lazy one-shot bootstrap
+│           └── json.rs         # JSON helpers
 │
 ├── gateway.Dockerfile          # Multi-stage build (gateway only)
 ├── live-search.Dockerfile      # Multi-stage build (WASM + SSR)
