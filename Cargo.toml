@@ -6,9 +6,10 @@ members = ["crates/config", "crates/domain", "crates/leptos-utils", "gateway", "
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-# Edition 2024 requires Rust 1.85+. We pin to 1.94 in `rust-toolchain.toml`
-# so all contributors build with the same toolchain (and wasm32 target).
-rust-version = "1.85"
+# Both Edition 2024 and the current dep matrix require Rust 1.94+. We pin to
+# 1.94 in `rust-toolchain.toml` so all contributors build with the same
+# toolchain (and wasm32 target).
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -48,7 +49,7 @@ uuid = { version = "1.23", features = ["serde"] }
 wasm-bindgen = "0.2"
 axum-prometheus = "0.10"
 tower_governor = { version = "0.8", features = ["axum"] }
-axum-valid = "0.24"
+axum-valid = "0.25"
 validator = { version = "0.20", features = ["derive"] }
 aws-lc-rs = "1"
 moka = { version = "0.12", features = ["future"] }
