@@ -49,6 +49,7 @@ utoipa-axum = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 validator = { workspace = true }
+sqlx = { workspace = true }
 
 # Optional — OTel telemetry (behind `otel` feature)
 opentelemetry = { workspace = true, optional = true }

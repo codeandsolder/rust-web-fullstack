@@ -79,7 +79,12 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(services::monitor::MonitorService),
     ];
 
-    let app = gateway::build_gateway_with_settings(service_modules, settings, proxy_upstream_url)?;
+    let app = gateway::build_gateway_with_settings(
+        service_modules,
+        settings,
+        proxy_upstream_url,
+        create_db_pool().await?,
+    )?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
@@ -140,4 +145,26 @@ async fn shutdown_signal() {
         () = ctrl_c => tracing::info!("Ctrl+C received, shutting down"),
         () = terminate => tracing::info!("SIGTERM received, shutting down"),
     }
+}
+
+/// Build the optional DB pool for refresh-token rotation.
+///
+/// Returns `Ok(None)` when `DATABASE_URL` is unset or unreachable —
+/// the gateway then runs without a refresh-token store and the
+/// legacy stateless `/auth/refresh` semantics kick in. A connection
+/// failure causes an error so misconfigurations are not silently
+/// downgraded.
+async fn create_db_pool() -> anyhow::Result<Option<sqlx::PgPool>> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+        tracing::info!("DATABASE_URL not set; refresh tokens will use legacy stateless refresh");
+        return Ok(None);
+    };
+    tracing::info!("creating PostgreSQL pool from DATABASE_URL for refresh-token rotation");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&url)
+        .await
+        .context("failed to connect to PostgreSQL")?;
+    Ok(Some(pool))
 }

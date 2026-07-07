@@ -101,6 +101,7 @@ mod tests {
     async fn dashboard_redirects_to_health() -> anyhow::Result<()> {
         let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
         let state = crate::gateway::GatewayState {
+            db_pool: None,
             tx: tokio::sync::broadcast::channel(16).0,
             services: vec![],
             modules: vec![],

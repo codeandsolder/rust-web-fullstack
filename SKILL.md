@@ -1679,6 +1679,58 @@ Live-search and i18n-demo do not currently use islands; the showcase
 demonstrates full hydration. Adopt islands when migrating to a
 content-heavy site.
 
+### Pattern 23: Atomic Refresh-Token Rotation (PostgreSQL)
+
+Access JWTs are short-lived; refresh tokens outlive them. The
+gateway stores refresh tokens as SHA-256 hashes (never plaintext) and
+rotates them atomically inside a single transaction.
+
+**Schema** (`gateway/migrations/100_create_refresh_tokens.up.sql`):
+
+```sql
+CREATE TABLE refresh_tokens (
+    jti          UUID        PRIMARY KEY,
+    subject      UUID        NOT NULL,
+    hashed_token BYTEA       NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_refresh_tokens_hashed_token ON refresh_tokens (hashed_token);
+CREATE INDEX idx_refresh_tokens_subject     ON refresh_tokens (subject);
+CREATE INDEX idx_refresh_tokens_expires_at  ON refresh_tokens (expires_at);
+```
+
+**Rotation semantics** (`gateway/src/auth/refresh.rs::rotate`):
+
+1. Begin `tx`.
+2. `SELECT … WHERE hashed_token = $1 AND revoked_at IS NULL AND expires_at > NOW() FOR UPDATE`.
+   The `FOR UPDATE` row-lock prevents two concurrent rotations of the
+   same token from racing.
+3. If the row exists, `UPDATE … SET revoked_at = NOW()` and insert a
+   fresh token row with the same subject.
+4. Commit.
+5. Re-using an already-rotated token returns `Ok(None)` → handler
+   maps to `401`. **Treat this as a stolen-credential signal**, not
+   a normal 4xx. Production code should additionally email the user.
+
+**Refresh handler dual behaviour** (`gateway/src/auth/handlers.rs`):
+
+| `GatewayState.db_pool` | Request body | Behaviour |
+| ---------------------- | ------------ | --------- |
+| `Some(pool)`           | `{"refresh_token": "..."}` | DB-backed rotation, returns `{token, refresh_token: "..."}` |
+| `None`                 | `{"token": "..."}` | Legacy stateless refresh (re-issue new JWT for same subject) |
+
+The legacy path lets the example run without `PostgreSQL` configured
+while still exercising the production-grade rotation flow when
+`DATABASE_URL` is set.
+
+**Test or it didn't happen** — every `tx` is `(FOR UPDATE + revoke + insert)`
+in one transaction. Without the row lock, a stolen token can be
+rotated twice in parallel and the second rotation wins, leaving the
+attacker's token valid while the legitimate user's next refresh
+fails — bad UX *and* a credential-theft oracle.
+
 ---
 
 ## Common Pitfalls

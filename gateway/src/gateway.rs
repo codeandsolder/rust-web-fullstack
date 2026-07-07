@@ -57,6 +57,9 @@ pub struct GatewayState {
     pub settings: settings::Settings,
     /// Base URL for the proxy upstream API (default: <https://ipapi.co>).
     pub proxy_upstream_url: Arc<str>,
+    /// Optional `sqlx::PgPool` for refresh-token rotation. `None` means
+    /// the legacy stateless `/auth/refresh` semantics are used.
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -67,6 +70,7 @@ impl std::fmt::Debug for GatewayState {
             .field("modules", &format_args!("[{} modules]", self.modules.len()))
             .field("settings", &self.settings)
             .field("proxy_upstream_url", &self.proxy_upstream_url)
+            .field("db_pool", &self.db_pool.as_ref().map(|_| "PgPool { .. }"))
             .finish()
     }
 }
@@ -95,7 +99,7 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3001);
-    build_gateway_with_settings(modules, settings, proxy_upstream_url)
+    build_gateway_with_settings(modules, settings, proxy_upstream_url, None)
 }
 
 /// Compose every `ServiceModule` with pre-loaded [`settings::Settings`].
@@ -111,6 +115,7 @@ pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     settings: settings::Settings,
     proxy_upstream_url: String,
+    db_pool: Option<sqlx::PgPool>,
 ) -> Result<Router, anyhow::Error> {
     // 256 matches live-search's broadcast buffer size, providing room for ~256
     // concurrent subscribers before lag events fire.
@@ -142,6 +147,7 @@ pub fn build_gateway_with_settings(
         modules,
         settings,
         proxy_upstream_url,
+        db_pool,
     };
 
     // --- Prometheus metrics ---
@@ -378,6 +384,7 @@ mod tests {
             modules,
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
+            db_pool: None,
         };
 
         let (status, _body) = health_handler(State(state)).await;

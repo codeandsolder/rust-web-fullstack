@@ -12,6 +12,7 @@ pub mod error;
 pub mod handlers;
 pub mod jwt;
 pub mod middleware;
+pub mod refresh;
 
 pub use self::error::AppError;
 pub use self::handlers::{login_handler, logout_handler, protected_handler, refresh_handler};
