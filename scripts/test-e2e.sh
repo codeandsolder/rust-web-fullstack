@@ -6,12 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # ── Env vars required by gateway::settings::Settings::load() ─────────────
-# Must export these BEFORE starting the gateway, otherwise it refuses to
-# start with "ADMIN_PASSWORD must be set" / "JWT_SECRET must not be the
-# placeholder value".
+# Must export ADMIN_PASSWORD BEFORE starting the gateway, otherwise it
+# refuses to start.
 : "${ADMIN_PASSWORD:=synthetic-gateway-test-password}"
-: "${JWT_SECRET:=dev-jwt-secret-change-in-production-please-32-bytes}"
-export ADMIN_PASSWORD JWT_SECRET
+export ADMIN_PASSWORD
 
 echo "==> Checking CHROME_PATH..."
 if [ -z "${CHROME_PATH:-}" ]; then
@@ -117,7 +115,7 @@ if ! curl -sf http://localhost:3000/ > /dev/null; then
   exit 1
 fi
 echo "==> Starting gateway..."
-./target/release/gateway-example &
+ALLOW_DEV_KEYS=1 ./target/release/gateway-example --dev-keys &
 GATEWAY_PID=$!
 echo "==> Waiting for gateway on :3001..."
 for i in {1..30}; do
@@ -133,15 +131,15 @@ fi
 echo "==> Running E2E tests..."
 CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 \
   DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
-  cargo test --release --locked -p e2e-tests --features integration \
+  cargo test --release --locked -p e2e-tests --features browser-tests \
     --test live_search_test -- --test-threads=1 --nocapture
 CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3000 \
   DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
-  cargo test --release --locked -p e2e-tests --features integration \
+  cargo test --release --locked -p e2e-tests --features browser-tests \
     --test sse_test -- --test-threads=1 --nocapture
 CHROME_PATH=$CHROME_PATH BASE_URL=http://localhost:3001 \
   DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
-  cargo test --release --locked -p e2e-tests --features integration \
+  cargo test --release --locked -p e2e-tests --features browser-tests \
     --test gateway_test -- --test-threads=1 --nocapture
 echo "==> Tests complete."
 # Clean up the temporary WASM bundle directory so it doesn't pollute `git status`.

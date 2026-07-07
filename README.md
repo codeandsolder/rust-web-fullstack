@@ -105,12 +105,14 @@ cargo run -p gateway-example
 make test
 
 # E2E tests. The script starts PostgreSQL and both services, then runs
-# integration-feature browser/API tests against the correct BASE_URL.
+# browser/API tests against the correct BASE_URL.
 make test-e2e
 
 # Or manually:
 ./scripts/test-e2e.sh
 ```
+
+> E2E tests use the `browser-tests` feature flag for chromiumoxide-based browser tests. Run with: `cargo test -p e2e-tests --features browser-tests`.
 
 ## Feature Flags
 
@@ -123,7 +125,7 @@ The workspace defines **per-crate** Cargo feature flags that opt in to observabi
 
 ## EdDSA JWT Keys
 
-The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the 2026 canonical choice for EdDSA in Rust. Each running gateway needs a key pair.
+The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the 2026 canonical choice for EdDSA in Rust. Each running gateway needs a key pair. Each issued JWT contains a unique `jti` (UUID) claim; combined with DB-backed refresh tokens this provides revocation support.
 
 Generate a fresh key pair with OpenSSL:
 
@@ -162,7 +164,7 @@ Run either with the criterion HTML reports enabled (`features = ["html_reports"]
 This version brings the project to a high-end Rust 2026 showcase standard:
 
 - **EdDSA JWT** with `aws-lc-rs` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
-- **Refresh token scaffolding** — `refresh_tokens` migration ships (jti UUID PK, subject, hashed token, expiry, revocation tracking) but the gateway handler wiring is TODO. The current `refresh_handler` / `logout_handler` are documented stubs. Wire them up via a follow-up PR.
+- **Refresh tokens** — `refresh_tokens` migration ships with full DB-backed rotation. `refresh_handler` accepts a `refresh_token` and atomically revokes/rotates. `logout_handler` revokes all of a subject's active refresh tokens (when a DB pool is configured). JWT access tokens are short-lived (24h) and use `EdDSA` (Ed25519).
 - **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
 - **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
 - **tower-governor** — rate limiting on gateway auth routes (two governor instances for login vs. refresh).
@@ -191,7 +193,7 @@ The `.woodpecker.yml` workflow runs:
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `clippy-live-search-ssr` | `cargo clippy -p live-search --features ssr --all-targets -- -D warnings` |
 | `fmt` | `cargo fmt --all -- --check` |
-| `e2e-tests` | Full E2E suite against PostgreSQL 17 |
+| `e2e-tests` | Full E2E suite against PostgreSQL 17 (`--features browser-tests`); runs after `fmt`, `clippy`, `leptos-build` |
 
 ## Project Structure
 
@@ -291,6 +293,8 @@ rust-web-fullstack/
             ├── db.rs           # testcontainer Postgres fixture
             └── json.rs         # (any JSON helpers)
 ```
+
+> **`crates/config`** — A small shared crate (`rwf_config`) used by both `live-search` and `gateway` for layered configuration: hardcoded defaults → `config.toml` → `RWF_*` env vars. Both binaries call `Config::load()` at startup. See `crates/config/src/lib.rs`.
 
 ## Crate Details
 

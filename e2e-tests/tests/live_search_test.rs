@@ -522,22 +522,17 @@ async fn root_path_reachable() -> anyhow::Result<()> {
 ///    never runs because the browser 404s on the JS module.
 ///
 ///    NOTE: The in-process test server only mounts `/pkg/` when a `cargo leptos build`
-///    artifact is present at `../live-search/pkg/`.  When that build is absent
-///    (CI without `cargo leptos`, or fresh clones) the test skips with a warning
-///    — that is an environment gap, not a code regression.
+///    artifact is present at `../live-search/pkg/`.  The CI pipeline runs
+///    `leptos-build` before `e2e-tests` so `pkg/` is always present; if it is
+///    missing, the test fails hard (no silent skip).
 #[tokio::test]
 async fn static_assets_are_served() -> anyhow::Result<()> {
     let pkg_path = Path::new("../live-search/pkg/live_search.js");
-    if !pkg_path.exists() {
-        eprintln!(
-            "WARNING: Leptos build artifacts not found at `{}`. \
-             This is expected in CI without `cargo leptos build`. \
-             Run `cargo leptos build` first for this test to actually verify \
-             hydration assets are served at `/pkg/live_search.js`.",
-            pkg_path.display()
-        );
-        return Ok(());
-    }
+    anyhow::ensure!(
+        pkg_path.exists(),
+        "Leptos build artifacts not found at `{}`. Run `cargo leptos build` first.",
+        pkg_path.display()
+    );
 
     let env = get_server().await?;
     let url = format!("{}/pkg/live_search.js", env.base_url());
@@ -570,33 +565,6 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
     anyhow::ensure!(
         content_type.contains("javascript") || content_type.contains("text/plain"),
         "Expected JavaScript content-type, got '{content_type}'"
-    );
-    Ok(())
-}
-
-/// Manual verification: run `cargo leptos build`, then run this test to
-/// confirm WASM/JS assets are served at `/pkg/`.
-///
-/// Unlike [`static_assets_are_served`], this test **asserts** 200 and will
-/// fail if the Leptos build artifacts are missing.
-#[tokio::test]
-#[ignore = "run after `cargo leptos build` to verify hydration assets"]
-async fn static_assets_are_served_when_built() -> anyhow::Result<()> {
-    let env = get_server().await?;
-    let url = format!("{}/pkg/live_search.js", env.base_url());
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("failed to build reqwest client")?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
-    anyhow::ensure!(
-        response.status() == 200,
-        "Expected HTTP 200 from /pkg/live_search.js (need `cargo leptos build`), got {}",
-        response.status()
     );
     Ok(())
 }

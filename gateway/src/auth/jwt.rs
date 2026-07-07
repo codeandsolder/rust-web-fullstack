@@ -16,22 +16,24 @@ use crate::settings::JWT_ISS;
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::error::AppError;
 
 /// JWT claims payload.
 ///
 /// Standard fields: `sub` (subject), `exp` (expiration), `iat` (issued-at),
-/// `aud` (audience), `iss` (issuer).
+/// `aud` (audience), `iss` (issuer), `jti` (JWT ID).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[non_exhaustive]
 #[must_use]
 pub struct Claims {
-    pub sub: String,
+    pub sub: Uuid,
     pub exp: u64,
     pub iat: u64,
     pub aud: String,
     pub iss: String,
+    pub jti: Uuid,
 }
 
 /// Convert a [`chrono::DateTime<Utc>`] to a `u64` Unix timestamp, returning an
@@ -45,19 +47,22 @@ fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
 /// The token expires 24 hours from creation. The caller is expected to provide
 /// a cached [`EncodingKey`] (e.g. from [`Settings::encoding_key`]).
 ///
+/// A random `jti` is generated for every token.
+///
 /// # Errors
 ///
 /// Returns [`AppError::Internal`] if encoding fails.
-pub fn create_jwt(user_id: &str, encoding_key: &EncodingKey) -> Result<String, AppError> {
+pub fn create_jwt(user_id: &Uuid, encoding_key: &EncodingKey) -> Result<String, AppError> {
     let now = Utc::now();
     let exp = unix_seconds(now + chrono::Duration::hours(24))?;
 
     let claims = Claims {
-        sub: user_id.to_string(),
+        sub: *user_id,
         iat: unix_seconds(now)?,
         exp,
         aud: JWT_ISS.to_string(),
         iss: JWT_ISS.to_string(),
+        jti: Uuid::new_v4(),
     };
 
     let header = Header::new(Algorithm::EdDSA);
@@ -110,15 +115,15 @@ mod tests {
         let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
-        // Sign
-        let token = create_jwt("test-user", &encoding_key)?;
+        let user_uuid = Uuid::new_v4();
+        let token = create_jwt(&user_uuid, &encoding_key)?;
 
-        // Verify
         let claims = validate_jwt(&token, &decoding_key)?;
-        assert_eq!(claims.sub, "test-user");
+        assert_eq!(claims.sub, user_uuid);
         assert_eq!(claims.iss, JWT_ISS);
         assert_eq!(claims.aud, JWT_ISS);
         assert!(claims.exp > claims.iat);
+        assert_ne!(claims.jti, Uuid::nil());
         Ok(())
     }
 
@@ -127,7 +132,6 @@ mod tests {
         let (private_pem, _) = dev_keypair_pems()?;
         let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
 
-        // Different seed → different key pair
         let wrong_seed = [2u8; 32];
         let wrong_key_pair = Ed25519KeyPair::from_seed_unchecked(&wrong_seed)?;
         let wrong_public_pem = pem_encode(
@@ -136,7 +140,8 @@ mod tests {
         );
         let wrong_decoding_key = DecodingKey::from_ed_pem(wrong_public_pem.as_bytes())?;
 
-        let token = create_jwt("test-user", &encoding_key)?;
+        let user_uuid = Uuid::new_v4();
+        let token = create_jwt(&user_uuid, &encoding_key)?;
 
         let result = validate_jwt(&token, &wrong_decoding_key);
         assert!(result.is_err());
@@ -157,13 +162,14 @@ mod tests {
     fn rejects_expired_token() -> anyhow::Result<()> {
         let (private_pem, public_pem) = dev_keypair_pems()?;
 
-        // Manually craft a token with exp = 0 (i.e., well in the past).
+        let user_uuid = Uuid::new_v4();
         let expired = Claims {
-            sub: "user-1".to_string(),
+            sub: user_uuid,
             exp: 0,
             iat: 0,
             aud: JWT_ISS.to_string(),
             iss: JWT_ISS.to_string(),
+            jti: Uuid::new_v4(),
         };
 
         let header = Header::new(Algorithm::EdDSA);
@@ -172,7 +178,6 @@ mod tests {
 
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
-        // Validate — should fail with TokenExpired
         let result = validate_jwt(&token, &decoding_key);
         assert!(result.is_err());
         assert!(matches!(result, Err(AppError::TokenExpired(_))));

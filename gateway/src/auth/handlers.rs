@@ -13,6 +13,7 @@ use axum::response::Json;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use utoipa::ToSchema;
+use uuid::Uuid;
 use validator::Validate;
 
 use crate::gateway::GatewayState;
@@ -106,6 +107,10 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, AppError> {
     let s = &state.settings;
 
+    // Parse user_id as a valid UUID before signing a JWT.
+    let user_uuid = Uuid::parse_str(&user_id)
+        .map_err(|_| AppError::BadRequest("user_id must be a valid UUID".into()))?;
+
     // Constant-time password comparison.
     let password_match: bool = password
         .as_bytes()
@@ -115,7 +120,7 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&user_id, &s.encoding_key)?;
+    let token = create_jwt(&user_uuid, &s.encoding_key)?;
     Ok(Json(LoginResponse { token, user_id }))
 }
 
@@ -156,30 +161,16 @@ pub async fn refresh_handler(
             .ok_or(AppError::AuthError)?;
 
         let now = chrono::Utc::now();
-        let new_raw = super::refresh::rotate(pool, raw, now)
+        let rotation = super::refresh::rotate(pool, raw, now)
             .await
             .map_err(|e| AppError::internal("refresh-token rotation", e))?
             .ok_or(AppError::AuthError)?;
 
-        // Issue a fresh access JWT. We don't know the subject at this
-        // layer without an extra lookup, but rotating always returns
-        // a new refresh token; the access JWT is signed for the same
-        // subject the user logged in with. The caller is expected to
-        // present the JWT they have; we re-use that subject.
-        // For this example we sign for the subject encoded in the
-        // existing JWT (if any) or "anonymous" otherwise — production
-        // callers should chain login() → refresh() without dropping
-        // the original claims.
-        let subject = body
-            .get("token")
-            .and_then(|v| v.as_str())
-            .and_then(|t| super::jwt::validate_jwt(t, &state.settings.decoding_key).ok())
-            .map_or_else(|| "anonymous".to_string(), |claims| claims.sub);
-        let token = create_jwt(&subject, &state.settings.encoding_key)?;
+        let token = create_jwt(&rotation.subject, &state.settings.encoding_key)?;
 
         return Ok(Json(RefreshResponse {
             token,
-            refresh_token: Some(new_raw),
+            refresh_token: Some(rotation.new_raw_token),
         }));
     }
 
@@ -212,11 +203,24 @@ pub async fn refresh_handler(
 )]
 pub async fn logout_handler(
     State(state): State<GatewayState>,
-    Extension(_claims): Extension<Claims>,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<LogoutResponse>, AppError> {
-    // TODO: Blacklist the JWT jti or revoke the refresh token from DB.
-    // For now, this is a no-op stub.
-    let _ = &state.settings;
+    if let Some(pool) = state.db_pool.as_ref() {
+        sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = NOW() \
+             WHERE subject = $1 AND revoked_at IS NULL",
+        )
+        .bind(claims.sub)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::internal("refresh token revocation", e))?;
+        tracing::info!(subject = %claims.sub, "refresh tokens revoked");
+    } else {
+        tracing::warn!(
+            subject = %claims.sub,
+            "logout called without DB pool; access JWT remains valid until 24 h expiry"
+        );
+    }
     Ok(Json(LogoutResponse {
         status: "ok".to_string(),
     }))

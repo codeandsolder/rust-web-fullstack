@@ -103,4 +103,9 @@ steps:
         # via `common::DockerBrowser` (testcontainers).
         cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
         '
-    depends_on: []
+    depends_on:
+      - fmt
+      - audit
+      - clippy
+      - unit-tests
+      - leptos-build

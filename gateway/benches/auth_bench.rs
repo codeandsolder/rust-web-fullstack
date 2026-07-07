@@ -16,6 +16,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use gateway_example::auth::{create_jwt, validate_jwt};
 use gateway_example::pem::{ed25519_pkcs8_der, ed25519_spki_der, pem_encode};
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use uuid::Uuid;
 
 /// Fixed seed for deterministic benchmark keypair.
 const BENCH_SEED: [u8; 32] = [0x42u8; 32];
@@ -38,9 +39,11 @@ fn bench_sign_verify(c: &mut Criterion) {
     let decoding_key =
         DecodingKey::from_ed_pem(public_pem.as_bytes()).expect("valid Ed25519 public key PEM");
 
+    let bench_uuid = Uuid::from_u128(0xDEAD_BEEF_CAFE_BABE_0123_4567_89AB_CDEF);
+
     c.bench_function("sign_verify", |b| {
         b.iter(|| {
-            let token = create_jwt("bench-user", black_box(&encoding_key))
+            let token = create_jwt(black_box(&bench_uuid), black_box(&encoding_key))
                 .expect("create_jwt should succeed");
             let claims = validate_jwt(black_box(&token), black_box(&decoding_key))
                 .expect("validate_jwt should succeed");

@@ -6,8 +6,6 @@
 //!
 //! * JWT-based authentication (`EdDSA`) via [`crate::auth`]
 //! * Per-route rate limiting via `tower_governor`
-//! * Session management via `tower-sessions`
-//! * CSRF protection via `axum-tower-sessions-csrf`
 //! * Prometheus metrics at `/metrics`
 //! * Request timeout safety net
 //! * `OpenAPI` / Swagger UI at `/docs`
@@ -15,7 +13,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::middleware as axum_mw;
 use axum::{
     Router,
     extract::State,
@@ -25,14 +22,11 @@ use axum::{
     routing::{get, post},
 };
 use axum_prometheus::PrometheusMetricLayer;
-use axum_tower_sessions_csrf::CsrfMiddleware;
 use futures::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
-use tower_sessions::SessionManagerLayer;
-use tower_sessions_memory_store::MemoryStore;
 use tracing::instrument;
 
 use crate::auth;
@@ -82,9 +76,9 @@ impl std::fmt::Debug for GatewayState {
 /// Compose every `ServiceModule` under its own path prefix and attach
 /// gateway-wide routes — `/health`, `/events`, `/auth/*`, `/metrics`, `/docs`.
 ///
-/// Convenience wrapper that loads [`settings::Settings`] from environment
-/// variables.  Use [`build_gateway_with_settings`] when you need to inject
-/// pre-loaded settings (e.g. for `--dev-keys`).
+/// Thin wrapper that loads [`settings::Settings`] from environment variables.
+/// Use [`build_gateway_with_settings`] when you need to inject pre-loaded
+/// settings (e.g. for `--dev-keys` or a DB pool).
 ///
 /// # Errors
 ///
@@ -93,13 +87,7 @@ impl std::fmt::Debug for GatewayState {
 #[instrument(skip(modules))]
 pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
     let settings = settings::Settings::load()?;
-    let proxy_upstream_url =
-        std::env::var("PROXY_UPSTREAM_URL").unwrap_or_else(|_| "https://ipapi.co".to_string());
-    let _port: u16 = std::env::var("GATEWAY_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3001);
-    build_gateway_with_settings(modules, settings, proxy_upstream_url, None)
+    build_gateway_with_settings(modules, settings, "https://ipapi.co".to_string(), None)
 }
 
 /// Compose every `ServiceModule` with pre-loaded [`settings::Settings`].
@@ -173,20 +161,6 @@ pub fn build_gateway_with_settings(
     let login_governor = GovernorLayer::new(login_governor_cfg);
     let general_governor = GovernorLayer::new(general_governor_cfg);
 
-    // --- Session layer ---
-    let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(secure_cookie_from_env())
-        .with_same_site(tower_sessions::cookie::SameSite::Lax);
-
-    // --- CSRF layer ---
-    //
-    // The Synchronizer Token Pattern: the server stores a CSRF token in the
-    // session, and the client must echo it back (typically via a custom header
-    // or form field) on state-changing requests.  `axum-tower-sessions-csrf`
-    // handles token generation, session storage, and constant-time comparison.
-    let csrf_layer = axum_mw::from_fn(CsrfMiddleware::middleware);
-
     // --- CORS ---
     let cors = crate::cors::cors_layer();
 
@@ -220,14 +194,12 @@ pub fn build_gateway_with_settings(
     // --- Assemble final router with shared middleware ---
     //
     // Layer order (from innermost to outermost):
-    //   Governor (per-route, on sub-routers) → CSRF → Session → Timeout
-    //   → Prometheus → Trace → CORS
+    //   Governor (per-route, on sub-routers) → Timeout → Prometheus
+    //   → Trace → CORS → CSP
     //
     // Middleware added LAST runs FIRST on incoming requests.
     let app = other_router
         .merge(login_router) // login governor runs before general governor
-        .layer(csrf_layer)
-        .layer(session_layer)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
@@ -239,20 +211,6 @@ pub fn build_gateway_with_settings(
         .with_state(state);
 
     Ok(app)
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Whether the session cookie should carry the `Secure` flag.
-///
-/// Reads `SESSION_COOKIE_SECURE` from the environment.  Defaults to `true`
-/// (secure — fail safe).  Recognised "off" values: `0`, `false`, `no`, `off`.
-fn secure_cookie_from_env() -> bool {
-    std::env::var("SESSION_COOKIE_SECURE").map_or(true, |v| {
-        !matches!(v.as_str(), "0" | "false" | "no" | "off")
-    })
 }
 
 // ---------------------------------------------------------------------------

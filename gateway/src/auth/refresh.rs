@@ -18,6 +18,15 @@ use sqlx::types::chrono::{DateTime, Utc};
 use thiserror::Error;
 use uuid::Uuid;
 
+/// The result of a successful token rotation.
+#[derive(Debug, Clone)]
+pub struct RotationResult {
+    /// The newly issued raw refresh token (base64url-encoded, 43 chars).
+    pub new_raw_token: String,
+    /// The subject (user UUID) that the rotated token belongs to.
+    pub subject: Uuid,
+}
+
 /// Default lifetime for newly issued refresh tokens (30 days).
 pub const REFRESH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 30;
 
@@ -74,47 +83,11 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
     out
 }
 
-/// Persist a freshly issued refresh token.
-///
-/// The caller hands back the raw token to the client and stores only
-/// the SHA-256 hash. If `subject` is not a `UUIDv4` the DB will reject
-/// the insert — there is no implicit string↔UUID coercion.
-///
-/// # Errors
-/// Returns [`RefreshError::OsRng`] when entropy cannot be fetched, or
-/// [`RefreshError::Sqlx`] for DB failures.
-#[allow(dead_code)]
-pub async fn insert(
-    pool: &PgPool,
-    subject: Uuid,
-    raw_token: &str,
-    now: DateTime<Utc>,
-) -> Result<Uuid, RefreshError> {
-    let (raw, jti) = generate_raw_refresh_token()?;
-    let _ = raw; // `raw_token` is the canonical value passed in.
-    let hashed: Vec<u8> = hash_refresh_token(raw_token).to_vec();
-    let expires_at = now + chrono::Duration::seconds(REFRESH_TOKEN_TTL_SECONDS);
-    sqlx::query(
-        "
-        INSERT INTO refresh_tokens (jti, subject, hashed_token, expires_at, created_at)
-        VALUES ($1, $2, $3, $4, $5)
-        ",
-    )
-    .bind(jti)
-    .bind(subject)
-    .bind(&hashed)
-    .bind(expires_at)
-    .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(jti)
-}
-
 /// Atomically revoke the rotated token and insert a new refresh token
 /// whose subject matches the rotated one. Returns the new raw token
-/// on success. Returns `Ok(None)` if the input was already revoked or
-/// expired — the caller maps this to 401 to indicate the credential
-/// chain is broken.
+/// and subject on success. Returns `Ok(None)` if the input was already
+/// revoked or expired — the caller maps this to 401 to indicate the
+/// credential chain is broken.
 ///
 /// # Errors
 /// Returns [`RefreshError::OsRng`] when entropy cannot be fetched, or
@@ -123,7 +96,7 @@ pub async fn rotate(
     pool: &PgPool,
     raw_token: &str,
     now: DateTime<Utc>,
-) -> Result<Option<String>, RefreshError> {
+) -> Result<Option<RotationResult>, RefreshError> {
     let hashed = hash_refresh_token(raw_token);
     let mut tx = pool.begin().await?;
 
@@ -179,7 +152,10 @@ pub async fn rotate(
     .await?;
 
     tx.commit().await?;
-    Ok(Some(new_raw))
+    Ok(Some(RotationResult {
+        new_raw_token: new_raw,
+        subject,
+    }))
 }
 
 /// Lookup helper used by tests and admin tooling. Not used by the

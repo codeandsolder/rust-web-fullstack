@@ -9,6 +9,7 @@
 // Leptos #[server] generates client-side trait impl stubs without awaits
 // when compiled without ssr — the unused async is expected.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use leptos::prelude::*;
@@ -316,7 +317,7 @@ struct LiveResult {
 )]
 #[component]
 pub fn LiveFeedPage() -> impl IntoView {
-    let results = RwSignal::new(Vec::<LiveResult>::new());
+    let results = RwSignal::new(VecDeque::<LiveResult>::new());
     let connected = RwSignal::new(false);
 
     // On the client (WASM) side, open an EventSource to the SSE endpoint.
@@ -371,9 +372,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                                     } => {
                                                         results.update(|r| {
                                                             if r.len() >= 200 {
-                                                                r.remove(0);
+                                                                r.pop_front();
                                                             }
-                                                            r.push(LiveResult {
+                                                            r.push_back(LiveResult {
                                                                 title,
                                                                 url,
                                                                 snippet,
