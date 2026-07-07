@@ -1731,6 +1731,66 @@ rotated twice in parallel and the second rotation wins, leaving the
 attacker's token valid while the legitimate user's next refresh
 fails — bad UX *and* a credential-theft oracle.
 
+### Pattern 24: WebSocket Chat via static broadcast hub
+
+`i18n-demo/src/ws_chat.rs` exposes `/ws/chat` — a bidirectional
+chat endpoint backed by a single static `tokio::sync::broadcast::Sender`.
+The pattern is deliberately minimal so the deployment shape is easy
+to recognise before swapping in a real pub/sub backend.
+
+**Server side:**
+
+```rust
+static HUB: LazyLock<broadcast::Sender<ChatEvent>> =
+    LazyLock::new(|| broadcast::channel(256).0);
+
+pub fn chat_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(handle_socket)
+}
+
+async fn handle_socket(socket: WebSocket) {
+    let from = Uuid::new_v4();
+    let mut rx = HUB.subscribe();
+    let (mut sink, mut stream) = socket.split();
+    loop {
+        tokio::select! {
+            incoming = stream.next() => { /* client -> hub */ }
+            broadcast = rx.recv()   => { /* hub -> client */ }
+        }
+    }
+}
+```
+
+**Client side** (any browser):
+
+```js
+const ws = new WebSocket("ws://localhost:3002/ws/chat");
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
+ws.onopen = () => ws.send("hello");
+```
+
+**Hardening checklist (swap in before production):**
+
+1. Replace the per-connection random `Uuid` with the authenticated
+   session id (the gateway's `Claims` struct). Don't ship chat that
+   lets anyone claim any name.
+2. Move the `HUB` static behind `tokio::sync::RwLock` or onto
+   Redis pub/sub once you have more than one node —
+   `broadcast::Sender` is a single-process construct.
+3. Add a backpressure policy: cap per-frame text at 1 KiB (already
+   enforced in the demo) and reject slow clients at the edge.
+4. Add a periodic ping/pong so dead-but-connected sockets are
+   reaped. `axum::extract::ws::Message::Ping` is already a no-op in
+   the current handler.
+5. Track the subscription count via `HUB.receiver_count()` and
+   expose it from `/metrics`.
+
+**Tests:**
+
+- `ws_chat::tests::max_text_bytes_matches_documented_value`
+- `ws_chat::tests::new_event_has_unique_ids_and_timestamps`
+- `ws_chat::tests::event_round_trips_through_serde_json`
+
 ---
 
 ## Common Pitfalls

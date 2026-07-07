@@ -2311,7 +2311,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "console_error_panic_hook",
+ "futures",
  "leptos",
  "leptos_axum",
  "leptos_i18n",
@@ -2320,11 +2322,13 @@ dependencies = [
  "leptos_router",
  "proc-macro2",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wasm-bindgen",
 ]
 

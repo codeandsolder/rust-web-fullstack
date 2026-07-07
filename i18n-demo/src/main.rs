@@ -17,6 +17,7 @@ use axum::extract::Request;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::any;
+use axum::routing::get;
 use leptos::config::get_configuration;
 use leptos_axum::{LeptosRoutes, generate_route_list};
 use tokio::signal;
@@ -149,6 +150,8 @@ async fn main() -> anyhow::Result<()> {
         //
         // Must be before .leptos_routes() so /pkg/* takes priority.
         .nest_service("/pkg", ServeDir::new("./pkg"))
+        // WebSocket chat demo — see `ws_chat.rs`.
+        .route("/ws/chat", get(i18n_demo::ws_chat::chat_handler))
         .route("/api/{*fn_name}", any(server_fn_handler))
         .route("/api/api/{*fn_name}", any(server_fn_handler))
         .layer(TraceLayer::new_for_http())

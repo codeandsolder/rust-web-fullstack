@@ -11,6 +11,7 @@
 pub mod app;
 pub mod i18n;
 pub mod styles;
+pub mod ws_chat;
 
 // ---------------------------------------------------------------------------
 // Hydrate entry point – called by the browser after the WASM module loads.
