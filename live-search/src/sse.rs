@@ -80,3 +80,76 @@ fn event_to_sse(event: &SseEvent) -> Event {
     });
     Event::default().event(name).data(json)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::events::SseEvent;
+
+    /// `serde_json::to_string(&SseEvent)` produces the JSON the SSE handler
+    /// embeds in the `data:` field. We test the JSON shape directly because
+    /// `Event` is opaque (no public field access for the event name or
+    /// data string) and the public contract is "client subscribes via
+    /// `addEventListener('event-name', …)` and parses the data as JSON".
+    /// Verifying the JSON shape is the meaningful unit.
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixtures: chrono::from_timestamp(0,0) is infallible on a sound system clock, and serde_json of the canonical enum cannot fail"
+    )]
+    #[test]
+    fn sse_event_json_shape_per_variant() {
+        let epoch =
+            chrono::DateTime::from_timestamp(0, 0).expect("unix epoch is always representable");
+        let connected = SseEvent::Connected { server_time: epoch };
+        let json = serde_json::to_string(&connected).expect("Connected serializes");
+        assert!(
+            json.contains("\"type\":\"Connected\""),
+            "Connected must carry the `type` tag; got {json}"
+        );
+        assert!(
+            json.contains("\"server_time\""),
+            "Connected must carry server_time; got {json}"
+        );
+
+        let result = SseEvent::SearchResult {
+            title: "t".into(),
+            url: "u".into(),
+            snippet: "s".into(),
+        };
+        let json = serde_json::to_string(&result).expect("SearchResult serializes");
+        assert!(json.contains("\"type\":\"SearchResult\""));
+        assert!(json.contains("\"title\":\"t\""));
+        assert!(json.contains("\"url\":\"u\""));
+        assert!(json.contains("\"snippet\":\"s\""));
+
+        let lagged = SseEvent::StreamLagged { skipped: 42 };
+        let json = serde_json::to_string(&lagged).expect("StreamLagged serializes");
+        assert!(json.contains("\"type\":\"StreamLagged\""));
+        assert!(json.contains("\"skipped\":42"));
+    }
+
+    /// The `connected` / `search_result` / `stream_lagged` event-name
+    /// mapping is hard-coded in `event_to_sse` via the SSE `event:`
+    /// field of the rendered wire format. Axum 0.8's `Event` struct is
+    /// opaque (no `pub` accessors for the event name or data), so the
+    /// end-to-end mapping is best verified at the integration-test
+    /// layer (e2e-tests/tests/sse_test.rs), which subscribes via a
+    /// real `EventSource` and asserts on the parsed event names.
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixture: chrono::from_timestamp(0,0) is infallible on a sound system clock"
+    )]
+    #[test]
+    fn sse_event_variants_are_all_reachable() {
+        // Compile-time check that all three variants still exist (regression
+        // guard against accidental removal in a future refactor).
+        let epoch =
+            chrono::DateTime::from_timestamp(0, 0).expect("unix epoch is always representable");
+        let _ = SseEvent::Connected { server_time: epoch };
+        let _ = SseEvent::SearchResult {
+            title: "t".into(),
+            url: "u".into(),
+            snippet: "s".into(),
+        };
+        let _ = SseEvent::StreamLagged { skipped: 1 };
+    }
+}

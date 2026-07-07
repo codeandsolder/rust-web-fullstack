@@ -81,6 +81,10 @@ pub fn cors_layer() -> CorsLayer {
 /// body-type bound (Body: Clone) is not satisfied by axum 0.8's
 /// `Body` type. The `if-not-present` semantics of the layer are
 /// preserved by checking for an existing header before inserting.
+#[allow(
+    clippy::unused_async,
+    reason = "axum 0.8 requires `async fn` for middleware handlers even when the body has no awaits besides `next.run`"
+)]
 pub async fn csp_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -100,4 +104,98 @@ pub async fn csp_middleware(
         response.headers_mut().insert(HEADER, POLICY);
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, Response, StatusCode};
+    use axum::middleware::from_fn;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    /// Inline CSP for the assertion: the policy string is private to
+    /// `csp_middleware` so we replicate it here for the equality check.
+    const POLICY: &str = "default-src 'self'; \
+         script-src 'self' 'unsafe-inline'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; \
+         connect-src 'self' ws: wss:; \
+         frame-ancestors 'none'";
+
+    /// CSP middleware inserts the default header on responses that
+    /// don't already carry one.
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixture: Response::builder build only fails on resource exhaustion"
+    )]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test fixture: Request::builder and oneshot unwraps on a synthetic test"
+    )]
+    #[tokio::test]
+    async fn csp_middleware_inserts_default_header() {
+        async fn handler() -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::empty())
+                .expect("static response build")
+        }
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(from_fn(csp_middleware));
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let header = response
+            .headers()
+            .get("content-security-policy")
+            .expect("CSP header missing");
+        assert_eq!(header.to_str().unwrap(), POLICY);
+    }
+
+    /// CSP middleware does not override an existing CSP header (the
+    /// `if-not-present` semantics of `tower_http::set_header::SetResponseHeaderLayer`).
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixture: Response::builder build only fails on resource exhaustion"
+    )]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test fixture: Request::builder and oneshot unwraps on a synthetic test"
+    )]
+    #[tokio::test]
+    async fn csp_middleware_does_not_override_existing_header() {
+        async fn handler() -> Response<Body> {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("content-security-policy", "default-src 'none'")
+                .body(Body::empty())
+                .expect("static response build")
+        }
+
+        let app = Router::new()
+            .route("/", get(handler))
+            .layer(from_fn(csp_middleware));
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "default-src 'none'",
+        );
+    }
 }

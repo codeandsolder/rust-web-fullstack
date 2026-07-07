@@ -297,4 +297,44 @@ mod tests {
         assert_eq!(cfg.gateway.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.refresh_token_ttl_secs, 60 * 60 * 24 * 30);
     }
+
+    /// `RWF_CONFIG=/nonexistent.toml` produces a `ConfigPathNotFound` error
+    /// (not a silent fallback).
+    #[test]
+    fn rwf_config_missing_path_errors() {
+        let original = std::env::var("RWF_CONFIG").ok();
+        // SAFETY: tests in a single binary are run on a single thread by
+        // cargo's default; this is the documented `std::env::set_var`
+        // precondition.
+        unsafe {
+            std::env::set_var("RWF_CONFIG", "/this/path/does/not/exist.toml");
+        }
+        let result = Config::load();
+        assert!(
+            matches!(result, Err(ConfigError::ConfigPathNotFound(_))),
+            "expected ConfigPathNotFound for nonexistent RWF_CONFIG, got {result:?}",
+        );
+        // Restore.
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("RWF_CONFIG", v);
+            },
+            None => unsafe {
+                std::env::remove_var("RWF_CONFIG");
+            },
+        }
+    }
+
+    /// `connection_budget_summary` round-trips the configured pool values
+    /// in a single human-readable line (used by `live-search::bootstrap`).
+    #[test]
+    fn connection_budget_summary_format() {
+        let cfg = LiveSearchConfig::default();
+        let summary = cfg.connection_budget_summary();
+        assert!(summary.contains("max_connections=20"));
+        assert!(summary.contains("min_connections=2"));
+        assert!(summary.contains("acquire_timeout=5s"));
+        assert!(summary.contains("idle_timeout=600s"));
+        assert!(summary.contains("max_lifetime=1800s"));
+    }
 }
