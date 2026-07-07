@@ -10,7 +10,10 @@ pub mod db;
 pub mod events;
 pub mod styles;
 
-#[cfg(feature = "ssr")]
+// `cache` is native-only (moka uses tokio) but does NOT depend on axum
+// or leptos — gate on the wasm target so CI's `cargo test --workspace --lib`
+// runs the cache unit tests even without `--features ssr`.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cache;
 #[cfg(feature = "ssr")]
 pub mod sse;

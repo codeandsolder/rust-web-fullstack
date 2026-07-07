@@ -181,7 +181,12 @@ mod server {
     /// Intentionally **not** `#[tracing::instrument]` — the record-via-current-span
     /// pattern is fragile because fmt layers **append** field values instead of
     /// replacing them; a single `tracing::debug!` at the call site avoids that.
-    async fn forward_notification(
+    ///
+    /// Synchronous: cache invalidation is a single atomic `fetch_add` and
+    /// broadcast send is internally synchronous; we keep this non-`async`
+    /// to avoid the runtime cost of an extra future state machine per
+    /// notification.
+    fn forward_notification(
         tx: &broadcast::Sender<SseEvent>,
         notification: &sqlx::postgres::PgNotification,
     ) {
@@ -212,9 +217,10 @@ mod server {
                     }
                 }
 
-                // Data has changed — invalidate the search cache so the next
-                // search query re-fetches from the database.
-                cache::invalidate_all().await;
+                // Data has changed — bump the search cache version so the
+                // next search query re-fetches from the database. Synchronous
+                // fetch_add on the version atomic; no .await needed.
+                cache::invalidate_all();
             }
             Err(e) => {
                 // Do NOT log the full payload: it is unbounded user content and
@@ -350,7 +356,7 @@ mod server {
                         match recv {
                             Ok(notification) => {
                                 backoff = Duration::from_millis(BACKOFF_FLOOR_MS);
-                                forward_notification(&tx, &notification).await;
+                                forward_notification(&tx, &notification);
                             }
                             Err(e) => {
                                 tracing::error!(
