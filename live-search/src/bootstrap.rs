@@ -25,8 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
-use axum::body::Body;
-use axum::extract::Request;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::{
@@ -35,6 +33,7 @@ use axum::{
 };
 use leptos::config::get_configuration;
 use leptos_axum::{LeptosRoutes, generate_route_list};
+use leptos_utils::probed_server_fn_handler;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
@@ -119,43 +118,6 @@ async fn health_handler() -> impl IntoResponse {
 /// Fallback handler (404).
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
-}
-
-/// Server-function dispatch handler (see main.rs for the rationale behind the
-/// doubled-prefix probe).
-///
-/// # Panics
-/// Panics only if the path-rewrite produces an invalid URI — in practice this
-/// is infallible because we only ever prepend `/api` to an existing valid URI.
-#[expect(
-    clippy::expect_used,
-    reason = "Path rewrite produces a valid URI by construction (prepending /api to a valid path)"
-)]
-pub async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
-    let method = req.method().clone();
-    let original_path = req.uri().path().to_string();
-    let (mut parts, body) = req.into_parts();
-
-    let path_to_try =
-        if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
-            && original_path.starts_with("/api/")
-        {
-            let doubled = format!("/api{original_path}");
-            if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
-                doubled
-            } else {
-                original_path
-            }
-        } else {
-            original_path
-        };
-
-    if path_to_try != parts.uri.path() {
-        parts.uri = Uri::try_from(&path_to_try).expect("valid URI from path rewrite");
-    }
-
-    let req = Request::from_parts(parts, body);
-    leptos_axum::handle_server_fns(req).await
 }
 
 /// Bootstraps all subsystems and starts the HTTP server.
@@ -248,8 +210,8 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let router = Router::new()
         .nest_service("/pkg", ServeDir::new("./pkg"))
         .route("/api/events", get(sse::sse_handler))
-        .route("/api/{*fn_name}", any(server_fn_handler))
-        .route("/api/api/{*fn_name}", any(server_fn_handler))
+        .route("/api/{*fn_name}", any(probed_server_fn_handler))
+        .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, leptos_routes, {

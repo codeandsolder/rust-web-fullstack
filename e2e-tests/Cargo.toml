@@ -69,8 +69,14 @@ testcontainers-modules = { workspace = true }
 insta = { workspace = true, features = ["json"] }
 proptest = { workspace = true }
 
+# Shared domain types (SearchResult, etc.)
+rwf-domain = { workspace = true }
+
 # Import the real SearchResult type and SSR modules for in-process server
 live-search = { path = "../live-search", features = ["ssr"] }
+# Shared Leptos axum helpers (doubled-prefix server-fn probe) for in-process
+# test launchers
+leptos-utils = { workspace = true }
 
 # Gateway example for in-process HTTP tests
 gateway-example = { path = "../gateway" }

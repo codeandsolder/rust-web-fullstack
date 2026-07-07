@@ -17,7 +17,6 @@ use futures::stream::{self, BoxStream};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use uuid::Uuid;
 
 use crate::events::SseEvent;
 
@@ -66,7 +65,6 @@ pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>>
     // Emit a "Connected" event immediately, then forward broadcast events.
     let connected = SseEvent::Connected {
         server_time: Utc::now(),
-        subscription_id: Uuid::new_v4(),
     };
 
     let stream: BoxStream<'static, Result<Event, Infallible>> = get_broadcast().map_or_else(

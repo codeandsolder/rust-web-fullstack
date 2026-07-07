@@ -11,20 +11,42 @@
 //! and an `Arc<AtomicU64>` last-seen timestamp — it is NOT inside the existing
 //! `biased;` select! (per oracle I3).
 
+#[cfg(feature = "ssr")]
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+#[cfg(feature = "ssr")]
 use uuid::Uuid;
 
-/// A search result as stored in the database.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ssr", derive(sqlx::FromRow))]
+/// Re-export the canonical domain type.
+pub use rwf_domain::SearchResult;
+
+/// Row-level representation for `sqlx` queries, mirroring the database columns.
+///
+/// The canonical [`SearchResult`] lives in the `rwf-domain` crate with no
+/// `sqlx` dependency, so we map through this wrapper when executing queries
+/// that need `#[derive(sqlx::FromRow)]`.
+#[cfg(feature = "ssr")]
+#[derive(Debug, sqlx::FromRow)]
 #[must_use]
-pub struct SearchResult {
+#[doc(hidden)] // Published for benches in the same package; not part of the public API.
+pub struct SearchResultRow {
     pub id: Uuid,
     pub title: String,
     pub url: String,
     pub snippet: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(feature = "ssr")]
+impl From<SearchResultRow> for SearchResult {
+    fn from(row: SearchResultRow) -> Self {
+        Self {
+            id: row.id,
+            title: row.title,
+            url: row.url,
+            snippet: row.snippet,
+            created_at: row.created_at,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +461,7 @@ mod server {
         limit: i64,
     ) -> Result<Vec<super::SearchResult>, sqlx::Error> {
         if let Some((cursor_time, cursor_id)) = cursor {
-            sqlx::query_as::<_, super::SearchResult>(
+            let rows = sqlx::query_as::<_, super::SearchResultRow>(
                 r"SELECT id, title, url, snippet, created_at
                    FROM search_results
                    WHERE fts @@ plainto_tsquery('english', $1)
@@ -452,9 +474,10 @@ mod server {
             .bind(cursor_id)
             .bind(limit)
             .fetch_all(pool)
-            .await
+            .await?;
+            Ok(rows.into_iter().map(Into::into).collect())
         } else {
-            sqlx::query_as::<_, super::SearchResult>(
+            let rows = sqlx::query_as::<_, super::SearchResultRow>(
                 r"SELECT id, title, url, snippet, created_at
                    FROM search_results
                    WHERE fts @@ plainto_tsquery('english', $1)
@@ -464,7 +487,8 @@ mod server {
             .bind(query)
             .bind(limit)
             .fetch_all(pool)
-            .await
+            .await?;
+            Ok(rows.into_iter().map(Into::into).collect())
         }
     }
 

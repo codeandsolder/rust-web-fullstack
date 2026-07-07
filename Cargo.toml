@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/config", "gateway", "live-search", "i18n-demo", "e2e-tests"]
+members = ["crates/config", "crates/domain", "crates/leptos-utils", "gateway", "live-search", "i18n-demo", "e2e-tests"]
 
 [workspace.package]
 version = "0.1.0"
@@ -72,6 +72,13 @@ testcontainers-modules = { version = "0.15", features = ["postgres"] }
 # The `config` crate gives us typed deserialization + per-source priority
 # without needing unsafe or hand-rolled merge logic.
 config = { version = "0.14", default-features = false, features = ["toml"] }
+
+# Shared domain types (no framework dependencies).
+rwf-domain = { path = "crates/domain" }
+
+# Shared Leptos axum helpers (currently the doubled-prefix server-fn probe).
+# rlib only: the probe uses leptos_axum::handle_server_fns (SSR-only).
+leptos-utils = { path = "crates/leptos-utils" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

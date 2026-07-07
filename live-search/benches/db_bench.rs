@@ -81,7 +81,7 @@ fn search_query_benchmark(c: &mut Criterion) {
                 b.iter(|| {
                     rt.block_on(async {
                         if let Some(ref pool) = pool {
-                            let _: Vec<live_search::db::SearchResult> = sqlx::query_as(
+                            let _: Vec<live_search::db::SearchResultRow> = sqlx::query_as(
                                 r"SELECT id, title, url, snippet, created_at
                                    FROM search_results
                                    WHERE fts @@ plainto_tsquery('english', $1)

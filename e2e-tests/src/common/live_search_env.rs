@@ -22,7 +22,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
-use live_search::bootstrap::server_fn_handler;
+use leptos_utils::probed_server_fn_handler;
+
 use live_search::events::SseEvent;
 
 /// RAII guard that runs a live-search server in the background on a random port.
@@ -80,8 +81,8 @@ impl LiveSearchEnv {
         // ── 7. Build Router ───────────────────────────────────────────────
         let mut router = Router::new()
             .route("/api/events", get(live_search::sse::sse_handler))
-            .route("/api/{*fn_name}", any(server_fn_handler))
-            .route("/api/api/{*fn_name}", any(server_fn_handler))
+            .route("/api/{*fn_name}", any(probed_server_fn_handler))
+            .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
             .layer(TraceLayer::new_for_http());
 
         // Mount /pkg/ for Leptos build artifacts if available.

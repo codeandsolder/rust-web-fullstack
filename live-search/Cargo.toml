@@ -41,6 +41,8 @@ leptos-use = { workspace = true }
 leptos-struct-table = { workspace = true }
 lepticons = { workspace = true }
 stylance = { workspace = true }
+# Shared domain types — no platform-specific dependencies, available everywhere.
+rwf-domain = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
@@ -59,6 +61,7 @@ moka = { workspace = true }
 leptos-forms-rs = { version = "1", features = ["ssr"] }
 base64 = { workspace = true }
 rwf-config = { path = "../crates/config" }
+leptos-utils = { workspace = true }
 # OTel stack — gated behind `otel` feature
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -76,6 +79,7 @@ gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen = { workspace = true }
 console_error_panic_hook = { workspace = true }
 leptos-forms-rs = { version = "1", features = ["hydrate"] }
+rwf-domain = { workspace = true }
 
 [features]
 default = []

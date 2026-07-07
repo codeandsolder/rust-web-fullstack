@@ -151,6 +151,13 @@ pub fn build_gateway_with_settings(
             .finish()
             .ok_or_else(|| anyhow::anyhow!("failed to build login governor config"))?,
     );
+    let refresh_governor_cfg = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(REFRESH_RATE_PER_SECOND)
+            .burst_size(REFRESH_BURST_SIZE)
+            .finish()
+            .ok_or_else(|| anyhow::anyhow!("failed to build refresh governor config"))?,
+    );
     let general_governor_cfg = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(10)
@@ -159,6 +166,7 @@ pub fn build_gateway_with_settings(
             .ok_or_else(|| anyhow::anyhow!("failed to build general governor config"))?,
     );
     let login_governor = GovernorLayer::new(login_governor_cfg);
+    let refresh_governor = GovernorLayer::new(refresh_governor_cfg);
     let general_governor = GovernorLayer::new(general_governor_cfg);
 
     // --- CORS ---
@@ -169,11 +177,15 @@ pub fn build_gateway_with_settings(
         .route("/auth/login", post(auth::login_handler))
         .layer(login_governor);
 
+    // --- Refresh route (separate rate limiter — mirrors login governor) ---
+    let refresh_router = Router::new()
+        .route("/auth/refresh", post(auth::refresh_handler))
+        .layer(refresh_governor);
+
     // --- Everything else (general governor wraps non-login routes only) ---
     let other_router = Router::new()
         .route("/health", get(health_handler))
         .route("/events", get(sse::sse_handler))
-        .route("/auth/refresh", post(auth::refresh_handler))
         .route("/auth/logout", post(auth::logout_handler))
         .route("/", get(root_handler))
         .route(
@@ -200,6 +212,7 @@ pub fn build_gateway_with_settings(
     // Middleware added LAST runs FIRST on incoming requests.
     let app = other_router
         .merge(login_router) // login governor runs before general governor
+        .merge(refresh_router) // refresh governor runs before general governor
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
@@ -220,6 +233,11 @@ pub fn build_gateway_with_settings(
 /// Per-module health probe timeout.
 pub const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Maximum number of `/auth/refresh` requests allowed per second per client.
+pub const REFRESH_RATE_PER_SECOND: u64 = 1;
+/// Maximum burst size for the `/auth/refresh` rate limiter.
+pub const REFRESH_BURST_SIZE: u32 = 5;
+
 /// Aggregate health check — probes every registered service module in
 /// parallel, each capped at [`HEALTH_CHECK_TIMEOUT`].
 ///
@@ -236,33 +254,40 @@ pub const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_
 )]
 #[instrument(skip(state))]
 pub async fn health_handler(State(state): State<GatewayState>) -> (StatusCode, Json<Value>) {
-    let results = join_all(state.modules.iter().map(|module| async {
-        let status = match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
-            Ok(Ok(())) => "healthy",
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    name = module.name(),
-                    error = %e,
-                    "health check failed"
-                );
-                "unhealthy"
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    name = module.name(),
-                    timeout_ms = HEALTH_CHECK_TIMEOUT.as_millis(),
-                    "health check timed out"
-                );
-                "unhealthy"
-            }
-        };
-        json!({
-            "name": module.name(),
-            "path": module.path(),
-            "enabled": module.enabled(),
-            "status": status,
-        })
-    }))
+    let results = join_all(
+        state
+            .modules
+            .iter()
+            .filter(|m| m.enabled())
+            .map(|module| async {
+                let status =
+                    match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
+                        Ok(Ok(())) => "healthy",
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                name = module.name(),
+                                error = %e,
+                                "health check failed"
+                            );
+                            "unhealthy"
+                        }
+                        Err(_elapsed) => {
+                            tracing::warn!(
+                                name = module.name(),
+                                timeout_ms = HEALTH_CHECK_TIMEOUT.as_millis(),
+                                "health check timed out"
+                            );
+                            "unhealthy"
+                        }
+                    };
+                json!({
+                    "name": module.name(),
+                    "path": module.path(),
+                    "enabled": module.enabled(),
+                    "status": status,
+                })
+            }),
+    )
     .await;
 
     let any_unhealthy = results.iter().any(|r| r["status"] != "healthy");

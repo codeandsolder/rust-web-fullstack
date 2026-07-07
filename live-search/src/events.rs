@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Serialize or deserialize an `Arc<str>` as a plain JSON string.
 mod arc_str_serde {
@@ -45,10 +44,8 @@ mod arc_str_serde {
 pub enum SseEvent {
     Connected {
         /// Monotonic server timestamp at the moment the connection was
-        /// established.
+        /// established. Clients can use this for staleness detection.
         server_time: DateTime<Utc>,
-        /// Unique subscription identifier for this SSE connection.
-        subscription_id: Uuid,
     },
     SearchResult {
         /// The three String fields are stored as `Arc<str>` so that

@@ -4,6 +4,82 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 ---
 
 # Rust Web Fullstack — Leptos + PostgreSQL + Axum
+## Contents
+
+### Quick Reference
+- [Crate Versions (June 2026)](#crate-versions-june-2026)
+- [Architecture Decision Tree](#architecture-decision-tree)
+- [When NOT to use this skill](#when-not-to-use-this-skill)
+- [Critical Rules](#critical-rules)
+  - [1. Feature flags are mutually exclusive per build target](#critical-rules)
+  - [2. Leptos 0.8 Action state](#critical-rules)
+  - [3. PgListener consumes 1 connection from the pool](#critical-rules)
+  - [4. render_app_to_stream_with_context creates a fresh reactive tree per request](#critical-rules)
+  - [5. SSE auto-headers](#critical-rules)
+  - [6. Server fn path doubling](#critical-rules)
+  - [7. Static files for hydration](#critical-rules)
+  - [8. chromiumoxide SingletonLock](#critical-rules)
+  - [9. Integration tests must fail visibly](#critical-rules)
+  - [10. Background tasks need structured-concurrency wiring](#critical-rules)
+  - [11. Postgres channel name vs EventSource event name are distinct namespaces](#critical-rules)
+
+### Workspace Setup
+- [`[workspace.lints]` Table](#workspacelints-table)
+- [View! Macro Formatting (`leptosfmt`)](#view-macro-formatting-leptosfmt)
+- [Tracing Subscriber Init](#tracing-subscriber-init)
+- [Structured Fields, Not Interpolation](#structured-fields-not-interpolation)
+- [Reference Files](#reference-files)
+
+### Patterns
+- [Pattern 1: Leptos SSR + Axum + PostgreSQL](#pattern-1-leptos-ssr-axum-postgresql)
+- [Pattern 2: Live Updates via LISTEN/NOTIFY → broadcast → SSE](#pattern-2-live-updates-via-listennotify-broadcast-sse)
+- [Pattern 3: PostgreSQL FTS with tsvector/tsquery](#pattern-3-postgresql-fts-with-tsvectortsquery)
+- [Pattern 4: E2E Test with chromiumoxide](#pattern-4-e2e-test-with-chromiumoxide)
+- [Pattern 5: JSONB Storage with Compile-Time Checking](#pattern-5-jsonb-storage-with-compile-time-checking)
+- [Pattern 6: Gateway with ServiceModule Trait](#pattern-6-gateway-with-servicemodule-trait)
+- [Pattern 7: JavaScript-Driven SSE Detection (for Chrome DevTools MCP)](#pattern-7-javascript-driven-sse-detection-for-chrome-devtools-mcp)
+- [Pattern 8: TTL Cleanup via pg_cron](#pattern-8-ttl-cleanup-via-pg_cron)
+- [Pattern 9: Server-Fn Catch-All Route (Leptos 0.8 Doubled-Prefix Bug)](#pattern-9-server-fn-catch-all-route-leptos-08-doubled-prefix-bug)
+- [Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)](#pattern-10-ssr--hydration-setup-same-crate-as-both-bin--lib)
+- [Scoped CSS with stylance](#scoped-css-with-stylance)
+- [Pattern 11: Action.value() vs Action.input()](#pattern-11-actionvalue-vs-actioninput)
+- [Pattern 12: chromiumoxide E2E Helpers](#pattern-12-chromiumoxide-e2e-helpers)
+- [Pattern 13: chromiumoxide Chrome Binary Selection](#pattern-13-chromiumoxide-chrome-binary-selection)
+- [Pattern 14: SSE JSON Injection in Rust Raw Strings](#pattern-14-sse-json-injection-in-rust-raw-strings)
+- [Pattern 15: Structured Concurrency Triad (CancellationToken + JoinSet + select!)](#pattern-15-structured-concurrency-triad-cancellationtoken-joinset-select)
+- [Pattern 16: Newtype IDs for Type-Safe Web Params](#pattern-16-newtype-ids-for-type-safe-web-params)
+- [Cross-cutting Concerns: CSRF, CSP, CORS](#cross-cutting-concerns-csrf-csp-cors)
+- [Pattern 25: Modular Server Lifecycle (`bootstrap::run` + `shutdown::wait`)](#pattern-25-modular-server-lifecycle-bootstraprun--shutdownwait)
+- [Pattern 22: Layered config (TOML file + RWF_* env overrides)](#pattern-22-layered-config-toml-file-rwf_-env-overrides)
+- [Pattern 17: Leptos 0.8.x Knowledge Patch](#pattern-17-leptos-08x-knowledge-patch)
+- [Pattern 18: Leptos Utility Ecosystem](#pattern-18-leptos-utility-ecosystem)
+- [Pattern 19: ErrorBoundary + ActionForm (Progressive Enhancement)](#pattern-19-errorboundary-actionform-progressive-enhancement)
+- [Pattern 20: Cursor-Based Pagination](#pattern-20-cursor-based-pagination)
+- [Pattern 21: Leptos Islands Architecture](#pattern-21-leptos-islands-architecture)
+- [Pattern 23: Atomic Refresh-Token Rotation (PostgreSQL)](#pattern-23-atomic-refresh-token-rotation-postgresql)
+- [Pattern 24: WebSocket Chat via static broadcast hub](#pattern-24-websocket-chat-via-static-broadcast-hub)
+
+### Common Pitfalls
+- [Pitfall 1: PgListener connection leak](#common-pitfalls)
+- [Pitfall 2: Broadcast channel overflow](#common-pitfalls)
+- [Pitfall 3: Leptos SSR hangs](#common-pitfalls)
+- [Pitfall 4: JSONB in sqlx macros](#common-pitfalls)
+- [Pitfall 5: Feature flag conflicts](#common-pitfalls)
+- [Pitfall 6: cross-origin SSE](#common-pitfalls)
+- [Pitfall 7: chromiumoxide user_data_dir collision](#common-pitfalls)
+- [Pitfall 8: WASM hydration requires static serving](#common-pitfalls)
+- [Pitfall 9: Server-fn 404 / doubled-prefix](#common-pitfalls)
+- [Pitfall 10: jsonwebtoken 10 panics without crypto provider](#common-pitfalls)
+- [Pitfall 11: Silent test skips via check_server_or_skip()](#common-pitfalls)
+- [Pitfall 12: Stale target/debug/deps/ fingerprints](#common-pitfalls)
+- [Pitfall 13: sccache is local-disk by default](#common-pitfalls)
+- [Pitfall 14: Background tasks missing CancellationToken wiring](#common-pitfalls)
+- [Pitfall 15: `#[server]` body not cfg-gated on `feature = "ssr"`](#common-pitfalls)
+
+### Reference
+- [Test Strategy](#test-strategy)
+- [Bundle of Patterns (for AI model loading)](#bundle-of-patterns-for-ai-model-loading)
+
 
 ## Canonical Reference Implementation
 
@@ -1275,6 +1351,8 @@ async fn main() -> anyhow::Result<()> {
 - `JoinSet::join_next()` awaits task completion; tasks spawned on the set are aborted on drop (but we drain first via `timeout`).
 - A second `shutdown.cancel()` after `axum::serve` returns is idempotent — safe to call even if the signal handler already fired.
 
+> **For binaries with multiple long-lived tasks** (e.g. a server + a PgListener + a background housekeeper), the ad-hoc `main`-body pattern above is sufficient for two tasks but gets unwieldy past three. See [Pattern 25](#pattern-25-modular-server-lifecycle-bootstraprun--shutdownwait) for the modular `bootstrap::run` + `shutdown::wait` split that scales to N tasks.
+
 #### `biased;` — shutdown wins ties (recommended)
 
 When a notification arrives at the same instant as a cancel signal, `tokio::select!`
@@ -1396,11 +1474,10 @@ Three security headers and policies the gateway enforces by default:
 - **CORS** (`gateway/src/cors.rs`): allowlist-driven via `ALLOWED_ORIGINS`
   env var. Default is the dev localhost allowlist (`:3000`, `:3001`, `:3002`).
   Special value `*` permits any origin (debug only — emits a `warn!`).
-- **CSRF** (`axum-tower-sessions-csrf`): Synchronizer Token Pattern.
-  Server stores a CSRF token in the session; the client must echo it back
-  on state-changing requests. The CSRF middleware validates the token with
-  constant-time comparison. Configured in `gateway/src/gateway.rs` via
-  `CsrfMiddleware::middleware`.
+- **CSRF** is not provided by this workspace: there is no session-bearing
+  cookie, so the Synchronizer Token Pattern is inapplicable. If you adopt
+  session-cookie auth, see `axum-tower-sessions-csrf` and integrate it as a
+  sibling layer to the existing CORS / CSP layers.
 - **CSP** (`gateway/src/cors.rs::csp_layer`): Content-Security-Policy
   header set via `tower_http::set_header::SetResponseHeaderLayer`. The
   default policy allows self-hosted scripts/styles, `'unsafe-inline'` for
@@ -1411,6 +1488,128 @@ Production checklist:
 2. Override `SESSION_COOKIE_SECURE=true` (the default is `true` already).
 3. Verify CSP allows any required external script/style sources.
 4. Don't use `ALLOWED_ORIGINS=*` outside local development.
+
+### Pattern 25: Modular Server Lifecycle (`bootstrap::run` + `shutdown::wait`)
+
+For binaries that spawn more than one long-lived task, routing the
+full triad (server, PgListener, background housekeepers) through
+`main()` quickly becomes boilerplate. This pattern extracts the
+lifecycle into two functions — `bootstrap::run()` and `shutdown::wait()`
+— that mirror the `bootstrap` / `shutdown` split seen in the
+`live-search` crate.
+
+**`bootstrap::run()`** (`live-search/src/bootstrap.rs`):
+
+```rust
+use tokio::sync::CancellationToken;
+use tokio::task::JoinSet;
+use rwf_config::Config;
+
+pub struct ServerHandle {
+    pub shutdown: CancellationToken,
+    pub tasks: JoinSet<anyhow::Result<()>>,
+    pub pool: sqlx::PgPool,
+    pub cache: Option<Config>,
+}
+
+pub async fn run() -> anyhow::Result<ServerHandle> {
+    // 1. Build config, pool, broadcast channel, cache
+    let cfg = Config::load()?;
+    let pool = /* build pool */;
+    let (tx, _) = tokio::sync::broadcast::channel(256);
+    let cache = /* optional in-memory cache */;
+
+    let shutdown = CancellationToken::new();
+
+    // 2. Spawn signal handler (same as Pattern 15)
+    let sig = shutdown.clone();
+    tokio::spawn(async move {
+        // signal::ctrl_c(), signal::unix::SignalKind::terminate()
+        // … see Pattern 15 for the canonical handler …
+        sig.cancel();
+    });
+
+    // 3. Spawn long-lived tasks into a JoinSet with child tokens
+    let mut tasks = JoinSet::new();
+    tasks.spawn(pg_listener_task(
+        pool.clone(),
+        tx.clone(),
+        shutdown.child_token(),
+    ));
+    // … more tasks as needed: cache warmers, metrics exporters, …
+
+    Ok(ServerHandle { shutdown, tasks, pool, cache: None })
+}
+```
+
+**`shutdown::wait()`** (`live-search/src/shutdown.rs`):
+
+```rust
+use std::time::Duration;
+use tokio::task::JoinSet;
+use rwf_config::Config;
+
+pub async fn wait(
+    shutdown: CancellationToken,
+    tasks: &mut JoinSet<anyhow::Result<()>>,
+    pool: &sqlx::PgPool,
+) {
+    // 1. Cancel the token — all tasks racing against it will see this.
+    shutdown.cancel();
+
+    // 2. Close the pool with a timeout (force-closes PgListener's
+    //    borrowed connection).
+    pool.close();
+
+    let pool_timeout = tokio::time::timeout(Duration::from_secs(5), async {
+        while pool.emit_termination_notifications() { /* … */ }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+    let _ = pool_timeout.await;
+
+    // 3. Drain JoinSet with a 10-second grace period.
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await;
+
+    // 4. Force-flush any OTel providers so telemetry is not lost.
+    opentelemetry::global::shutdown_tracer_provider();
+}
+```
+
+**Usage in `main()`**:
+
+```rust
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    init_tracing();
+    let handle = bootstrap::run().await?;
+    graceful_shutdown_signal().await; // Ctrl+C / SIGTERM
+    shutdown::wait(handle.shutdown, &mut handle.tasks, &handle.pool).await;
+    Ok(())
+}
+```
+
+**When to use this pattern**:
+
+- Binary has more than one long-lived task (`tokio::spawn` or
+  `JoinSet::spawn`). The gateway, which has zero spawned tasks, does
+  **not** need this — `with_graceful_shutdown(signal_future)` is
+  sufficient.
+- You want a single call site for OTel shutdown so telemetry is
+  never lost on exit.
+- You are writing tests that need to start and stop the full server
+  lifecycle without a process restart.
+
+**Cross-link to Pattern 15**: Pattern 15 covers the raw structured
+concurrency triad (`CancellationToken` + `JoinSet` + `select!`) for
+one-off binaries. Pattern 25 wraps that same triad in a reusable
+`bootstrap`/`shutdown` contract; for binaries with a single task,
+Pattern 15's in-line `main` body is simpler.
+
+Reference implementations: `live-search/src/bootstrap.rs`,
+`live-search/src/shutdown.rs`.
 
 ### Pattern 22: Layered config (TOML file + RWF_* env overrides)
 
@@ -1450,10 +1649,19 @@ proxy_upstream_url = "https://ipapi.co"
 [gateway.cors]
 allowed_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
 
+[gateway.session]
+cookie_secure = true
+
 [live_search]
 port = 3000
 database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
+
+[otel]
+endpoint = "http://127.0.0.1:4317"
 ```
+
+A complete, documented example is in `config.toml.example` at the workspace
+root — copy it to `config.toml` to activate.
 
 When adding a new setting:
 

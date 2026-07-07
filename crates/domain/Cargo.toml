@@ -1,0 +1,17 @@
+[package]
+name = "rwf-domain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared domain types for the rust-web-fullstack workspace"
+
+[lints]
+workspace = true
+
+[lib]
+
+[dependencies]
+serde = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

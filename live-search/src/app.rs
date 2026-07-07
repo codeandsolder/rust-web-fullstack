@@ -56,6 +56,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
     #[cfg(feature = "ssr")]
     {
         use crate::cache;
+        use crate::db::SearchResultRow;
         use crate::db::get_pool;
 
         let trimmed = query.trim().to_lowercase();
@@ -77,7 +78,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
             ));
         };
 
-        let query_result = sqlx::query_as::<_, SearchResult>(
+        let query_result = sqlx::query_as::<_, SearchResultRow>(
             r"SELECT id, title, url, snippet, created_at
                FROM search_results
                WHERE fts @@ plainto_tsquery('english', $1)
@@ -89,7 +90,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
         .await;
 
         let results: Vec<SearchResult> = match query_result {
-            Ok(r) => r,
+            Ok(r) => r.into_iter().map(Into::into).collect(),
             Err(e) => {
                 return Err(ServerFnError::ServerError(e.to_string()));
             }
@@ -359,10 +360,7 @@ pub fn LiveFeedPage() -> impl IntoView {
                                             };
                                             match serde_json::from_str::<SseEvent>(&data) {
                                                 Ok(event) => match event {
-                                                    SseEvent::Connected {
-                                                        server_time: _,
-                                                        subscription_id: _,
-                                                    } => {
+                                                    SseEvent::Connected { server_time: _ } => {
                                                         connected.set(true);
                                                     }
                                                     SseEvent::SearchResult {

@@ -1,0 +1,15 @@
+[package]
+name = "leptos-utils"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared Leptos axum helpers (SSR-only) for the rust-web-fullstack workspace"
+
+[lints]
+workspace = true
+
+[dependencies]
+leptos = { workspace = true }
+leptos_axum = { workspace = true }
+axum = { workspace = true }

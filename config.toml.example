@@ -1,0 +1,58 @@
+# =============================================================================
+# RWF (Rust Web Fullstack) — canonical configuration file
+# =============================================================================
+#
+# Activate by copying to config.toml at the workspace root:
+#
+#   cp config.toml.example config.toml
+#
+# The loader reads config.toml from the current working directory, or from
+# the path in the RWF_CONFIG environment variable:
+#
+#   RWF_CONFIG=/etc/rwf/config.toml cargo run --bin live-search
+#
+# Every key can be overridden at runtime via an RWF_* environment variable.
+# The double-underscore __ separates nested section keys:
+#
+#   RWF_GATEWAY__PORT=4000
+#   RWF_LIVE_SEARCH__DATABASE_URL=postgres://user:pass@host/db
+#   RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://example.com
+#   RWF_GATEWAY__SESSION__COOKIE_SECURE=false
+#   RWF_OTEL__ENDPOINT=https://otlp.example.com:4317
+#
+# Resolution order (highest priority wins):
+#   1. RWF_* environment variables
+#   2. config.toml (or RWF_CONFIG path)
+#   3. Defaults baked into the Config structs
+#
+# Omitting the file entirely is fine — all keys have defaults.
+# =============================================================================
+
+# Gateway server configuration
+# Environment: RWF_GATEWAY__PORT, RWF_GATEWAY__PROXY_UPSTREAM_URL
+[gateway]
+port = 3001
+proxy_upstream_url = "https://ipapi.co"
+
+# CORS allowlist
+# Environment: RWF_GATEWAY__CORS__ALLOWED_ORIGINS
+[gateway.cors]
+allowed_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+
+# Session cookie settings
+# Environment: RWF_GATEWAY__SESSION__COOKIE_SECURE
+[gateway.session]
+cookie_secure = true
+
+# Live-search binary configuration
+# Environment: RWF_LIVE_SEARCH__PORT, RWF_LIVE_SEARCH__DATABASE_URL
+[live_search]
+port = 3000
+database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
+
+# OpenTelemetry exporter endpoint
+# Set to a gRPC endpoint (e.g. "https://otlp.example.com:4317") to enable
+# OTLP exports. Empty or absent = no OTLP export.
+# Environment: RWF_OTEL__ENDPOINT
+[otel]
+endpoint = ""

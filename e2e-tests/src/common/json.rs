@@ -6,7 +6,7 @@ mod proptests {
     use proptest::prelude::*;
     use uuid::Uuid;
 
-    use live_search::db::SearchResult;
+    use rwf_domain::SearchResult;
 
     /// Strategy that generates arbitrary `SearchResult` values using the real
     /// domain types (`Uuid`, `DateTime<Utc>`).
