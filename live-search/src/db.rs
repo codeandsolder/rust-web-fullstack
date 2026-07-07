@@ -57,8 +57,11 @@ impl From<SearchResultRow> for SearchResult {
 mod server {
     use std::sync::PoisonError;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    #[cfg(feature = "test-seams")]
+    use std::sync::OnceLock;
 
     use serde::Deserialize;
     use sqlx::PgPool;
@@ -73,13 +76,23 @@ mod server {
     use chrono::{DateTime, Utc};
     use uuid::Uuid;
 
-    use crate::cache;
+    use crate::cache::CacheHandle;
     use crate::events::SseEvent;
 
+    // ------------------------------------------------------------------
+    // Test-seam: global pool for e2e tests
+    // ------------------------------------------------------------------
+    //
+    // Production code uses `crate::state::AppContext::pool` instead. These
+    // items are only available when the `test-seams` feature is active
+    // (enabled by `e2e-tests/Cargo.toml`).
+
     /// Global database pool, initialized once on startup.
+    #[cfg(feature = "test-seams")]
     static POOL: OnceLock<PgPool> = OnceLock::new();
 
     /// Error returned when the global database pool cannot be initialized.
+    #[cfg(feature = "test-seams")]
     #[derive(Debug, thiserror::Error)]
     #[non_exhaustive]
     pub enum PoolInitError {
@@ -88,22 +101,22 @@ mod server {
         AlreadyInitialized,
     }
 
-    /// Sets the global database pool.
+    /// Sets the global database pool (test seam — prefer `AppContext`).
     ///
     /// `PgPool` is an `Arc`-backed handle — cloning it is a cheap refcount
-    /// bump, so a single pool can be handed to [`set_pool`] (which stashes
-    /// the handle in a [`OnceLock`]) and simultaneously driven by a long-lived
-    /// task like [`run_pg_listener`] without owning contention.
+    /// bump.
     ///
     /// # Errors
     /// Returns `PoolInitError::AlreadyInitialized` if startup tries to set
     /// the pool more than once.
+    #[cfg(feature = "test-seams")]
     pub fn set_pool(pool: PgPool) -> Result<(), PoolInitError> {
         POOL.set(pool)
             .map_err(|_| PoolInitError::AlreadyInitialized)
     }
 
-    /// Returns a reference to the global database pool.
+    /// Returns a reference to the global database pool (test seam).
+    #[cfg(feature = "test-seams")]
     #[must_use]
     pub fn get_pool() -> Option<&'static PgPool> {
         POOL.get()
@@ -226,6 +239,7 @@ mod server {
     fn forward_notification(
         tx: &broadcast::Sender<SseEvent>,
         notification: &sqlx::postgres::PgNotification,
+        cache: &CacheHandle,
     ) {
         let payload = notification.payload();
 
@@ -257,7 +271,7 @@ mod server {
                 // Data has changed — bump the search cache version so the
                 // next search query re-fetches from the database. Synchronous
                 // fetch_add on the version atomic; no .await needed.
-                cache::invalidate_all();
+                cache.invalidate_all();
             }
             Err(e) => {
                 // Do NOT log the full payload: it is unbounded user content and
@@ -316,6 +330,7 @@ mod server {
     pub async fn run_pg_listener(
         pool: PgPool,
         tx: broadcast::Sender<SseEvent>,
+        cache: CacheHandle,
         shutdown: CancellationToken,
         reconnect_requested: Arc<AtomicU64>,
         last_recv: Arc<Mutex<Option<Instant>>>,
@@ -393,7 +408,7 @@ mod server {
                         match recv {
                             Ok(notification) => {
                                 backoff = Duration::from_millis(BACKOFF_FLOOR_MS);
-                                forward_notification(&tx, &notification);
+                                forward_notification(&tx, &notification, &cache);
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -688,5 +703,9 @@ mod server {
 #[cfg(feature = "ssr")]
 pub use server::{
     PoolTunables, base64url_decode, base64url_encode, close_pool, create_pool, decode_cursor,
-    encode_cursor, get_pool, run_pg_listener, run_watchdog, search_with_cursor, set_pool,
+    encode_cursor, run_pg_listener, run_watchdog, search_with_cursor,
 };
+
+// Test-seam API — only available when the feature is enabled (e2e-tests).
+#[cfg(all(feature = "ssr", feature = "test-seams"))]
+pub use server::{PoolInitError, get_pool, set_pool};

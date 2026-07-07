@@ -55,9 +55,14 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
     // the caller rather than panicking (workspace lint forbids `panic`).
     #[cfg(feature = "ssr")]
     {
-        use crate::cache;
         use crate::db::SearchResultRow;
-        use crate::db::get_pool;
+        use crate::state;
+
+        let Some(ctx) = state::get() else {
+            return Err(ServerFnError::ServerError(
+                "AppContext is not initialized".to_string(),
+            ));
+        };
 
         let trimmed = query.trim().to_lowercase();
         let len = trimmed.len();
@@ -68,15 +73,9 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
         }
 
         // Try the in-memory cache first.
-        if let Some(cached) = cache::get(&trimmed).await {
+        if let Some(cached) = ctx.cache.get(&trimmed).await {
             return Ok(cached);
         }
-
-        let Some(pool) = get_pool() else {
-            return Err(ServerFnError::ServerError(
-                "database pool is not initialized".to_string(),
-            ));
-        };
 
         let query_result = sqlx::query_as::<_, SearchResultRow>(
             r"SELECT id, title, url, snippet, created_at
@@ -86,7 +85,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
                LIMIT 20",
         )
         .bind(&trimmed)
-        .fetch_all(pool)
+        .fetch_all(&ctx.pool)
         .await;
 
         let results: Vec<SearchResult> = match query_result {
@@ -98,7 +97,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
 
         // Store in cache for subsequent requests.
         let results = Arc::new(results);
-        cache::insert(trimmed, results.clone()).await;
+        ctx.cache.insert(trimmed, results.clone()).await;
         Ok(results)
     }
     #[cfg(not(feature = "ssr"))]

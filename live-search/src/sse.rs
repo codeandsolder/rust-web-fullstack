@@ -1,12 +1,17 @@
 //! Server-Sent Events handler and broadcast channel setup.
 //!
-//! A single [`broadcast::Sender<SseEvent>`] is initialised at startup and
-//! shared between the `PgListener` task (producer) and all SSE client
-//! connections (consumers).  The [`sse_handler`] function is the axum route
-//! handler that streams events to HTTP clients.
+//! A single [`broadcast::Sender<SseEvent>`] is created at startup and shared
+//! between the `PgListener` task (producer) and all SSE client connections
+//! (consumers). The [`sse_handler`] function streams events to HTTP clients.
+//!
+//! # Migration from globals
+//!
+//! Previously this module held a `static BROADCAST: OnceLock<…>` set via
+//! [`set_broadcast`]. That global is now **removed** — the sender is passed
+//! directly into [`sse_handler`] (axum route handlers wrap it in a closure).
+//! Test and e2e setups do the same.
 
 use std::convert::Infallible;
-use std::sync::OnceLock;
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use chrono::Utc;
@@ -20,75 +25,35 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use crate::events::SseEvent;
 
-/// Global broadcast sender, initialized once on startup.
-static BROADCAST: OnceLock<broadcast::Sender<SseEvent>> = OnceLock::new();
-
-/// Error returned when the global broadcast sender cannot be initialized.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum BroadcastInitError {
-    /// The sender was already set earlier in the process lifetime.
-    #[error("broadcast sender already initialized")]
-    AlreadyInitialized,
-}
-
-/// Sets the global broadcast sender.
-///
-/// # Errors
-/// Returns [`BroadcastInitError::AlreadyInitialized`] if startup tries to set
-/// the sender more than once.
-pub fn set_broadcast(tx: broadcast::Sender<SseEvent>) -> Result<(), BroadcastInitError> {
-    BROADCAST
-        .set(tx)
-        .map_err(|_| BroadcastInitError::AlreadyInitialized)
-}
-
-/// Returns a reference to the global broadcast sender.
-#[must_use]
-pub fn get_broadcast() -> Option<&'static broadcast::Sender<SseEvent>> {
-    BROADCAST.get()
-}
-
-/// Emit a `"configuration_error"` event when the broadcast sender is unset.
-fn config_error_event() -> Event {
-    Event::default()
-        .event("configuration_error")
-        .data(r#"{"type":"ConfigurationError","message":"broadcast sender is not initialized"}"#)
-}
-
 /// SSE handler: streams events from the broadcast channel to the client.
+///
+/// The caller must provide the broadcast sender (typically captured by a
+/// closure in the router setup).
 #[allow(
     clippy::unused_async,
     reason = "Axum 0.8 requires async fn for Handler trait"
 )]
-pub async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn sse_handler(
+    tx: broadcast::Sender<SseEvent>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     // Emit a "Connected" event immediately, then forward broadcast events.
     let connected = SseEvent::Connected {
         server_time: Utc::now(),
     };
 
-    let stream: BoxStream<'static, Result<Event, Infallible>> = get_broadcast().map_or_else(
-        || {
-            tracing::error!("SSE broadcast sender is not initialized");
-            stream::once(future::ready(Ok(config_error_event()))).boxed()
-        },
-        |tx| {
-            let rx = tx.subscribe();
-            let initial =
-                stream::once(future::ready(Ok::<_, Infallible>(event_to_sse(&connected))));
-            initial
-                .chain(BroadcastStream::new(rx).map(|result| {
-                    Ok(match result {
-                        Ok(event) => event_to_sse(&event),
-                        Err(BroadcastStreamRecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "SSE client lagged behind broadcast stream");
-                            event_to_sse(&SseEvent::StreamLagged { skipped })
-                        }
-                    })
-                }))
-                .boxed()
-        },
-    );
+    let rx = tx.subscribe();
+    let initial = stream::once(future::ready(Ok::<_, Infallible>(event_to_sse(&connected))));
+    let stream: BoxStream<'static, Result<Event, Infallible>> = initial
+        .chain(BroadcastStream::new(rx).map(|result| {
+            Ok(match result {
+                Ok(event) => event_to_sse(&event),
+                Err(BroadcastStreamRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "SSE client lagged behind broadcast stream");
+                    event_to_sse(&SseEvent::StreamLagged { skipped })
+                }
+            })
+        }))
+        .boxed();
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

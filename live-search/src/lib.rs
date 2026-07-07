@@ -10,6 +10,11 @@ pub mod db;
 pub mod events;
 pub mod styles;
 
+// `state` depends on sqlx + tokio (native-only) and is currently only used
+// under `feature = "ssr"`.
+#[cfg(feature = "ssr")]
+pub mod state;
+
 // `cache` is native-only (moka uses tokio) but does NOT depend on axum
 // or leptos — gate on the wasm target so CI's `cargo test --workspace --lib`
 // runs the cache unit tests even without `--features ssr`.

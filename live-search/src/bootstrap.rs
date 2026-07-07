@@ -34,6 +34,7 @@ use axum::{
 use leptos::config::get_configuration;
 use leptos_axum::{LeptosRoutes, generate_route_list};
 use leptos_utils::probed_server_fn_handler;
+use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
@@ -42,8 +43,9 @@ use tracing::Instrument;
 use tracing_subscriber::EnvFilter;
 
 use crate::app;
+use crate::cache::CacheHandle;
 use crate::events::SseEvent;
-use crate::{cache, db, sse};
+use crate::{db, sse, state};
 
 /// Handle returned by [`run`]. The caller uses the [`CancellationToken`] to
 /// signal shutdown and the [`tokio::task::JoinSet`] / [`sqlx::PgPool`]
@@ -159,18 +161,29 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .await
         .context("failed to run database migrations")?;
 
-    db::set_pool(pool.clone())?;
-
     // ---- search cache -----------------------------------------------------
 
-    cache::init_cache();
+    let cache_handle = CacheHandle::default();
     tracing::debug!("search cache initialized");
 
     // ---- broadcast channel for SSE ----------------------------------------
 
-    let (tx, _rx) =
-        tokio::sync::broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
-    sse::set_broadcast(tx.clone())?;
+    let (tx, _rx) = broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
+    tracing::debug!("SSE broadcast channel created");
+
+    // ---- AppContext -------------------------------------------------------
+    //
+    // Construct the unified application context and store it globally (for
+    // server functions) and provide it to the Leptos component tree (for SSR
+    // rendering).
+
+    let ctx = Arc::new(state::AppContext::new(
+        pool.clone(),
+        tx.clone(),
+        cache_handle.clone(),
+    ));
+    state::set(Arc::clone(&ctx))?;
+    tracing::debug!("AppContext initialized and stored");
 
     // ---- cancellation token & task set ------------------------------------
 
@@ -189,11 +202,13 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let listener_span = tracing::info_span!("pg_listener");
     let last_recv_for_listener = last_recv.clone();
     let reconnect_for_listener = reconnect_requested.clone();
+    let cache_for_listener = cache_handle.clone();
     tasks.spawn(
         async move {
             db::run_pg_listener(
                 pool_for_listener,
                 tx,
+                cache_for_listener,
                 listener_token,
                 reconnect_for_listener,
                 last_recv_for_listener,
@@ -221,16 +236,27 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     // ---- Axum router ------------------------------------------------------
 
+    let broadcast_for_sse = ctx.broadcast.clone();
     let router = Router::new()
         .nest_service("/pkg", ServeDir::new("./pkg"))
-        .route("/api/events", get(sse::sse_handler))
+        .route(
+            "/api/events",
+            get(move || {
+                let tx = broadcast_for_sse.clone();
+                async move { sse::sse_handler(tx).await }
+            }),
+        )
         .route("/api/{*fn_name}", any(probed_server_fn_handler))
         .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, leptos_routes, {
             let lo = leptos_options.clone();
-            move || app::shell(lo.clone())
+            let ctx_for_shell = Arc::clone(&ctx);
+            move || {
+                leptos::context::provide_context(Arc::clone(&ctx_for_shell));
+                app::shell(lo.clone())
+            }
         })
         .route("/health", get(health_handler))
         .fallback(fallback_handler);

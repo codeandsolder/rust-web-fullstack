@@ -85,6 +85,7 @@ rwf-domain = { workspace = true }
 default = []
 ssr = ["dep:leptos_axum", "leptos/ssr"]
 hydrate = ["leptos/hydrate"]
+test-seams = []
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",

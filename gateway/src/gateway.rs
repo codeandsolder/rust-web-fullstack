@@ -29,6 +29,8 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::instrument;
 
+use anyhow::Context;
+
 use crate::auth;
 use crate::module::{ServiceInfo, ServiceModule};
 use crate::settings;
@@ -58,6 +60,8 @@ pub struct GatewayState {
     /// `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS` at startup; the historical
     /// default in `auth/refresh::REFRESH_TOKEN_TTL_SECONDS` is the floor.
     pub refresh_token_ttl_secs: i64,
+    /// Reusable HTTP client for upstream API calls.
+    pub http_client: reqwest::Client,
 }
 
 impl std::fmt::Debug for GatewayState {
@@ -70,6 +74,7 @@ impl std::fmt::Debug for GatewayState {
             .field("proxy_upstream_url", &self.proxy_upstream_url)
             .field("db_pool", &self.db_pool.as_ref().map(|_| "PgPool { .. }"))
             .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
+            .field("http_client", &format_args!("reqwest::Client {{ .. }}"))
             .finish()
     }
 }
@@ -146,6 +151,11 @@ pub fn build_gateway_with_settings(
 
     let proxy_upstream_url: Arc<str> = proxy_upstream_url.into();
 
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build reqwest client")?;
+
     let state = GatewayState {
         tx,
         services: service_infos,
@@ -154,6 +164,7 @@ pub fn build_gateway_with_settings(
         proxy_upstream_url,
         db_pool,
         refresh_token_ttl_secs,
+        http_client,
     };
 
     // --- Prometheus metrics ---
@@ -379,6 +390,10 @@ mod tests {
         let (tx, _rx) = tokio::sync::broadcast::channel(100);
         let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
         let modules: Vec<Arc<dyn crate::module::ServiceModule>> = vec![Arc::new(FailingService)];
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .context("failed to build reqwest client")?;
         let state = GatewayState {
             tx,
             services: vec![],
@@ -387,6 +402,7 @@ mod tests {
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             db_pool: None,
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+            http_client,
         };
 
         let (status, _body) = health_handler(State(state)).await;

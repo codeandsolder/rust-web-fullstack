@@ -58,7 +58,7 @@ impl GatewayEnv {
             Arc::new(gateway_example::services::monitor::MonitorService),
         ];
 
-        let app = build_test_gateway(modules, settings);
+        let app = build_test_gateway(modules, settings)?;
 
         let shutdown = CancellationToken::new();
         let serve_token = shutdown.clone();
@@ -186,7 +186,7 @@ impl std::fmt::Debug for GatewayEnv {
 fn build_test_gateway(
     modules: Vec<Arc<dyn ServiceModule>>,
     settings: gateway_example::settings::Settings,
-) -> Router {
+) -> Result<Router> {
     let (tx, _rx) = broadcast::channel::<GatewayEvent>(100);
 
     let service_infos: Vec<ServiceInfo> = modules
@@ -207,6 +207,9 @@ fn build_test_gateway(
         }
     }
 
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
     let state = GatewayState {
         tx,
         services: service_infos,
@@ -216,11 +219,12 @@ fn build_test_gateway(
         db_pool: None,
         // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
         refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+        http_client,
     };
 
     let cors = gateway_example::cors::cors_layer();
 
-    Router::new()
+    Ok(Router::new()
         .route("/", get(root_handler))
         .route("/health", get(health_handler))
         .route("/events", get(gateway_example::sse::sse_handler))
@@ -243,5 +247,5 @@ fn build_test_gateway(
         .merge(gateway_example::openapi::swagger_ui_router::<GatewayState>())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
-        .with_state(state)
+        .with_state(state))
 }

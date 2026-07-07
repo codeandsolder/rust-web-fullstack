@@ -73,7 +73,7 @@ proptest = { workspace = true }
 rwf-domain = { workspace = true }
 
 # Import the real SearchResult type and SSR modules for in-process server
-live-search = { path = "../live-search", features = ["ssr"] }
+live-search = { path = "../live-search", features = ["ssr", "test-seams"] }
 # Shared Leptos axum helpers (doubled-prefix server-fn probe) for in-process
 # test launchers
 leptos-utils = { workspace = true }

@@ -12,7 +12,6 @@
 //! `utoipa::ToSchema` for `OpenAPI` documentation.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use axum::{
     Router,
@@ -123,9 +122,8 @@ async fn check_handler(
         return Err(AppError::BadRequest("ip parameter too long".into()));
     }
 
-    let client = reqwest_client();
     let url = format!("{}/{ip}/json/", state.proxy_upstream_url);
-    let upstream = client.get(&url).send().await.map_err(|e| {
+    let upstream = state.http_client.get(&url).send().await.map_err(|e| {
         tracing::warn!(error = %e, upstream_url = %url, "upstream fetch failed");
         AppError::internal("upstream fetch failed", e)
     })?;
@@ -217,28 +215,5 @@ async fn proxy_health() -> Json<ProxyHealthResponse> {
     Json(ProxyHealthResponse {
         status: "ok".to_string(),
         service: "proxy".to_string(),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Reusable reqwest client
-// ---------------------------------------------------------------------------
-
-static REQWEST_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-/// Get the singleton reqwest client with a 5-second timeout.
-#[expect(
-    clippy::expect_used,
-    reason = "reqwest client build only fails if the runtime is broken or the TLS backend is missing (the workspace uses rustls)"
-)]
-fn reqwest_client() -> &'static reqwest::Client {
-    REQWEST_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .expect(
-                "reqwest client build only fails if the runtime is broken or \
-                 the TLS backend is missing (the workspace uses rustls)",
-            )
     })
 }

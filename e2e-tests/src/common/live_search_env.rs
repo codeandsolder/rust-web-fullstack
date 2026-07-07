@@ -24,6 +24,7 @@ use tower_http::trace::TraceLayer;
 
 use leptos_utils::probed_server_fn_handler;
 
+use live_search::cache;
 use live_search::events::SseEvent;
 
 /// RAII guard that runs a live-search server in the background on a random port.
@@ -62,15 +63,18 @@ impl LiveSearchEnv {
                 .await
                 .context("Failed to create live-search database pool")?;
 
-        // ── 3. Set global pool (OnceLock) ─────────────────────────────────
+        // ── 3. Set global pool (test-seam for server fn) ──────────────────
         live_search::db::set_pool(server_pool.clone()).context("set_pool already initialized")?;
 
-        // ── 4. Initialise search cache (OnceLock) ─────────────────────────
-        live_search::cache::init_cache();
+        // ── 4. Search cache (no global, create a handle) ──────────────────
+        let cache_handle = cache::CacheHandle::default();
 
-        // ── 5. Broadcast channel for SSE (OnceLock) ───────────────────────
+        // ── 5. Broadcast channel for SSE (no global, pass to handler) ────
         let (tx, _rx) = broadcast::channel::<SseEvent>(256);
-        live_search::sse::set_broadcast(tx.clone()).context("set_broadcast already initialized")?;
+
+        // Clone a sender for the SSE handler closure so the original `tx`
+        // can be moved into the background thread for the PgListener.
+        let tx_for_sse = tx.clone();
 
         // ── 6. Cancellation token ─────────────────────────────────────────
         let shutdown = CancellationToken::new();
@@ -81,7 +85,13 @@ impl LiveSearchEnv {
 
         // ── 7. Build Router ───────────────────────────────────────────────
         let mut router = Router::new()
-            .route("/api/events", get(live_search::sse::sse_handler))
+            .route(
+                "/api/events",
+                get(move || {
+                    let tx = tx_for_sse.clone();
+                    async move { live_search::sse::sse_handler(tx).await }
+                }),
+            )
             .route("/api/{*fn_name}", any(probed_server_fn_handler))
             .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
             .layer(TraceLayer::new_for_http());
@@ -113,6 +123,7 @@ impl LiveSearchEnv {
             let addr_clone = Arc::clone(&addr_lock);
             let bg_shutdown = shutdown.clone();
             let bg_pool = server_pool;
+            let bg_cache = cache_handle;
             let bg_tx = tx;
             let bg_reconnect = reconnect_requested;
             let bg_last_recv = last_recv;
@@ -154,10 +165,12 @@ impl LiveSearchEnv {
                         let pool_for_listener = bg_pool.clone();
                         let last_recv_for_listener = bg_last_recv.clone();
                         let reconnect_for_listener = bg_reconnect.clone();
+                        let cache_for_listener = bg_cache.clone();
                         tasks.spawn(async move {
                             live_search::db::run_pg_listener(
                                 pool_for_listener,
                                 bg_tx,
+                                cache_for_listener,
                                 listener_token,
                                 reconnect_for_listener,
                                 last_recv_for_listener,

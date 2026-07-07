@@ -100,6 +100,9 @@ mod tests {
     #[tokio::test]
     async fn dashboard_redirects_to_health() -> anyhow::Result<()> {
         let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()?;
         let state = crate::gateway::GatewayState {
             db_pool: None,
             tx: tokio::sync::broadcast::channel(16).0,
@@ -109,6 +112,7 @@ mod tests {
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+            http_client,
         };
 
         let app = MonitorService.router().with_state(state);
