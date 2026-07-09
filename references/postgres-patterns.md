@@ -1,4 +1,4 @@
-> Deep-dive companion to the PostgreSQL/sqlx patterns in [SKILL.md](../SKILL.md) (Patterns 3, 5, 8, 20, 23). Start there for the condensed view, then return here for the full cookbook.
+> Deep-dive companion to the PostgreSQL/sqlx patterns in [SKILL.md](../SKILL.md) (Patterns 3, 5, 8, 22, 24). Start there for the condensed view, then return here for the full cookbook.
 
 # PostgreSQL + sqlx Patterns Reference
 

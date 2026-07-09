@@ -201,6 +201,13 @@ pub fn build_gateway_with_settings(
     // --- CORS ---
     let cors = crate::cors::cors_layer();
 
+    // --- Session management + CSRF ---
+    //
+    // The session layer is the innermost middleware (added first) so the
+    // `Session` extractor is available to the CSRF layer (added second)
+    // and to every handler in the router.
+    let session_layer = crate::session::session_layer(&state.settings.session);
+
     // --- Login route (with its own strict rate limiter) ---
     let login_router = Router::new()
         .route("/auth/login", post(auth::login_handler))
@@ -247,13 +254,21 @@ pub fn build_gateway_with_settings(
     // --- Assemble final router with shared middleware ---
     //
     // Layer order (from innermost to outermost):
-    //   Governor (per-route, on sub-routers) → Timeout → Prometheus
-    //   → Trace → CORS → CSP
+    //   Session → CSRF → Governor (per-route, on sub-routers)
+    //   → Timeout → Prometheus → Trace → CORS → CSP
     //
-    // Middleware added LAST runs FIRST on incoming requests.
+    // Middleware added LAST runs FIRST on incoming requests.  Session must be
+    // innermost so that the CSRF middleware (which extracts `Session`) has
+    // access to the session data; CORS and CSP are outermost to handle
+    // pre-flight and security headers before any other processing.
     let app = other_router
         .merge(login_router) // login governor runs before general governor
         .merge(refresh_router) // refresh governor runs before general governor
+        .merge(crate::session::router::<GatewayState>()) // mount /session/whoami, /session/logout
+        .layer(session_layer)
+        .layer(axum::middleware::from_fn(
+            crate::csrf::CsrfMiddleware::middleware,
+        ))
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),

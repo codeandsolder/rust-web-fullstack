@@ -11,7 +11,11 @@ RUN mkdir -p gateway/src live-search/src e2e-tests/src && \
     echo "// dummy" > gateway/src/lib.rs && \
     echo "// dummy" > live-search/src/lib.rs && \
     echo "// dummy" > e2e-tests/src/lib.rs && \
-    cargo fetch
+    cargo fetch && \
+    cargo install sccache --locked && \
+    cargo install leptosfmt --locked
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/var/cache/sccache
 
 # Build gateway only
 COPY . .

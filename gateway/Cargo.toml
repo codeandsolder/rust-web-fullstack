@@ -36,8 +36,11 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace", "cors", "timeout", "set-header"] }
+tower-sessions = { version = "0.15", default-features = false, features = ["axum-core", "memory-store"] }
+axum-tower-sessions-csrf = "0.1"
 reqwest = { workspace = true }
 rwf-config = { path = "../crates/config" }
+rwf-domain = { workspace = true }
 tower_governor = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

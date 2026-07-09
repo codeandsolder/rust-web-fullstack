@@ -206,6 +206,11 @@ impl Config {
     /// # Errors
     /// Returns [`ConfigError`] if the file is unreadable or unparseable,
     /// or if a required key is missing.
+    #[expect(
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless,
+        reason = "all values are well below i64::MAX — buffer sizes (≤1024), timeouts (≤86400), pool sizes (≤100)"
+    )]
     pub fn load() -> Result<Self, ConfigError> {
         let config_path = std::env::var("RWF_CONFIG").ok();
 
@@ -314,6 +319,10 @@ mod tests {
     /// duration of the closure so concurrent tests don't observe the
     /// mutation. Tests within a single `cargo test` binary run on
     /// multiple threads by default.
+    #[expect(
+        unsafe_code,
+        reason = "std::env::set_var / remove_var; guarded by env_test_lock"
+    )]
     fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
     where
         F: FnOnce() -> R,
@@ -346,6 +355,10 @@ mod tests {
         let _guard = env_test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[expect(
+            clippy::expect_used,
+            reason = "fail-fast in test — no meaningful recovery from config load failure"
+        )]
         let cfg = Config::load().expect("load should succeed with defaults");
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);

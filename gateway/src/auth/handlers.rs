@@ -8,8 +8,11 @@
 //! * Secrets (passwords, tokens) are never included in log output.
 //! * Login request payloads are validated with `axum-valid` + `validator`.
 
+use std::str::FromStr;
+
 use axum::extract::{Extension, State};
 use axum::response::Json;
+use rwf_domain::UserId;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use utoipa::ToSchema;
@@ -98,6 +101,7 @@ pub struct ProtectedResponse {
 )]
 pub async fn login_handler(
     State(state): State<GatewayState>,
+    session: tower_sessions::Session,
     // Validated json extraction via axum-valid; consume the payload by
     // destructuring so the extractor wrappers are not held as borrowed
     // bindings (which would trigger `needless_pass_by_value`).
@@ -107,9 +111,8 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, AppError> {
     let s = &state.settings;
 
-    // Parse user_id as a valid UUID before signing a JWT.
-    let user_uuid = Uuid::parse_str(&user_id)
-        .map_err(|_| AppError::BadRequest("user_id must be a valid UUID".into()))?;
+    // Parse user_id as a valid UserId before signing a JWT.
+    let parsed_user_id = UserId::from_str(&user_id)?;
 
     // Constant-time password comparison.
     let password_match: bool = password
@@ -120,7 +123,21 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&user_uuid, &s.encoding_key)?;
+    let token = create_jwt(&parsed_user_id, &s.encoding_key)?;
+
+    // Persist the authenticated user in the session cookie.  This enables
+    // CSRF-protected session-backed routes (e.g. `/session/whoami`,
+    // `/session/logout`) alongside the existing JWT path.
+    session
+        .insert(
+            crate::session::SESSION_USER_KEY,
+            crate::session::SessionUser {
+                user_id: user_id.clone(),
+            },
+        )
+        .await
+        .map_err(|e| AppError::internal("session insert", e))?;
+
     Ok(Json(LoginResponse { token, user_id }))
 }
 
@@ -210,7 +227,7 @@ pub async fn logout_handler(
             "UPDATE refresh_tokens SET revoked_at = NOW() \
              WHERE subject = $1 AND revoked_at IS NULL",
         )
-        .bind(claims.sub)
+        .bind(Uuid::from(claims.sub))
         .execute(pool)
         .await
         .map_err(|e| AppError::internal("refresh token revocation", e))?;

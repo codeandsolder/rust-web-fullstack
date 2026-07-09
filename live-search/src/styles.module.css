@@ -56,3 +56,31 @@
 .disconnected {
     color: #888;
 }
+
+/* leptos-struct-table search results table */
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+.table th {
+    text-align: left;
+    padding: 0.5rem;
+    border-bottom: 2px solid #ddd;
+}
+
+.table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #eee;
+}
+
+.table tr:last-child td {
+    border-bottom: none;
+}
+
+.empty {
+    color: #888;
+    font-style: italic;
+    margin: 0.5rem 0;
+}

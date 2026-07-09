@@ -1,4 +1,4 @@
-> Deep-dive companion to the architecture patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 6, 22, 25). Start there for the condensed view, then return here for the full cookbook.
+> Deep-dive companion to the architecture patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 6, 17, 18). Start there for the condensed view, then return here for the full cookbook.
 
 # Architecture Patterns Reference
 

@@ -172,18 +172,22 @@ This version brings the project to a high-end Rust 2026 showcase standard:
 - **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
 - **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
 - **tower-governor** — rate limiting on gateway auth routes (two governor instances for login vs. refresh).
-- **tower-sessions + CSRF** — HttpOnly/Secure/SameSite=Lax session cookies with `axum-tower-sessions-csrf`.
+- **tower-sessions + CSRF** — HttpOnly/Secure/SameSite=Lax session cookies via `tower-sessions` with `axum-tower-sessions-csrf` layered on top for state-changing endpoints.
 - **axum-valid + validator** — typed, validated DTOs on every public gateway handler.
 - **Trigram fuzzy search** — `pg_trgm` GIN index on `search_results.title` for typo-tolerant search.
 - **pg_stat_statements** — query performance monitoring, preloaded via Postgres config.
 - **moka cache** — hot search query caching in live-search (60s TTL, 1000 entries).
 - **stylance** — scoped CSS replaces inline `style=` in all frontend crates.
-- **leptos-use**, **leptos-struct-table**, **lepticons**, **leptos-forms-rs** — richer Leptos ecosystem integration.
+- **leptos-use**, **lepticons** — richer Leptos ecosystem integration.
+- **leptos-struct-table** — typed result-list rendering in `live-search/src/app.rs`.
+- **leptos-forms-rs** — typed form structs (Bitcode server-fn encoding for binary payloads).
 - **utoipa + Swagger UI** — documented API at `/docs` on the gateway.
 - **criterion benchmarks** — throughput bench for JWT auth, latency bench for search queries.
 - **console-subscriber** — Tokio console instrumentation behind `dev-tools` feature.
 - **testcontainers** — per-test Postgres 17 isolation in E2E tests, removing the shared-db dependency.
-- **Nextest, squawk, sccache** — CI tooling upgrades for faster runs and SQL migration linting.
+- **sccache** — shared Cargo cache across Docker layers (`RUSTC_WRAPPER=sccache`, `SCCACHE_DIR=/var/cache/sccache`); configured via `docker-compose.yml` and the three Dockerfiles.
+- **nextest** — `cargo nextest run` in CI (`.woodpecker.yml`); faster test fan-out than `cargo test`.
+- **insta** — JSON snapshot testing for SSE payload shape (e2e-tests/tests/sse_test.rs).
 
 ## CI/CD
 

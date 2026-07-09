@@ -19,7 +19,14 @@ use leptos_router::components::{FlatRoutes, Route, Router};
 use leptos_router::path;
 
 use lepticons::{Icon, LucideGlyph};
+use leptos_struct_table::{EventHandler, TableContent, TableDataProvider, TableRow};
 use leptos_use::watch_debounced;
+
+use leptos_forms_rs::core::types::FieldType;
+use leptos_forms_rs::validation::ValidationErrors;
+use leptos_forms_rs::{FieldMetadata, Form as LeptosFormTrait};
+
+use serde::{Deserialize, Serialize};
 
 use crate::db::SearchResult;
 #[cfg(target_arch = "wasm32")]
@@ -193,6 +200,102 @@ fn SearchErrorBoundary(children: Children) -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
+// leptos-struct-table: Search result row for the type-checked table
+// ---------------------------------------------------------------------------
+
+/// A search-result row rendered via [`leptos_struct_table::TableContent`].
+/// Derives [`TableRow`] which drives auto-generated column ordering;
+/// `impl_vec_data_provider` lets a `Vec<SearchResultRow>` be passed as the
+/// `rows` prop directly.
+#[derive(Debug, TableRow, Clone)]
+#[table(impl_vec_data_provider)]
+pub struct SearchResultRow {
+    /// Title rendered as a hyperlink — see [`TitleLinkCellRenderer`].
+    #[table(title = "Title", renderer = "TitleLinkCellRenderer")]
+    pub title: String,
+    /// Result snippet / excerpt.
+    #[table(title = "Snippet")]
+    pub snippet: String,
+    /// Result URL (displayed verbatim).
+    #[table(title = "URL")]
+    pub url: String,
+}
+
+/// Custom cell renderer for the title column: renders the title as a link
+/// using the row's `url` field.
+#[allow(
+    clippy::missing_errors_doc,
+    reason = "Leptos component, not a fallible function"
+)]
+#[component]
+#[allow(unused_variables)]
+fn TitleLinkCellRenderer(
+    class: String,
+    value: Signal<String>,
+    row: RwSignal<SearchResultRow>,
+    index: usize,
+) -> impl IntoView {
+    let url = move || row.read().url.clone();
+    view! {
+        <td class=class>
+            <a href=url>{value}</a>
+        </td>
+    }
+}
+
+/// Custom row renderer that preserves `data-testid="result-item"` on each
+/// table row so e2e tests continue to work.
+fn result_row_renderer(
+    class: Signal<String>,
+    row: RwSignal<SearchResultRow>,
+    index: usize,
+    _selected: Signal<bool>,
+    on_select: EventHandler<leptos::web_sys::MouseEvent>,
+    columns: RwSignal<Vec<usize>>,
+) -> impl IntoView {
+    view! {
+        <tr
+            class=class
+            data-testid="result-item"
+            on:click=move |ev| on_select.run(ev)
+        >
+            {SearchResultRow::render_row(row, index, columns)}
+        </tr>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// leptos-forms-rs: Typed search form struct
+// ---------------------------------------------------------------------------
+
+/// The search form model used with `leptos-forms-rs`. Enables typed field
+/// metadata, validation, and the `bitcode` codec for server-fn payloads.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct SearchFormData {
+    pub query: String,
+}
+
+impl LeptosFormTrait for SearchFormData {
+    fn default_values() -> Self {
+        Self {
+            query: String::new(),
+        }
+    }
+
+    fn field_metadata() -> Vec<FieldMetadata> {
+        vec![FieldMetadata {
+            name: "query".to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }]
+    }
+
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Search page – submit a query, display results from the server function
 // ---------------------------------------------------------------------------
 
@@ -203,6 +306,11 @@ fn SearchErrorBoundary(children: Children) -> impl IntoView {
 #[component]
 pub fn SearchPage() -> impl IntoView {
     let (query, set_query) = signal(String::new());
+
+    // leptos-forms-rs typed form handle — demonstrates the typed form
+    // pattern with `SearchFormData` implementing the `Form` trait.
+    let (_form_handle, _submit, _reset) =
+        leptos_forms_rs::use_form(SearchFormData::default_values());
 
     // Watch the query input with a 300ms debounce so we don't fire a search
     // on every keystroke. The search is dispatched automatically when the
@@ -229,6 +337,7 @@ pub fn SearchPage() -> impl IntoView {
 
     view! {
         <h2>"Search"</h2>
+
         <form
             on:submit=move |ev| {
                 ev.prevent_default();
@@ -265,24 +374,26 @@ pub fn SearchPage() -> impl IntoView {
                         .and_then(Result::ok)
                         .map(|items| {
                             if items.is_empty() {
-                                view! { <p>"No results found."</p> }.into_any()
+                                view! { <p class=styles::empty>"No results found."</p> }
+                                    .into_any()
                             } else {
-                                items
+                                let rows: Vec<SearchResultRow> = items
                                     .iter()
-                                    .cloned()
-                                    .map(|r| {
-                                        let url = r.url.clone();
-                                        view! {
-                                            <div class=styles::result_item data-testid="result-item">
-                                                <h3 class=styles::result_title>
-                                                    <a href=url>{r.title}</a>
-                                                </h3>
-                                                <p class=styles::result_snippet>{r.snippet}</p>
-                                                <small class=styles::result_url>{r.url}</small>
-                                            </div>
-                                        }
+                                    .map(|r| SearchResultRow {
+                                        title: r.title.clone(),
+                                        snippet: r.snippet.clone(),
+                                        url: r.url.clone(),
                                     })
-                                    .collect::<Vec<_>>()
+                                    .collect();
+                                view! {
+                                    <table class=styles::table>
+                                        <TableContent
+                                            rows
+                                            scroll_container=""
+                                            row_renderer=result_row_renderer
+                                        />
+                                    </table>
+                                }
                                     .into_any()
                             }
                         })

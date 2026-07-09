@@ -1,4 +1,4 @@
-> Deep-dive companion to the axum/routing/SSE patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 9, 14, 15, 25). Start there for the condensed view, then return here for the full cookbook.
+> Deep-dive companion to the axum/routing/SSE patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 9, 14, 15, 17). Start there for the condensed view, then return here for the full cookbook.
 
 # Axum 0.8 Patterns Reference
 

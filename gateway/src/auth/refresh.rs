@@ -13,6 +13,7 @@
 //! returns `Ok(None)` which the handler maps to 401, signalling that
 //! the credential may have been stolen.
 
+use rwf_domain::UserId;
 use sqlx::PgPool;
 use sqlx::types::chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -23,8 +24,8 @@ use uuid::Uuid;
 pub struct RotationResult {
     /// The newly issued raw refresh token (base64url-encoded, 43 chars).
     pub new_raw_token: String,
-    /// The subject (user UUID) that the rotated token belongs to.
-    pub subject: Uuid,
+    /// The subject (user) that the rotated token belongs to.
+    pub subject: UserId,
 }
 
 /// Default lifetime for newly issued refresh tokens.
@@ -46,6 +47,9 @@ pub enum RefreshError {
     /// Underlying `sqlx` error.
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+    /// The subject UUID stored in the database was invalid (e.g. nil).
+    #[error("invalid subject UUID in database")]
+    UserId(#[from] rwf_domain::UserIdError),
 }
 
 /// One row of the `refresh_tokens` table, hydrated from a query.
@@ -54,7 +58,7 @@ pub struct RefreshTokenRecord {
     /// Primary key (`UUIDv4` generated server-side).
     pub jti: Uuid,
     /// Subject (typically the user identifier).
-    pub subject: Uuid,
+    pub subject: UserId,
     /// `created_at` from Postgres.
     pub created_at: DateTime<Utc>,
     /// `expires_at` from Postgres.
@@ -129,6 +133,8 @@ pub async fn rotate(
         return Ok(None);
     };
 
+    let subject = UserId::try_from(subject)?;
+
     // Mark the old token revoked.
     sqlx::query(
         "
@@ -153,7 +159,7 @@ pub async fn rotate(
         ",
     )
     .bind(new_jti)
-    .bind(subject)
+    .bind(Uuid::from(subject))
     .bind(new_hashed)
     .bind(new_expires_at)
     .bind(now)
@@ -171,13 +177,14 @@ pub async fn rotate(
 /// public refresh path; kept available for diagnostics.
 ///
 /// # Errors
-/// Returns [`RefreshError::Sqlx`] for DB failures.
+/// Returns [`RefreshError::Sqlx`] for DB failures or
+/// [`RefreshError::UserId`] if the stored subject is invalid.
 #[allow(dead_code)]
 pub async fn find_by_jti(
     pool: &PgPool,
     jti: Uuid,
 ) -> Result<Option<RefreshTokenRecord>, RefreshError> {
-    sqlx::query_as::<
+    let row = sqlx::query_as::<
         _,
         (
             Uuid,
@@ -195,19 +202,21 @@ pub async fn find_by_jti(
     )
     .bind(jti)
     .fetch_optional(pool)
-    .await
-    .map(|row| {
-        row.map(
-            |(jti, subject, created_at, expires_at, revoked_at)| RefreshTokenRecord {
+    .await?;
+
+    match row {
+        Some((jti, subject, created_at, expires_at, revoked_at)) => {
+            let subject = UserId::try_from(subject)?;
+            Ok(Some(RefreshTokenRecord {
                 jti,
                 subject,
                 created_at,
                 expires_at,
                 revoked_at,
-            },
-        )
-    })
-    .map_err(Into::into)
+            }))
+        }
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]

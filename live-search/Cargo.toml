@@ -44,6 +44,9 @@ stylance = { workspace = true }
 # Shared domain types — no platform-specific dependencies, available everywhere.
 rwf-domain = { workspace = true }
 
+# leptos-forms-rs server-function config — enables the typed form pattern
+leptos-forms-rs = { version = "1" }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

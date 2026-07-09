@@ -17,7 +17,8 @@ steps:
   unit-tests:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
-      - cargo test --workspace --lib
+      - cargo install cargo-nextest --locked
+      - cargo nextest run --workspace --lib -E 'not test(/e2e/)'
     depends_on: []
 
   clippy:

@@ -46,6 +46,10 @@ pub enum AppError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    /// Invalid user identifier.
+    #[error("invalid user id")]
+    UserId(#[from] rwf_domain::UserIdError),
 }
 
 impl AppError {
@@ -93,6 +97,15 @@ impl IntoResponse for AppError {
             Self::BadRequest(msg) => {
                 tracing::debug!(message = %msg, "bad request");
                 (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
+            }
+            Self::UserId(e) => {
+                // Log internally, return generic message.
+                tracing::debug!(error = %e, "invalid user id");
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "invalid user id"})),
+                )
+                    .into_response()
             }
             Self::Internal { context, source } => {
                 // `?source` uses `Debug` and walks the chain via `tracing-error`

@@ -2,7 +2,11 @@
 FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS builder
 WORKDIR /build
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.126 --locked
+    cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
+    cargo install sccache --locked \
+ && cargo install leptosfmt --locked
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/var/cache/sccache
 
 # Cache dependencies
 COPY Cargo.toml Cargo.lock ./

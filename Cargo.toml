@@ -57,8 +57,7 @@ stylance = "0.8"
 leptos-use = "0.19"
 leptos-struct-table = "0.19"
 lepticons = "0.13"
-# `bitcode` feature required for leptos-forms-rs to work with Leptos 0.8.11+ server_fn Bitcode encoding.
-leptos-forms-rs = { version = "1", features = ["bitcode"] }
+leptos-forms-rs = "1"
 utoipa = "5"
 utoipa-axum = "0.2"
 # `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.

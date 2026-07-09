@@ -15,6 +15,7 @@
 use crate::settings::{JWT_AUD, JWT_ISS};
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use rwf_domain::UserId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -28,7 +29,7 @@ use super::error::AppError;
 #[non_exhaustive]
 #[must_use]
 pub struct Claims {
-    pub sub: Uuid,
+    pub sub: UserId,
     pub exp: u64,
     pub iat: u64,
     pub aud: String,
@@ -52,7 +53,7 @@ fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
 /// # Errors
 ///
 /// Returns [`AppError::Internal`] if encoding fails.
-pub fn create_jwt(user_id: &Uuid, encoding_key: &EncodingKey) -> Result<String, AppError> {
+pub fn create_jwt(user_id: &UserId, encoding_key: &EncodingKey) -> Result<String, AppError> {
     let now = Utc::now();
     let exp = unix_seconds(now + chrono::Duration::hours(24))?;
 
@@ -115,11 +116,11 @@ mod tests {
         let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
-        let user_uuid = Uuid::new_v4();
-        let token = create_jwt(&user_uuid, &encoding_key)?;
+        let user_id = UserId::new(Uuid::new_v4());
+        let token = create_jwt(&user_id, &encoding_key)?;
 
         let claims = validate_jwt(&token, &decoding_key)?;
-        assert_eq!(claims.sub, user_uuid);
+        assert_eq!(claims.sub, user_id);
         assert_eq!(claims.iss, JWT_ISS);
         assert_eq!(claims.aud, JWT_AUD);
         assert_ne!(claims.iss, claims.aud);
@@ -141,8 +142,8 @@ mod tests {
         );
         let wrong_decoding_key = DecodingKey::from_ed_pem(wrong_public_pem.as_bytes())?;
 
-        let user_uuid = Uuid::new_v4();
-        let token = create_jwt(&user_uuid, &encoding_key)?;
+        let user_id = UserId::new(Uuid::new_v4());
+        let token = create_jwt(&user_id, &encoding_key)?;
 
         let result = validate_jwt(&token, &wrong_decoding_key);
         assert!(result.is_err());
@@ -163,9 +164,9 @@ mod tests {
     fn rejects_expired_token() -> anyhow::Result<()> {
         let (private_pem, public_pem) = dev_keypair_pems()?;
 
-        let user_uuid = Uuid::new_v4();
+        let user_id = UserId::new(Uuid::new_v4());
         let expired = Claims {
-            sub: user_uuid,
+            sub: user_id,
             exp: 0,
             iat: 0,
             aud: JWT_AUD.to_string(),

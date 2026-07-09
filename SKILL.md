@@ -1,6 +1,6 @@
 ---
 name: rust-web-fullstack
-description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via sqlx, axum, SSE streaming, and LISTEN/NOTIFY live queries. Use this skill when building Rust web apps, connecting Leptos to databases, implementing live updates, working with SSR/CSR/hydration, setting up SSE endpoints, using sqlx PgListener, writing E2E tests with chromiumoxide, or doing visual testing with Chrome DevTools MCP. Trigger on mentions of Leptos, sqlx, axum, tower-http, tower, axum middleware, PostgreSQL, SSE, LISTEN/NOTIFY, live queries, pg_notify, SSR, CSR, hydration, cargo-leptos, LeptosRoutes, server functions, PgPool, PgListener, broadcast channel, EventSource, chromiumoxide, JWT, session, HttpOnly, WASM, wasm-bindgen, hydrate_body, Cargo workspace, [workspace.lints], Edition 2024, graceful shutdown, signal handling, SIGTERM, tracing_subscriber, RUST_LOG, EnvFilter, tracing spans, #[instrument], nextest, insta, rstest, mockall, criterion, proptest, CancellationToken, JoinSet, tokio::select!, leptos_i18n, leptosfmt, leptos-use, leptos-sse, leptos-declarative, leptos_oidc, leptos_ws, leptos-material, leptos-tea, tailwind-fuse, t! macro, compile-time-checked translations, view! macro formatter, or full-stack Rust architecture.
+description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via sqlx, axum, SSE streaming, and LISTEN/NOTIFY live queries. Use this skill when building Rust web apps, connecting Leptos to databases, implementing live updates, working with SSR/CSR/hydration, setting up SSE endpoints, using sqlx PgListener, writing E2E tests with chromiumoxide, or doing visual testing with Chrome DevTools MCP. Trigger on mentions of Leptos, sqlx, axum, tower-http, tower, axum middleware, PostgreSQL, SSE, LISTEN/NOTIFY, live queries, pg_notify, SSR, CSR, hydration, cargo-leptos, LeptosRoutes, server functions, PgPool, PgListener, broadcast channel, EventSource, chromiumoxide, JWT, session, HttpOnly, WASM, wasm-bindgen, hydrate_body, Cargo workspace, [workspace.lints], Edition 2024, graceful shutdown, signal handling, SIGTERM, tracing_subscriber, RUST_LOG, EnvFilter, tracing spans, #[instrument], nextest, insta, criterion, proptest, CancellationToken, JoinSet, tokio::select!, leptos_i18n, leptosfmt, leptos-use, leptos-sse, leptos-declarative, leptos_oidc, leptos_ws, leptos-material, leptos-tea, tailwind-fuse, t! macro, compile-time-checked translations, view! macro formatter, or full-stack Rust architecture.
 ---
 
 # Rust Web Fullstack — Leptos + PostgreSQL + Axum
@@ -58,6 +58,8 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 - [Pattern 23: Leptos Islands Architecture](#pattern-23-leptos-islands-architecture)
 - [Pattern 24: Atomic Refresh-Token Rotation (PostgreSQL)](#pattern-24-atomic-refresh-token-rotation-postgresql)
 - [Pattern 25: WebSocket Chat via static broadcast hub](#pattern-25-websocket-chat-via-static-broadcast-hub)
+- [Pattern 26: Per-Test Database Isolation via testcontainers](#pattern-26-per-test-database-isolation-via-testcontainers)
+- [Pattern 27: OpenAPI Documentation with utoipa + Swagger UI](#pattern-27-openapi-documentation-with-utoipa--swagger-ui)
 
 ### Common Pitfalls
 - [Pitfall 1: PgListener connection leak](#1-pglistener-connection-leak)
@@ -93,7 +95,7 @@ This skill ships with a complete, runnable reference workspace next to it. Every
 | `./live-search/src/app.rs::LiveFeedPage` | Pattern 2 client: hand-rolled `gloo-net` EventSource reconnect loop, `Arc<str>` payload ring buffer of 200, named-event subscription via `subscribe("search_result")` |
 | `./gateway/src/main.rs` | Pattern 15's shutdown primitive only (no spawned tasks → no `JoinSet` / `CancellationToken` required) |
 | `./gateway/src/module.rs::ServiceHealthError` | `#[non_exhaustive]` + `#[must_use]` + doc comment design pattern |
-| `./i18n-demo/src/i18n.rs` + `./i18n-demo/locales/{en,de}.json` + `./i18n-demo/build.rs` | Compile-time-checked internationalization with `leptos_i18n` 0.6 — JSON locales loaded by `leptos_i18n_build`, `t!` macro for key-checked interpolation, runtime locale switching via `I18nContext::set_locale` |
+| `./i18n-demo/src/i18n.rs` + `./i18n-demo/locales/{en,de}.json` + `./i18n-demo/build.rs` | Compile-time-checked internationalization with `leptos_i18n` 0.6 — JSON locales loaded by `leptos_i18n_build`, `t!` macro for key-checked interpolation, runtime locale switching via `i18n.set_locale(...)` (instance method on the value returned by `use_i18n()`) |
 | `./i18n-demo.Dockerfile` + `./docker-compose.yml` `i18n-demo` service on `:3002` | Same multi-stage Leptos build pattern as `live-search`, dedicated port (Postgres-free crate) |
 | `./gateway.Dockerfile` + `./live-search.Dockerfile` + `./docker-compose.yml` | Multi-stage Leptos build with `cargo-leptos`, runtime slim image, Postgres + pgAdmin + Chromium |
 | `./e2e-tests/` | chromiumoxide-based Playwright replacement for browser-driven E2E |
@@ -153,9 +155,10 @@ after any `cargo update` or workspace member addition.
 | `axum` | 0.8 | `json` | |
 | `tokio` | 1 | `full` | `JoinSet` and `tokio::time::Instant` come from `tokio` directly |
 | `tokio-util` | 0.7 | `["rt"]` | `CancellationToken` lives in `tokio_util::sync` (always compiled, no feature needed); `rt` is for `task::JoinMap` and is included here because the workspace uses it elsewhere — drop it if you don't need `JoinMap` |
-| `tower-http` | 0.7 | workspace enables `["trace", "cors", "fs", "timeout"]`; `live-search` and `i18n-demo` add `fs` for `ServeDir`; `gateway` adds `set-header` for `SetResponseHeaderLayer` (currently documented but not yet imported — see `gateway/src/cors.rs:80-83` for the `axum 0.8 Body` compatibility note) | Per-crate feature lists are additive on top of the workspace set; drop a feature from a crate's own `[dependencies] table` to disable it there |
+| `tower-http` | 0.7 | workspace enables `["trace", "cors", "fs", "timeout"]`; `live-search` and `i18n-demo` add `fs` for `ServeDir`; `gateway` adds `set-header` (feature is enabled but `SetResponseHeaderLayer` itself is NOT used — gateway ships a custom `axum::middleware::from_fn` CSP layer instead because axum 0.8's `Body` doesn't satisfy the `Clone` bound the layer requires; see `gateway/src/cors.rs:80-83`) | Per-crate feature lists are additive on top of the workspace set; drop a feature from a crate's own `[dependencies] table` to disable it there |
 | `jsonwebtoken` | 10 | `["aws_lc_rs"]` (workspace choice) | 10.x panics without explicit crypto provider — see Pitfall 10 |
 | `reqwest` | 0.13 | `default-features = false`, `rustls`, `json`, `stream` | `default-features = false` avoids the `native-tls` conflict with `rustls`; `stream` enables `bytes_stream()` for SSE reading |
+| `rwf-domain` | (path) | — | Pure data types (`SearchResult`, `UserId`) shared by live-search, gateway, e2e-tests. No `sqlx`/`leptos`/`axum` deps at runtime. |
 | `chromiumoxide` | 0.9 | `default-features = false`, `bytes` | `default-features = false` keeps the tokio version compatible with the workspace pin; `bytes` is required for `Browser::launch(...)` |
 | `gloo-net` | 0.7 | `eventsource` | Client-side SSE reader |
 | `leptos_i18n` | 0.6 | `csr` + `hydrate` + `ssr` (all three required for full-stack i18n) | Workspace's `i18n-demo` crate wires these into the `ssr` and `hydrate` Cargo features. The `leptos_i18n_build` build-dep (same version) emits the typed `t!` / `t_string!` / `Locale` modules at compile time. Note: `leptos_i18n 0.6.2` transitively pulls `leptos-use 0.18.3` — harmless, that version is only compiled for the i18n-demo target. |
@@ -169,9 +172,9 @@ after any `cargo update` or workspace member addition.
 | `sqlx-otel` | 0.3 | (default) | Optional, behind `live-search`'s `otel` feature. **Compatibility caveat:** `sqlx-otel 0.3.0` pulls `sqlx 0.8.6` + `opentelemetry 0.31.0` alongside the workspace's `sqlx 0.9` + `opentelemetry 0.32`. Do not enable `--features otel` on `live-search` until upstream `sqlx-otel` ships a sqlx-0.9-compatible release. |
 | `tower_governor` | 0.8 | `axum` | Rate limiting on `gateway` auth routes (two governor instances for login vs. refresh). **Note:** `tower_governor 0.8 → governor 0.10.4 → {rand 0.9.4, getrandom 0.3.4, web-time}` — the `getrandom 0.3.4` you may see in `cargo tree` comes from here, NOT from `leptos-use`. Compiles fine for the SSR binary. |
 | `moka` | 0.12 | `future` | In-memory search-query cache in `live-search` (60s TTL, 1000 entries). |
-| `thiserror` | 2 | (default) | Error derive macros — `ServiceHealthError` (Pattern 6), `UserIdError` (Pattern 16), `RefreshTokenError`, `WsChatError`. |
+| `thiserror` | 2 | (default) | Error derive macros — `ServiceHealthError` (Pattern 6), `UserIdError` (Pattern 16), `AppError` (gateway auth), `RefreshError` (gateway refresh-token rotation, Pattern 24), `AppContextInitError` (live-search state::set), `PoolInitError` (live-search db). |
 | `futures` | 0.3 | (default) | `StreamExt` (Pattern 2 SSE), `FutureExt` + `BoxFuture` (Pattern 6 `ServiceModule::health_check`), `SinkExt` + `StreamExt` (Pattern 25 WebSocket). |
-| `stylance` | 0.5 | (default) | Compile-time scoped CSS via proc-macro — see `Scoped CSS with stylance` below; no `stylance-cli` build step required. |
+| `stylance` | 0.8 | (default) | Compile-time scoped CSS via proc-macro — see `Scoped CSS with stylance` below; no `stylance-cli` build step required. |
 | `tokio-stream` | 0.1 | `sync` | `BroadcastStream` wrapper used in Pattern 2's `sse_handler` to expose `broadcast::Receiver` as a `Stream` and surface `RecvError::Lagged` as an explicit `stream_lagged` SSE event. |
 
 ### Architecture Decision Tree
@@ -231,10 +234,10 @@ If a required service, browser, database, fixture, or SSE event is missing, pani
 #### 10. Background tasks need structured-concurrency wiring
 `pg_listener_task` and any other long-running `tokio::spawn`'d task MUST accept a `CancellationToken` and race its primary await against `shutdown.cancelled()` via `tokio::select!`. Dropping a `JoinHandle` does not cancel — only `token.cancel()` cooperatively stops the task. See Pattern 15.
 
-*If your binary has no `tokio::spawn` calls (the gateway, for example), `with_graceful_shutdown(graceful_shutdown_signal())` is sufficient and no `CancellationToken` is needed — `Pattern 15` is still relevant as a reference, but only its shutdown primitive applies.*
+*If your binary has no `tokio::spawn` calls (the gateway, for example), `with_graceful_shutdown(graceful_shutdown_signal())` is sufficient and no `CancellationToken` is needed — `Pattern 15` is still relevant as a reference, but only its shutdown primitive applies. **i18n-demo** deliberately uses the full `Pattern 15` triad even though it has no `tokio::spawn`'d long-lived tasks today — the machinery is the canonical skeleton for adding a real-time translation subscriber or pubsub bridge without re-architecting later. See `i18n-demo/src/main.rs` for the skeleton and `gateway/src/main.rs` for the simpler `with_graceful_shutdown` shape.*
 
 #### 11. Postgres channel name vs EventSource event name are distinct namespaces
-The Postgres `LISTEN` channel (e.g. `"search_results"`) is the SQL identifier for `NOTIFY`; the EventSource event type (e.g. `"search_result"`) is the client-side selector for `addEventListener`. They happen to share a substring by convention but are different identifiers — see `live-search/src/db.rs:141` (LISTEN) and `live-search/src/app.rs:319` (subscribe).
+The Postgres `LISTEN` channel (e.g. `"search_results"`) is the SQL identifier for `NOTIFY`; the EventSource event type (e.g. `"search_result"`) is the client-side selector for `addEventListener`. They happen to share a substring by convention but are different identifiers — see `listener.listen("search_results").await?` in `live-search/src/db.rs::connect_and_listen` and `event_source.subscribe("search_result")` in `live-search/src/app.rs::LiveFeedPage`'s `cfg(target_arch = "wasm32")` block.
 
 ---
 
@@ -483,6 +486,8 @@ SKILL.md section.
 - **Configuring axum routes?** → `references/axum-patterns.md` (Patterns 1, 2, 9, 14, 15, 17)
 - **Writing tests?** → `references/testing-patterns.md` (Patterns 4, 12, 13, 15)
 - **Designing architecture?** → `references/architecture-patterns.md` (Patterns 1, 2, 6, 17, 18)
+- **Per-test DB isolation?** → SKILL.md Pattern 26 (`testcontainers`)
+- **Documenting your API?** → SKILL.md Pattern 27 (`utoipa` + Swagger UI)
 
 ---
 
@@ -704,7 +709,7 @@ fn live_feed() -> impl IntoView {
     {
         match EventSource::new("/api/events") {
             Ok(mut es) => {
-                match es.subscribe("search_results") {
+                match es.subscribe("search_result") {
                     Ok(mut stream) => {
                         spawn_local(async move {
                             while let Some(Ok(msg)) = stream.next().await {
@@ -817,13 +822,21 @@ use futures::StreamExt;
 async fn test_sse_live_update() {
     // Unique profile dir per test — chromiumoxide uses a SingletonLock
     // that collides when tests run in parallel.
-    let profile_dir = format!("/tmp/chromiumoxide-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock must be after Unix epoch")
-            .as_nanos());
+    //
+    // The canonical `unique_profile_dir()` helper uses an atomic counter
+    // rather than `SystemTime::now()` + nanos (SystemTime is not
+    // monotonic — NTP/manual clock jumps can repeat nanos values across
+    // parallel tests). See `references/testing-patterns.md` §2 for the
+    // full helper.
+    let profile_dir = format!(
+        "/tmp/chromiumoxide-{pid}-{nonce}",
+        pid = std::process::id(),
+        nonce = NEXT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
     std::fs::create_dir_all(&profile_dir).expect("failed to create Chromium profile dir");
+
+    static NEXT_NONCE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
 
     let (browser, mut handler) = Browser::launch(
         BrowserConfig::builder()
@@ -873,10 +886,14 @@ async fn test_sse_live_update() {
 
 > **Lint compatibility:** the canonical workspace sets
 > `clippy::unwrap_used = "deny"` and `clippy::expect_used = "deny"` for
-> production crates. Test crates relax these (`unwrap_used = "allow"`,
-> `expect_used = "allow"` in `e2e-tests/Cargo.toml`) so `.unwrap()` /
-> `.expect()` for fail-fast test setup are acceptable there. Never copy
-> these patterns into production code.
+> production AND test crates. The `e2e-tests/Cargo.toml` replicates the
+> workspace lints manually (Cargo does not yet allow `[lints] workspace = true`
+> plus a per-crate `pedantic` override) with `pedantic` downgraded to
+> `warn` for test code; `unwrap_used` and `expect_used` stay at `deny`.
+> Where fail-fast really is correct (a panic at test setup with no
+> meaningful recovery), the canonical form is **per-call `#[expect(clippy::expect_used, reason = "...")]`**
+> annotations, NOT bare `.expect()`. See `gateway/src/cors.rs:130-153` and
+> `gateway/src/auth/refresh.rs` for the canonical `#[expect]` form.
 
 ```rust
 // Helper: poll a JS expression until true or timeout
@@ -997,7 +1014,74 @@ fn build_gateway(state: GatewayState) -> Router {
 > The skill's reference implementation in `references/architecture-patterns.md`
 > shows a *simplified* version of this trait. For the real gateway with
 > `Jwt`, `Settings`, `LoginRateLimiter`, and aggregated health checks see
-> `./gateway/src/gateway.rs` and `./gateway/src/auth.rs`.
+> `./gateway/src/gateway.rs` and `./gateway/src/auth/mod.rs` (the
+> `auth.rs` file was split into `auth/{error,handlers,jwt,middleware,refresh}.rs`).
+
+#### Layer ordering (CORS / CSP / Session / CSRF / Trace / Timeout)
+
+The gateway composes its middleware stack in a specific order; reorder it
+and you break CORS preflight or CSRF token validation. Canonical order
+(see `gateway/src/gateway.rs::build_gateway_with_settings`):
+
+1. `TraceLayer::new_for_http()` — outermost, captures full request lifecycle.
+2. `TimeoutLayer::new(Duration::from_secs(30))` — caps slow handlers.
+3. CORS layer — short-circuits preflight OPTIONS requests.
+4. Session layer (`tower-sessions::SessionManagerLayer`) — runs before CSRF
+   because CSRF tokens are stored IN the session.
+5. CSRF layer (`axum-tower-sessions-csrf::CsrfLayer`) — validates the
+   `X-CSRF-Token` header against the session-bound token on mutating
+   endpoints.
+6. CSP layer — sets `Content-Security-Policy` header on the response.
+
+Adding a new middleware? Place it inside this order based on whether it
+needs to see the session (place after 4), validate CSRF (after 5), or
+just observe timing (inside 1).
+
+#### Health check: liveness vs readiness
+
+`gateway/src/gateway.rs::health_handler` returns 200 unconditionally —
+that's *liveness*. For *readiness* (K8s readiness probe), aggregate the
+state of every registered service module:
+
+```rust
+let results: Vec<_> = futures::future::join_all(
+    state.services.iter().map(|s| s.health_check())
+).await;
+let all_ok = results.iter().all(Result::is_ok);
+let status = if all_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+(status, format!("{}/{} services healthy", results.iter().filter(|r| r.is_ok()).count(), results.len()))
+```
+
+A 5-line check is enough. Anything heavier (DB ping, external API ping)
+belongs in a separate `/health/dependencies` endpoint with its own
+timeout, NOT in `/health` itself — the readiness probe runs every few
+seconds and must stay cheap.
+
+#### Validated DTOs with `axum-valid` + `validator`
+
+Public gateway handlers should never trust the request body. Use
+`axum-valid::Valid<axum::Json<LoginRequest>>` as the extractor; the
+underlying `LoginRequest` derives `validator::Validate`:
+
+```rust
+#[derive(serde::Deserialize, validator::Validate)]
+pub struct LoginRequest {
+    #[validate(length(min = 1, max = 256))]
+    pub username: String,
+    #[validate(length(min = 8, max = 256))]
+    pub password: String,
+}
+
+async fn login_handler(
+    Valid(Json(req)): Valid<Json<LoginRequest>>,
+) -> Result<Json<LoginResponse>, AppError> {
+    // req is guaranteed valid; the layer rejected bad input with 400.
+}
+```
+
+See `gateway/src/auth/handlers.rs` for the canonical wiring. The
+`axum-valid` extractor turns `ValidationError` into a structured
+`400 Bad Request` response with field-level error messages.
 
 #### Local dev keypair (`--dev-keys`)
 
@@ -1114,7 +1198,8 @@ The `server_fn_handler`'s internal probe via
 `leptos::server_fn::axum::get_server_fn_service` short-circuits to the
 exact registered path, so registering both routes is harmless and avoids
 relying on the probe-fallback path alone. This is the form used in
-`./live-search/src/main.rs`.
+`./live-search/src/bootstrap.rs::run` (the SSR entrypoint delegates to
+`bootstrap::run()` from `main.rs`).
 
 ### Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)
 
@@ -1371,6 +1456,33 @@ pub async fn require_server(url: &str) {
 }
 ```
 
+### Snapshot testing with `insta`
+
+For HTTP-only tests where you want to assert on JSON payload shape, use
+`insta::assert_json_snapshot!` instead of hand-rolled equality checks. The
+workspace uses this for SSE event shape in `e2e-tests/tests/sse_test.rs:268`:
+
+```rust
+use insta::assert_json_snapshot;
+
+#[tokio::test]
+async fn sse_payload_shape() {
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(format!("{base_url}/api/events"))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_json_snapshot!(body);
+}
+```
+
+First run: `cargo insta accept` to write the snapshot to
+`e2e-tests/tests/snapshots/`. CI rejects if the snapshot changes without an
+explicit `cargo insta accept`.
+
+> **Lint compatibility:** the `insta` workspace dep is feature-gated with
+> `features = ["json"]` in `e2e-tests/Cargo.toml`. The `cargo-insta` CLI is
+> a separate install (`cargo install cargo-insta --locked`).
+
 ### Pattern 13: chromiumoxide Chrome Binary Selection
 
 chromiumoxide launches Chrome via the system's default Chrome binary
@@ -1400,24 +1512,55 @@ hit launch crashes on a newer Chromium build, pin via `CHROME_PATH` rather than
 chasing the latest.
 Crashes observed: Chromium **1223** (Playwright 1.51+ on this host).
 
-### Pattern 14: SSE JSON Injection in Rust Raw Strings
+### Pattern 14: SSE JSON Injection — Use `serde_json`, Not Raw Strings
 
-When building SSE event payloads that include JSON, use **raw string literals**
-(`r#"..."#`) to avoid escaping JSON braces. For interpolation, prefer explicit
-`replace()` over `format!()` when there are many JSON fields — it avoids
-confusion between `format!`'s `{field}` placeholders and JSON's `{ }`:
+When building SSE event payloads, **always serialise through `serde_json`** —
+either `serde_json::to_string(&event)` for typed payloads or
+`serde_json::json!({...})` for ad-hoc shapes. This is the canonical
+pattern in `live-search/src/sse.rs::event_to_sse`:
 
 ```rust
-// Simple case — format! works fine with {{ }} escaping:
-let payload = format!(r#"data: {{"query":"{q}","results":[]}}"#);
-
-// For complex JSON payloads, raw string + replace() is more readable:
-let payload = r#"data: {"query":"__QUERY__","results":[]}"#
-    .replace("__QUERY__", &q);
+// Primary: typed payload serialised via serde_json. The handler in
+// live-search/src/sse.rs converts an enum variant into a name + data:
+let name = match &event {
+    SseEvent::Connected { .. } => "connected",
+    SseEvent::SearchResult { .. } => "search_result",
+    SseEvent::StreamLagged { .. } => "stream_lagged",
+};
+let json = serde_json::to_string(&event).unwrap_or_else(|err| {
+    // Surfacing the serialise failure as an error event keeps the SSE
+    // stream open; clients can detect "stream_lagged" / "error" names
+    // and recover.
+    tracing::error!(error = %err, "SSE event serialise failed");
+    r#"{"type":"error"}"#.to_owned()
+});
+Event::default().event(name).data(json)
 ```
 
-Apply same principle to test JS strings — prefer `replace()` over complex
-`format!` with deeply nested `{{ }}` in JS source code.
+```rust
+// Secondary: ad-hoc shape via the json! macro. Type-checked at compile
+// time, no `{{ }}` escaping, no `format!` placeholder collisions.
+use serde_json::json;
+let payload = json!({
+    "query": q,
+    "results": Vec::<SearchResult>::new(),
+});
+let payload = serde_json::to_string(&payload)?;
+```
+
+**Why this beats raw-string manipulation:**
+- No `format!` vs JSON `{}` confusion (the most common SSE bug).
+- Round-trips: clients deserialize with `serde_json::from_str::<SseEvent>(...)`
+  and get a typed value, not a free-form `String` (see the client side
+  in `live-search/src/app.rs::LiveFeedPage`).
+- Escape rules are correct by construction (UTF-8, control chars,
+  surrogate pairs).
+- The `Connected` / `StreamLagged` heartbeat event from Pattern 2
+  only works through `serde_json` — it is part of the typed `SseEvent`
+  enum.
+
+Apply the same principle to test JS strings — prefer `serde_json::to_string`
+over `format!` with deeply nested `{{ }}` in JS source code.
 
 ### Pattern 15: Structured Concurrency Triad (CancellationToken + JoinSet + select!)
 
@@ -1571,9 +1714,12 @@ dedicated task that pushes results into a `mpsc` channel.
 
 ### Pattern 16: Newtype IDs for Type-Safe Web Params
 
-Web handlers receive IDs as strings (path params, query params, JSON body
-fields). Wrap them in newtypes so the type system prevents mixing a
-`UserId` with an `OrgId` (`type-newtype-ids`):
+Newtype wrappers around `Uuid` prevent mixing `UserId`, `OrgId`, and other
+identifiers at compile time. Canonical implementation lives in
+`crates/domain/src/lib.rs` (`UserId(pub Uuid)` with `try_from`/`into`
+`Uuid` for serde and `FromStr` for handler-side parsing); call sites in
+`gateway/src/auth/jwt.rs::Claims::sub`, `gateway/src/auth/refresh.rs::
+RefreshTokenRecord::subject`, and `gateway/src/auth/handlers.rs::refresh_handler`.
 
 ```rust
 use std::fmt;
@@ -1610,7 +1756,18 @@ pub enum UserIdError {
 }
 ```
 
-Then in axum handlers:
+Then in axum handlers — `FromStr` lets you parse from a header or path:
+
+```rust
+async fn login(
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, AppError> {
+    let user_id = UserId::from_str(&req.user_id)?;  // rejects Uuid::nil()
+    // ...
+}
+```
+
+Or use `TryFrom` / `FromStr` for path params and query strings:
 
 ```rust
 async fn get_user(
@@ -1630,14 +1787,25 @@ Three security headers and policies the gateway enforces by default:
 - **CORS** (`gateway/src/cors.rs`): allowlist-driven via `ALLOWED_ORIGINS`
   env var. Default is the dev localhost allowlist (`:3000`, `:3001`, `:3002`).
   Special value `*` permits any origin (debug only — emits a `warn!`).
-- **CSRF** is not provided by this workspace: there is no session-bearing
-  cookie, so the Synchronizer Token Pattern is inapplicable. If you adopt
-  session-cookie auth, see `axum-tower-sessions-csrf` and integrate it as a
-  sibling layer to the existing CORS / CSP layers.
-- **CSP** (`gateway/src/cors.rs::csp_layer`): Content-Security-Policy
-  header set via `tower_http::set_header::SetResponseHeaderLayer`. The
-  default policy allows self-hosted scripts/styles, `'unsafe-inline'` for
-  Leptos SSR, and `ws:`/`wss:` for WebSocket/SSE connections.
+- **CSRF** IS provided by this workspace: see `gateway/src/csrf.rs`. The CSRF
+  middleware sits between `session_layer` and `cors_layer` in the router
+  composition (see `gateway/src/gateway.rs`). Mutating endpoints require
+  the `x-csrf-token` request header; the token is bound to the session cookie
+  issued by `tower-sessions` and can be obtained via [`get_or_create_token`].
+
+  ```rust
+  use axum_tower_sessions_csrf::get_or_create_token;
+  async fn my_handler(session: tower_sessions::Session) -> String {
+      get_or_create_token(&session).await.unwrap_or_default()
+  }
+  ```
+- **CSP** (`gateway/src/cors.rs::csp_middleware`): Content-Security-Policy
+  header set via a custom `axum::middleware::from_fn` layer (the canonical
+  `tower_http::set_header::SetResponseHeaderLayer` is avoided because
+  axum 0.8's `Body` does not satisfy the layer's `Clone` bound — see
+  `gateway/src/cors.rs:80-83`). The default policy allows self-hosted
+  scripts/styles, `'unsafe-inline'` for Leptos SSR, and `ws:`/`wss:` for
+  WebSocket/SSE connections.
 
 Production checklist:
 1. Override `ALLOWED_ORIGINS` to your actual domain(s).
@@ -1906,8 +2074,10 @@ Since 0.8.6, `<Show>` accepts the condition as a `Signal`:
     {move || user.get().map(|u| view! { <p>{u.name.to_string()}</p> })}
 </Show>
 
+// 0.8.8+: pass the Option signal directly to `some` (no closure wrap):
 <ShowLet
-    some=move || user.get()    // Signal<Option<T>> in 0.8.8+
+    some=user               // Signal<Option<T>> directly
+    fallback=|| view! { <p>"Not signed in"</p> }
     let:value
 >
     <p>{value.name.to_string()}</p>
@@ -1954,12 +2124,14 @@ caveat column.
 | [`leptosfmt`](https://crates.io/crates/leptosfmt) | `view!` macro formatter; chains with `rustfmt --rustfmt` | Tier 1 | **Used.** `.woodpecker.yml` runs `leptosfmt --check .` after `cargo fmt --check`. | `cargo install leptosfmt --locked`. Editor integration via `rust-analyzer.toml`'s `overrideCommand`. |
 | `gloo-net` (0.7) | Client-side EventSource + reconnect loop | Tier 1 | **Used.** `live-search::LiveFeedPage` consumes `/api/events` via `gloo_net::eventsource::futures::EventSource` with a 2 s reconnect; preserves the `Arc<str>` payload shape. | Hand-rolled cleanup signal via `RwSignal<bool>` + `on_cleanup` because the WASM target has no automatic cancellation. |
 | [`leptos-use`](https://leptos-use.rs/) (~90 hooks) | `use_event_source`, `use_cookie`, `use_debounce_fn`, `use_intersection_observer`, `use_media_query`, etc. | Tier 1 | **Used.** `live-search/src/app.rs:22` imports `use leptos_use::watch_debounced;` for the debounced search box. | Two `leptos-use` versions coexist in `Cargo.lock` (0.18.3 transitive from `leptos_i18n 0.6.2`, 0.19.0 direct). Neither pulls `getrandom`. The `getrandom 0.3.4` you may see in `cargo tree` comes from `governor 0.10.4` (via `tower_governor 0.8`), and is benign on Linux native + wasm32 because `governor` is only compiled for the SSR binary. |
+| [`leptos-struct-table`](https://github.com/Synphonyte/leptos-struct-table) | Type-checked table from struct derive; supports sorting, virtualization, pagination | Tier 1 | **Used.** `live-search/src/app.rs::SearchResultRow` derives `TableRow`; renders the search-result list with type-checked column ordering. Title rendered as hyperlink via `TitleLinkCellRenderer`. | Wraps data in `<table>` — e2e selectors need `data-testid` on `<tr>` (provided by custom `result_row_renderer`). |
+| [`leptos-forms-rs`](https://crates.io/crates/leptos-forms-rs) | Typed form struct + `FormHandle` + validation for Leptos | Tier 1 | **Used.** `live-search/src/app.rs::SearchFormData` implements the `Form` trait. The `bitcode` feature is referenced in docs for binary-safe encoding (not yet in the 1.3.0 release). | `FormField` input binding is limited — manual `bind:value` is still needed for debounced auto-search. |
 | [`leptos_sse`](https://github.com/messense/leptos_sse) | Server-pushed reactive signals over SSE, with JSON-patch sync | Tier 2 | **Not used.** | Different pattern than Pattern 2: `leptos_sse` is for "the server holds state and the client gets a mirror signal", **not** for raw client-side SSE consumption. Use `gloo-net::EventSource` for raw event protocols; use `leptos_sse::create_sse_signal` when you want automatic JSON-patch state replication. |
 | [`tailwind-fuse`](https://github.com/gaucho-labs/tailwind-fuse) | `tw_merge!` / `tw_join!` plus `#[derive(TwClass)]` / `#[derive(TwVariant)]` macros | Tier 1 | **Not used.** | Skill projects use inline `style="…"` attrs throughout. `tailwind-fuse` is the recommended merge-and-variant helper if/when you adopt Tailwind — install with `cargo add tailwind-fuse --features variant` once your `class="…"` strings appear. |
 | [`leptos-declarative`](https://github.com/jquesada2016/leptos-declarative) | Auto-generates `#[component]` prop structs from inner struct fields | Tier 2 | Mentioned as a "fewer boilerplate for many components" footnote next to component-heavy projects. | Use when components outgrow manual `(signal, set_signal)` plumbing; not in this skill since the demo crates are small. |
-| [`leptos_oidc`](https://gitlab.com/kerkmann/leptos_oidc) | OIDC integration (Keycloak / Auth0 / etc.) | Tier 2 | Mentioned as a "swap JWT for OIDC" footnote inside `gateway`'s `auth.rs`. | `gateway-example` deliberately uses a hand-rolled `jsonwebtoken` middleware for full control over claims. Replace with `leptos_oidc` when integrating an existing IdP. |
+| [`leptos_oidc`](https://gitlab.com/kerkmann/leptos_oidc) | OIDC integration (Keycloak / Auth0 / etc.) | Tier 2 | Mentioned as a "swap JWT for OIDC" footnote inside `gateway`'s `auth/mod.rs`. | `gateway-example` deliberately uses a hand-rolled `jsonwebtoken` middleware for full control over claims. Replace with `leptos_oidc` when integrating an existing IdP. |
 | [`leptos_ws`](https://github.com/TimTom2016/leptos_ws) | Leptos signal ↔ WebSocket bridge | Tier 2 | Mentioned as "for bidirectional real-time" footnote next to Pattern 2. | The skill covers SSE (server→client push) thoroughly; reach for `leptos_ws` when clients also push state to the server (chat, collaborative editing). |
-| [`leptos-material`](https://github.com/jordi-star/leptos-material) | Material Web Components wrapped for Leptos | Tier 2 | Mentioned as one of several ready-made UI kit options. | Skill focuses on backend / signal patterns, not design polish. Use `leptos-material` (or [`thaw`](https://github.com/thaw-ui/thaw), [`leptix`](https://github.com/leptix/leptix), [`Rust shadcn/ui`](https://shadcn-ui.rustforweb.org), [`Rust/UI`](https://github.com/rust-ui/ui), [`leptos-struct-table`](https://github.com/Synphonyte/leptos-struct-table)) when you need a design system on top of these patterns. |
+| [`leptos-material`](https://github.com/jordi-star/leptos-material) | Material Web Components wrapped for Leptos | Tier 2 | Mentioned as one of several ready-made UI kit options. | Skill focuses on backend / signal patterns, not design polish. Use `leptos-material` (or [`thaw`](https://github.com/thaw-ui/thaw), [`leptix`](https://github.com/leptix/leptix), [`Rust shadcn/ui`](https://shadcn-ui.rustforweb.org), [`Rust/UI`](https://github.com/rust-ui/ui)) when you need a design system on top of these patterns. |
 | [`leptos-fetch`](https://github.com/zakstucke/leptos-fetch) | Async data fetching cache | Tier 2 | Optional footnote. | Skill's `Action::value()` + `Resource` covers the same need; reach for `leptos-fetch` if you want a React-Query-equivalent API. |
 | [`leptos-image`](https://github.com/gaucho-labs/leptos-image) | WebP image optimizer + LQIP for SSR | Tier 3 | Not referenced. | Useful only for image-heavy apps. |
 | `leptos-mview` (alternate `view!` macro) | Maud-style concise `view!` | Tier 3 | Not used. | Conflicts with the skill's "always use Leptos's `view!`" rule. |
@@ -1991,6 +2163,11 @@ normally and the server fn handles the request.
 `watch_debounced`; a pure `ActionForm` example is documented as a pattern option
 but not exercised in the live-search showcase because `ActionForm` requires
 `ServerAction<_>`, not `Action<_, _>`).
+
+Live-search uses `leptos-forms-rs` to derive the typed `SearchFormData` struct
+(see `live-search/src/app.rs::SearchFormData`). The `bitcode` feature
+(for binary-safe server-fn encoding) is referenced in the skill docs but is not
+yet available in the `leptos-forms-rs` 1.3.0 release.
 
 When to use:
 - **ErrorBoundary**: every component that renders server-function results,
@@ -2152,8 +2329,10 @@ to recognise before swapping in a real pub/sub backend.
 **Server side:**
 
 ```rust
+const HUB_CAPACITY: usize = 256;
+
 static HUB: LazyLock<broadcast::Sender<ChatEvent>> =
-    LazyLock::new(|| broadcast::channel(256).0);
+    LazyLock::new(|| broadcast::channel(HUB_CAPACITY).0);
 
 pub fn chat_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(handle_socket)
@@ -2201,6 +2380,100 @@ ws.onopen = () => ws.send("hello");
 - `ws_chat::tests::max_text_bytes_matches_documented_value`
 - `ws_chat::tests::new_event_has_unique_ids_and_timestamps`
 - `ws_chat::tests::event_round_trips_through_serde_json`
+
+---
+
+### Pattern 26: Per-Test Database Isolation via testcontainers
+
+Production E2E tests need a real Postgres. Sharing a dev database between
+tests causes ordering bugs, schema drift, and leaked fixtures. The canonical
+solution is `testcontainers` — each test process (or test binary) gets its
+own ephemeral container.
+
+```rust
+// crates/testcontainers — the workspace uses these in
+// e2e-tests/src/common/db.rs::test_postgres_pool()
+use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers_modules::postgres::Postgres;
+
+pub async fn test_postgres_pool() -> (sqlx::PgPool, ContainerAsync<Postgres>) {
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .expect("failed to start test Postgres");
+
+    let host = container.get_host().await.expect("host lookup");
+    let port = container.get_host_port_ipv4(5432).await.expect("port mapping");
+    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
+
+    let pool = sqlx::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&url).await
+        .expect("connect to test Postgres");
+
+    sqlx::migrate!("./migrations").run(&pool).await.expect("migrations");
+
+    (pool, container)
+}
+```
+
+The container is dropped at end of scope; `ContainerAsync` owns the
+underlying Docker container and tears it down on `Drop`. Pair with
+`tempfile::TempDir` for any on-disk fixtures.
+
+**Why not shared dev DB?** Tests that mutate schema or fixtures
+interfere. A parallel `cargo test` run on the same DB sees half-applied
+migrations and flakes. Per-test containers cost ~3s extra per test but
+eliminate an entire class of test brittleness.
+
+**Downsides:**
+- Requires Docker on the test runner (no docker = no E2E).
+- Container startup time (~1-3 s) makes small unit tests noticeably slower.
+- Some CI providers charge per container; check billing before adopting at scale.
+
+### Pattern 27: OpenAPI Documentation with utoipa + Swagger UI
+
+Public APIs need discoverable docs. `utoipa` derives OpenAPI schemas from
+your Rust types; `utoipa-swagger-ui` mounts a Swagger UI at a route. The
+workspace wires this into the gateway:
+
+```rust
+// gateway/src/openapi.rs — derive OpenAPI on a registry struct
+use utoipa::OpenApi;
+
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "Gateway API", version = "0.1.0"),
+    paths(
+        gateway::auth::handlers::login_handler,
+        gateway::auth::handlers::refresh_handler,
+        gateway::health_handler,
+    ),
+    components(schemas(LoginRequest, LoginResponse, Claims)),
+)]
+pub struct ApiDoc;
+
+// Mount in the router (gateway/src/gateway.rs):
+use utoipa_swagger_ui::SwaggerUi;
+let app = Router::new()
+    .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
+    .merge(other_routes);
+```
+
+Now `GET /docs` serves the Swagger UI; `GET /api-docs/openapi.json`
+returns the JSON schema.
+
+**Tagging endpoints:** add `#[utoipa::path(get, path = "/health", responses((status = 200, description = "OK")))]`
+above the handler to make it appear in the schema.
+
+**Vendored UI assets:** `utoipa-swagger-ui` ships JS/CSS assets. Enable
+`features = ["vendored"]` in `Cargo.toml` (already enabled in the
+workspace) so Docker builds don't need network access at runtime.
+
+**Why not `paperclip` or `oapi-rs`?** `utoipa` has the cleanest derive
+story and the most active maintenance. `oapi-rs` requires manual schema
+construction; `paperclip` has a steeper learning curve.
 
 ---
 

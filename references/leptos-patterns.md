@@ -1,4 +1,4 @@
-> Deep-dive companion to the Leptos patterns in [SKILL.md](../SKILL.md) (Patterns 1, 10, 11, 17, 19, 21). Start there for the condensed view, then return here for the full cookbook.
+> Deep-dive companion to the Leptos patterns in [SKILL.md](../SKILL.md) (Patterns 1, 10, 11, 19, 21, 23). Start there for the condensed view, then return here for the full cookbook.
 
 # Leptos 0.8.x Patterns Reference
 

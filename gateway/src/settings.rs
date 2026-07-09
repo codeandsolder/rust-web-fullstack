@@ -52,6 +52,30 @@ fn short_fingerprint(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
+/// Session-cookie and CSRF configuration.
+///
+/// Controls the session cookie attributes and the CSRF token cookie name.
+#[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SessionSettings {
+    /// Whether the session cookie requires HTTPS (`Secure` flag).
+    pub cookie_secure: bool,
+    /// Name of the session cookie (default `"rwf_session"`).
+    pub cookie_name: String,
+    /// Name of the CSRF cookie (default `"rwf_csrf"`).
+    pub csrf_cookie_name: String,
+}
+
+impl Default for SessionSettings {
+    fn default() -> Self {
+        Self {
+            cookie_secure: true,
+            cookie_name: "rwf_session".to_string(),
+            csrf_cookie_name: "rwf_csrf".to_string(),
+        }
+    }
+}
+
 /// Shared configuration loaded from environment variables.
 ///
 /// Secrets are stored as [`Arc<str>`] so cloning [`Settings`] (which
@@ -71,6 +95,8 @@ pub struct Settings {
     /// Shared password that any `user_id` may submit to obtain a token.
     /// Replace with a real user database in production.
     pub default_admin_password: Arc<str>,
+    /// Session-cookie and CSRF settings.
+    pub session: SessionSettings,
 }
 
 impl std::fmt::Debug for Settings {
@@ -81,6 +107,7 @@ impl std::fmt::Debug for Settings {
             .field("encoding_key", &"<redacted>")
             .field("decoding_key", &"<redacted>")
             .field("default_admin_password", &"<redacted>")
+            .field("session", &self.session)
             .finish()
     }
 }
@@ -129,12 +156,25 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("failed to parse EdDSA public key PEM: {e}"))?,
         );
 
+        let session = SessionSettings {
+            cookie_secure: std::env::var("SESSION_COOKIE_SECURE")
+                .ok()
+                .is_none_or(|v| v == "true"),
+            cookie_name: std::env::var("SESSION_COOKIE_NAME")
+                .ok()
+                .unwrap_or_else(|| "rwf_session".to_string()),
+            csrf_cookie_name: std::env::var("CSRF_COOKIE_NAME")
+                .ok()
+                .unwrap_or_else(|| "rwf_csrf".to_string()),
+        };
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
             encoding_key,
             decoding_key,
             default_admin_password: Arc::from(default_admin_password.as_str()),
+            session,
         })
     }
 
@@ -193,6 +233,7 @@ impl Settings {
             encoding_key,
             decoding_key,
             default_admin_password: Arc::from(admin_password),
+            session: SessionSettings::default(),
         })
     }
 
