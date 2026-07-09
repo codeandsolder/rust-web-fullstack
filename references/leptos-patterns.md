@@ -629,10 +629,10 @@ cargo leptos end-to-end # build + run playwright tests
 
 ## 11. ErrorBoundary + ActionForm
 
-Canonical coverage lives in [SKILL.md Pattern 19](../SKILL.md#pattern-19-errorboundary--actionform-progressive-enhancement).
+Canonical coverage lives in [SKILL.md Pattern 21](../SKILL.md#pattern-21-errorboundary--actionform-progressive-enhancement).
 This reference file repeats only the workspace-specific pointers: the canonical
 implementations are `live-search/src/app.rs::SearchErrorBoundary` and the
 manual `<form on:submit>` in `live-search/src/app.rs::SearchPage` (note:
 `live-search` uses a manual `<form on:submit>` because the search action is
 also driven by a debounced `watch_debounced`; a pure `ActionForm` example is
-documented in SKILL.md Pattern 19 but not exercised in this showcase).
+documented in SKILL.md Pattern 21 but not exercised in this showcase).
