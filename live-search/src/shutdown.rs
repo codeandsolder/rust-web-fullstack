@@ -1,21 +1,7 @@
 //! Graceful shutdown handling for the live-search server.
 //!
-//! Provides [`wait`] which blocks until `Ctrl+C` (all platforms) or `SIGTERM`
-//! (Unix) is received, then cancels the shutdown token and drains background
-//! tasks and the database pool within a grace period.
-//!
-//! This module is compiled only under `feature = "ssr"`.
-//!
-//! # Shutdown sequence
-//!
-//! 1. Wait for OS signal (Ctrl+C / SIGTERM).
-//! 2. Cancel the [`CancellationToken`], which propagates to:
-//!    - The HTTP server's graceful shutdown.
-//!    - The `PgListener` and watchdog tasks.
-//! 3. Close the database pool (5 s timeout).
-//! 4. Drain the background-task `JoinSet` (10 s timeout; abort on timeout).
-//! 5. If `OTel` is active, force-flush and shutdown the tracer provider
-//!    (5 s timeout each, per rust-tracing §1.7 / §3.2).
+//! Shutdown owns the same resources startup created: the cancellation token,
+//! background-task JoinSet, PostgreSQL pool, and optional telemetry provider.
 
 use std::time::Duration;
 
@@ -25,30 +11,28 @@ use tokio_util::sync::CancellationToken;
 
 use crate::db;
 
-/// Wait for a shutdown signal, then perform graceful shutdown.
+/// Wait for Ctrl+C/SIGTERM, cancel the application, drain owned tasks, then
+/// close the database pool and telemetry provider.
+///
+/// Order matters: background tasks are drained before the pool is closed so the
+/// PgListener can observe cancellation and release its connection cleanly.
 ///
 /// # Panics
-/// Only panics if the OS-level signal handler installation fails, which
-/// indicates an unrecoverable runtime state.
+/// Only panics if OS signal-handler installation fails.
 ///
 /// # Errors
-/// Returns an error if the server's `JoinSet` drain observes a panic in
-/// any background task (the panic is logged and surfaced as an `Err`).
+/// Returns the first background-task error/panic observed while draining, or an
+/// error if tasks exceed the shutdown grace period. Cleanup still runs before
+/// the error is returned.
 #[expect(
     clippy::expect_used,
-    reason = "Signal handler installation can only fail in unrecoverable runtime states"
+    reason = "signal handler installation failure is an unrecoverable runtime state"
 )]
 pub async fn wait(
     shutdown: CancellationToken,
     tasks: &mut JoinSet<anyhow::Result<()>>,
     pool: &sqlx::PgPool,
 ) -> anyhow::Result<()> {
-    // ---- signal handler ---------------------------------------------------
-    //
-    // We install the handler here, inside `wait()`, so the caller does not
-    // need to worry about signal-registration ordering. The handler task
-    // runs until a signal arrives, then cancels the token.
-
     let signal_token = shutdown.clone();
     tokio::spawn(async move {
         let ctrl_c = async {
@@ -72,63 +56,49 @@ pub async fn wait(
         signal_token.cancel();
     });
 
-    // ---- wait for the signal to actually fire -----------------------------
-    //
-    // The cancellation token was passed to `axum::serve`'s graceful shutdown
-    // in bootstrap. When the signal fires, the server will start draining.
     shutdown.cancelled().await;
-
-    // ---- drain background tasks BEFORE closing the pool -------------------
-    //
-    // The PgListener task holds a connection out of the pool. Closing the
-    // pool first would terminate its in-flight queries mid-execution; the
-    // listener needs to observe `shutdown.cancelled()` first, exit cleanly,
-    // and release its connection back to the pool. Order is therefore:
-    //   1. cancel token (idempotent — signal handler already fired)
-    //   2. drain JoinSet with a 10s timeout; abort on timeout
-    //   3. close the pool last
     shutdown.cancel();
-    match tokio::time::timeout(Duration::from_secs(10), async {
+
+    let drain = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut first_error: Option<anyhow::Error> = None;
         while let Some(joined) = tasks.join_next().await {
             match joined {
-                Ok(Ok(())) => {} // clean exit
-                Ok(Err(e)) => {
-                    tracing::error!(
-                        error = %e,
-                        "background task completed with an error"
-                    );
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::error!(error = %error, "background task completed with an error");
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
                 }
-                Err(join_err) => {
+                Err(join_error) => {
                     tracing::error!(
-                        error = ?join_err,
-                        is_panic = join_err.is_panic(),
+                        error = ?join_error,
+                        is_panic = join_error.is_panic(),
                         "background task did not complete cleanly"
                     );
+                    if first_error.is_none() {
+                        first_error = Some(anyhow::Error::new(join_error));
+                    }
                 }
             }
         }
+        first_error
     })
-    .await
-    {
-        Ok(()) => {}
+    .await;
+
+    let shutdown_error = match drain {
+        Ok(error) => error,
         Err(_elapsed) => {
             tracing::warn!("background tasks did not drain within 10s; aborting");
             tasks.abort_all();
-            // Give aborted tasks a brief moment to drop their connections
-            // before we close the pool underneath them.
             tokio::time::sleep(Duration::from_millis(250)).await;
+            Some(anyhow::anyhow!(
+                "background tasks exceeded the 10 second shutdown grace period"
+            ))
         }
-    }
-
-    // ---- close database pool ----------------------------------------------
+    };
 
     db::close_pool(pool).await;
-
-    // ---- OTel shutdown ----------------------------------------------------
-    //
-    // `force_flush` and `shutdown` on `SdkTracerProvider` are synchronous
-    // (not async) in opentelemetry_sdk 0.32. Run them on a blocking thread
-    // with a 5-second timeout.
 
     #[cfg(feature = "otel")]
     {
@@ -145,5 +115,9 @@ pub async fn wait(
         }
     }
 
-    Ok(())
+    if let Some(error) = shutdown_error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
