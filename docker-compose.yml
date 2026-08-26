@@ -69,6 +69,7 @@ services:
       JWT_PRIVATE_KEY_PEM: "${JWT_PRIVATE_KEY_PEM:?JWT_PRIVATE_KEY_PEM must be set}"
       JWT_PUBLIC_KEY_PEM: "${JWT_PUBLIC_KEY_PEM:?JWT_PUBLIC_KEY_PEM must be set}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}"
+      ADMIN_USER_ID: "${ADMIN_USER_ID:-00000000-0000-0000-0000-000000000001}"
       RUST_LOG: info
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
