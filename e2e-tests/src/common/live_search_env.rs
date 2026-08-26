@@ -27,7 +27,8 @@ use live_search::state;
 
 #[derive(Debug, Clone)]
 pub struct LiveSearchConfig {
-    /// Directory containing cargo-leptos build artifacts.
+    /// Directory containing cargo-leptos build artifacts. Optional for HTTP
+    /// SSR tests; browser hydration tests set `LIVE_SEARCH_PKG_DIR` explicitly.
     pub pkg_dir: Option<PathBuf>,
 }
 
@@ -50,8 +51,8 @@ impl LiveSearchEnv {
     /// Start the production live-search route tree on a random local port.
     ///
     /// # Errors
-    /// Returns an error if Postgres, Leptos configuration, build assets,
-    /// application state, binding, or readiness checks fail.
+    /// Returns an error if Postgres, Leptos configuration, application state,
+    /// an explicitly configured asset directory, binding, or readiness fails.
     pub async fn start() -> Result<Self> {
         Self::start_with(LiveSearchConfig::default()).await
     }
@@ -70,9 +71,6 @@ impl LiveSearchEnv {
         let shutdown = CancellationToken::new();
 
         // Server functions use the same AppContext mechanism as production.
-        // SharedServer constructs this fixture once per integration-test binary,
-        // so an existing value indicates a broken duplicate bootstrap rather
-        // than something to silently ignore.
         let ctx = Arc::new(live_search::state::AppContext::new(
             server_pool.clone(),
             tx.clone(),
@@ -94,20 +92,18 @@ impl LiveSearchEnv {
             )
             .route("/api/{*fn_name}", any(handle_server_fns));
 
-        // Browser tests are real hydration tests, so missing client artifacts
-        // are a fixture error rather than a reason to serve SSR-only HTML.
-        let pkg_dir = cfg.pkg_dir.ok_or_else(|| {
-            anyhow::anyhow!(
-                "LIVE_SEARCH_PKG_DIR must point to cargo-leptos site/pkg for browser E2E tests"
-            )
-        })?;
-        if !pkg_dir.exists() {
-            return Err(anyhow::anyhow!(
-                "LIVE_SEARCH_PKG_DIR points at {} but the directory does not exist",
-                pkg_dir.display()
-            ));
+        // HTTP-level tests need only SSR. Browser tests set an explicit package
+        // directory and therefore fail visibly if the hydration artifacts are
+        // absent, without making ordinary integration tests depend on a WASM build.
+        if let Some(pkg_dir) = cfg.pkg_dir.as_ref() {
+            if !pkg_dir.exists() {
+                return Err(anyhow::anyhow!(
+                    "LIVE_SEARCH_PKG_DIR points at {} but the directory does not exist",
+                    pkg_dir.display()
+                ));
+            }
+            router = router.nest_service("/pkg", tower_http::services::ServeDir::new(pkg_dir));
         }
-        router = router.nest_service("/pkg", tower_http::services::ServeDir::new(pkg_dir));
 
         let ctx_for_shell = Arc::clone(&ctx);
         let shell_options = leptos_options.clone();
@@ -119,8 +115,6 @@ impl LiveSearchEnv {
             })
             .route("/health", get(|| async { (StatusCode::OK, "ok") }))
             .fallback(fallback_handler)
-            // Router::layer only covers routes already present; keep global
-            // tracing last just like production bootstrap.
             .layer(TraceLayer::new_for_http());
         let router: Router<()> = router.with_state(leptos_options);
 
