@@ -11,15 +11,9 @@ use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
 /// RAII guard for a test-scoped Postgres database.
-///
-/// The container is dropped (and thus stopped) when the test completes, even on
-/// panic via `Drop`.
 pub struct TestEnv {
     pool: PgPool,
     connection_string: String,
-    /// Held for its `Drop` side-effect, which stops the testcontainer when the
-    /// test scope ends. Never read explicitly — the field needs to stay alive
-    /// on `Self` until `Drop` runs.
     #[allow(dead_code, reason = "Kept alive for Drop side-effect on TestEnv")]
     container: Box<ContainerAsync<Postgres>>,
 }
@@ -35,10 +29,8 @@ impl std::fmt::Debug for TestEnv {
 }
 
 impl TestEnv {
-    /// Start a fresh Postgres 17 container, connect, run all migrations.
-    ///
-    /// The `DATABASE_URL` environment variable is **not** consulted — this
-    /// function always uses testcontainers for reliable isolation.
+    /// Start a fresh Postgres 17 container, connect, and run the workspace's
+    /// complete migration history.
     ///
     /// # Errors
     /// Returns an error if the container cannot start, the pool cannot connect,
@@ -62,15 +54,10 @@ impl TestEnv {
             .await
             .context("Failed to connect to Postgres testcontainer")?;
 
-        // Run live-search migrations to create the search_results table.
-        // NOTE: gateway migrations (refresh_tokens table) are NOT run here
-        // because they use overlapping version numbers in the shared
-        // _sqlx_migrations table. Gateway-specific e2e tests target the real
-        // gateway service via HTTP, not this pool.
-        sqlx::migrate!("../live-search/migrations")
+        sqlx::migrate!("../migrations")
             .run(&pool)
             .await
-            .context("Failed to run live-search migrations")?;
+            .context("Failed to run workspace migrations")?;
 
         Ok(Self {
             pool,
@@ -79,13 +66,11 @@ impl TestEnv {
         })
     }
 
-    /// Borrow the database pool.
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    /// The connection string used to connect to the testcontainer.
     #[must_use]
     pub fn connection_string(&self) -> &str {
         &self.connection_string
