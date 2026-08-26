@@ -28,8 +28,10 @@ leptos_router = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# sqlx-otel 0.5 targets the same SQLx/OpenTelemetry generation as this
-# workspace (sqlx 0.9 + opentelemetry 0.32) and has MSRV 1.94.
+# sqlx-otel 0.5 is now compatible with sqlx 0.9 + opentelemetry 0.32, but the
+# dependency/lockfile upgrade is intentionally kept out of this correctness PR
+# so `--locked` builds remain reproducible. Upgrade Cargo.toml and Cargo.lock
+# together in the dependency-refresh pass.
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0.18"
@@ -62,7 +64,7 @@ opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
 tracing-opentelemetry = "0.33"
 axum-tracing-opentelemetry = "0.38"
-sqlx-otel = "0.5"
+sqlx-otel = "0.3"
 console-subscriber = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
