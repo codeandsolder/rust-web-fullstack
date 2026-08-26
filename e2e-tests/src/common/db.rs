@@ -32,12 +32,13 @@ impl TestEnv {
     /// Start a fresh Postgres 17 container, connect, run the workspace's
     /// complete migration history, and insert a small deterministic fixture row.
     ///
-    /// The fixture makes browser tests independent of libtest execution order;
-    /// tests that need additional rows should still insert their own data.
+    /// The Docker host comes from testcontainers rather than being hard-coded to
+    /// localhost. This matters when CI uses `DOCKER_HOST=tcp://docker:2375` and
+    /// the published port lives on the Docker service container.
     ///
     /// # Errors
-    /// Returns an error if the container cannot start, the pool cannot connect,
-    /// migrations fail, or the fixture row cannot be inserted.
+    /// Returns an error if the container cannot start, its host/port cannot be
+    /// resolved, the pool cannot connect, migrations fail, or seeding fails.
     pub async fn postgres() -> Result<Self> {
         let container = Postgres::default()
             .with_tag("17-alpine")
@@ -45,13 +46,17 @@ impl TestEnv {
             .await
             .context("Failed to start Postgres testcontainer")?;
 
+        let host = container
+            .get_host()
+            .await
+            .context("Failed to resolve Docker host for Postgres testcontainer")?;
         let host_port = container
             .get_host_port_ipv4(5432)
             .await
             .context("Failed to get Postgres host port")?;
 
         let connection_string =
-            format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+            format!("postgres://postgres:postgres@{host}:{host_port}/postgres");
 
         let pool = PgPool::connect(&connection_string)
             .await
@@ -62,10 +67,6 @@ impl TestEnv {
             .await
             .context("Failed to run workspace migrations")?;
 
-        // Browser search tests must not depend on another integration test
-        // having happened to seed the shared fixture first. Use a URL that is
-        // distinct from the per-test rows in live_search_test.rs so the URL
-        // uniqueness constraint remains useful.
         sqlx::query(
             "INSERT INTO search_results (title, url, snippet) \
              VALUES ($1, $2, $3) ON CONFLICT (url) DO NOTHING",
