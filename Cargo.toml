@@ -28,13 +28,8 @@ leptos_router = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# sqlx 0.9 has no built-in `tracing` feature. `sqlx-otel` would be the
-# natural drop-in for per-query spans, BUT `sqlx-otel 0.3.0` predates sqlx 0.9
-# and pulls in `sqlx 0.8.6` + `opentelemetry 0.31.0` alongside the workspace's
-# `sqlx 0.9` + `opentelemetry 0.32`. The dep is kept here as a placeholder for
-# the eventual 0.9-compatible release — do NOT enable `--features otel` on
-# `live-search` until upstream ships a compatible version, or until you verify
-# your OTel collector accepts the dual-versioned tree.
+# sqlx-otel 0.5 targets the same SQLx/OpenTelemetry generation as this
+# workspace (sqlx 0.9 + opentelemetry 0.32) and has MSRV 1.94.
 sqlx = { version = "0.9", features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0.18"
@@ -67,7 +62,7 @@ opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
 tracing-opentelemetry = "0.33"
 axum-tracing-opentelemetry = "0.38"
-sqlx-otel = "0.3"
+sqlx-otel = "0.5"
 console-subscriber = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
@@ -82,8 +77,9 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 # Shared domain types (no framework dependencies).
 rwf-domain = { path = "crates/domain" }
 
-# Shared Leptos axum helpers (currently the doubled-prefix server-fn probe).
-# rlib only: the probe uses leptos_axum::handle_server_fns (SSR-only).
+# Deprecated compatibility shim around `leptos_axum::handle_server_fns`.
+# New code should call leptos_axum directly; this remains only for source
+# compatibility until downstream users have migrated.
 leptos-utils = { path = "crates/leptos-utils" }
 
 [workspace.lints.rust]
