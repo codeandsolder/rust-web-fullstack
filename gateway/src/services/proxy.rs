@@ -14,7 +14,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::AppError;
 use crate::gateway::GatewayState;
@@ -42,7 +42,7 @@ impl ServiceModule for ProxyService {
 }
 
 /// Typed query parameters for `/proxy/check`.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyCheckQuery {
     /// IP to inspect. Defaults to Google's public DNS address for the demo.
