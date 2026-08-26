@@ -34,9 +34,10 @@ RUN --mount=type=cache,target=/var/cache/sccache \
 RUN --mount=type=cache,target=/var/cache/sccache \
     cargo build --locked --release -p i18n-demo --features ssr
 
-# Pinned by digest for reproducible builds.
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
-RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app && chown -R app:app /app
+RUN groupadd -r app && \
+    useradd -r -g app -d /app -s /usr/sbin/nologin app && \
+    mkdir -p /app && chown -R app:app /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates wget && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
