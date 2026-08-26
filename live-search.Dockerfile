@@ -5,9 +5,6 @@
 #   2. planner: produce a recipe.json over the whole workspace.
 #   3. builder: cargo chef cook the recipe (cached dependency build),
 #      then copy source and build the binary.
-#
-# cargo-chef replaces the hand-rolled "copy manifests + dummy sources"
-# dance that breaks the moment someone adds a new workspace member.
 FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /build
@@ -23,9 +20,6 @@ RUN rustup target add wasm32-unknown-unknown && \
     cargo install leptosfmt --locked && \
     cargo install sccache --locked
 ENV RUSTC_WRAPPER=sccache
-# BuildKit cache mount keeps sccache state across `RUN` steps within a
-# single build (the volume-mount trick used previously does NOT persist
-# across `RUN` boundaries).
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,target=/var/cache/sccache \
     cargo chef cook --recipe-path recipe.json --locked --release \
@@ -46,16 +40,17 @@ RUN --mount=type=cache,target=/var/cache/sccache \
 RUN --mount=type=cache,target=/var/cache/sccache \
     cargo build --locked --release -p live-search --features ssr
 
-# Pinned by digest for reproducible builds.
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
-RUN groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app && chown -R app:app /app
+RUN groupadd -r app && \
+    useradd -r -g app -d /app -s /usr/sbin/nologin app && \
+    mkdir -p /app && chown -R app:app /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 ca-certificates wget && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /build/target/release/live-search /app/
 COPY --from=builder /build/site/pkg /app/site/pkg
-COPY live-search/migrations /app/migrations
-# Mirror the stylance build output where the SSR shell expects it.
+# SQLx migrations are embedded at compile time from the workspace-level
+# `migrations/` directory; no runtime migration files are required.
 RUN mkdir -p /app/pkg && cp /app/site/pkg/live-search.css /app/pkg/ 2>/dev/null || true && \
     cp /app/site/pkg/live_search.js /app/pkg/ 2>/dev/null || true && \
     cp /app/site/pkg/live_search_bg.wasm /app/pkg/ 2>/dev/null || true
