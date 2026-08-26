@@ -145,7 +145,10 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .await
         .context("failed to create database pool")?;
 
-    sqlx::migrate!("./migrations")
+    // One migration history is shared by every service that uses this database.
+    // This prevents SQLx from rejecting versions applied by another service as
+    // "missing from resolved migrations".
+    sqlx::migrate!("../migrations")
         .run(&pool)
         .await
         .context("failed to run database migrations")?;
@@ -223,7 +226,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .route("/health", get(health_handler))
         .fallback(fallback_handler);
 
-    // Prometheus metrics endpoint — available when `otel` feature is active.
     #[cfg(feature = "otel")]
     let router = {
         use axum_prometheus::PrometheusMetricLayer;
