@@ -77,7 +77,7 @@ steps:
       DOCKER_HOST: tcp://docker:2375
       DOCKER_TLS_CERTDIR: ""
     commands:
-      - docker info
+      - until docker info >/dev/null 2>&1; do sleep 1; done
       - docker build -f live-search.Dockerfile -t rwf-live-search:test .
       - docker build -f i18n-demo.Dockerfile -t rwf-i18n-demo:test .
       - docker build -f gateway.Dockerfile -t rwf-gateway:test .
@@ -95,12 +95,14 @@ steps:
     environment:
       DOCKER_HOST: tcp://docker:2375
       DOCKER_TLS_CERTDIR: ""
-      CHROME: /usr/bin/chromium
+      CHROME_PATH: /usr/bin/chromium
+      LIVE_SEARCH_PKG_DIR: live-search/target/site/pkg
     commands:
       - apt-get update
       - apt-get install -y --no-install-recommends chromium ca-certificates
       - rm -rf /var/lib/apt/lists/*
       - chromium --version
+      - test -f "$LIVE_SEARCH_PKG_DIR/live_search.js"
       - cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
     depends_on:
       - fmt
