@@ -32,8 +32,6 @@ pub struct GatewayState {
     pub modules: Vec<Arc<dyn ServiceModule>>,
     pub settings: settings::Settings,
     pub proxy_upstream_url: Arc<str>,
-    /// Refresh-token storage. Production startup requires this; `None` remains
-    /// supported for isolated router/unit tests and reports unhealthy.
     pub db_pool: Option<sqlx::PgPool>,
     pub refresh_token_ttl_secs: i64,
     pub access_token_ttl_secs: i64,
@@ -56,12 +54,11 @@ impl std::fmt::Debug for GatewayState {
     }
 }
 
-/// Convenience constructor for callers that do not inject state explicitly.
+/// Convenience constructor for non-production callers.
 ///
-/// This constructor does not create a database pool because it is synchronous;
-/// routes that require refresh-token storage will therefore fail closed and the
-/// aggregate health endpoint reports the database as not configured. Production
-/// startup uses [`build_gateway_with_settings`] after creating its DB pool.
+/// This synchronous wrapper cannot create a DB pool, so DB-backed auth routes
+/// fail closed and `/health` reports the database as not configured. Production
+/// startup uses [`build_gateway_with_settings`] after connecting to Postgres.
 ///
 /// # Errors
 /// Returns an error for invalid settings/configuration or router setup.
@@ -72,16 +69,16 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
         .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
     let access_token_ttl_secs = i64::try_from(cfg.gateway.access_token_ttl_secs)
         .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
-    if refresh_token_ttl_secs <= 0 || access_token_ttl_secs <= 0 {
-        anyhow::bail!("gateway token TTLs must be positive");
-    }
 
-    let mut settings = settings::Settings::load()?;
-    settings.access_token_ttl_secs = access_token_ttl_secs;
+    let mut runtime_settings = settings::Settings::load()?;
+    runtime_settings.access_token_ttl_secs = access_token_ttl_secs;
+    runtime_settings.allowed_origins = Arc::from(cfg.gateway.cors.allowed_origins.as_str());
+    runtime_settings.sse_broadcast_buffer = cfg.gateway.sse_broadcast_buffer;
+    runtime_settings.session.cookie_secure = cfg.gateway.session.cookie_secure;
 
     build_gateway_with_settings(
         modules,
-        settings,
+        runtime_settings,
         cfg.gateway.proxy_upstream_url,
         None,
         refresh_token_ttl_secs,
@@ -110,11 +107,12 @@ pub fn build_gateway_with_settings(
     if refresh_token_ttl_secs <= 0 || access_token_ttl_secs <= 0 {
         anyhow::bail!("gateway token TTLs must be positive");
     }
-    // Keep the token issuer and the state metadata on one value even for test
-    // callers that construct Settings independently.
+    if settings.sse_broadcast_buffer == 0 {
+        anyhow::bail!("gateway SSE broadcast buffer must be greater than zero");
+    }
     settings.access_token_ttl_secs = access_token_ttl_secs;
 
-    let (tx, _rx) = broadcast::channel(256);
+    let (tx, _rx) = broadcast::channel(settings.sse_broadcast_buffer);
 
     let service_infos: Vec<ServiceInfo> = modules
         .iter()
@@ -155,10 +153,9 @@ pub fn build_gateway_with_settings(
     use tower_governor::GovernorLayer;
     use tower_governor::governor::GovernorConfigBuilder;
 
-    // Peer-IP limiting is intentionally retained by default. Forwarded IP
-    // headers are attacker-controlled unless a deployment has a trusted proxy
-    // boundary; blindly switching to SmartIpKeyExtractor would make the limiter
-    // spoofable on direct deployments.
+    // Peer-IP limiting is the safe default for directly exposed deployments.
+    // Forwarded headers must only be trusted behind a configured trusted proxy;
+    // blindly using SmartIpKeyExtractor would let direct clients spoof identity.
     let login_governor_cfg = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(1)
@@ -185,7 +182,7 @@ pub fn build_gateway_with_settings(
     let refresh_governor = GovernorLayer::new(refresh_governor_cfg);
     let general_governor = GovernorLayer::new(general_governor_cfg);
 
-    let cors = crate::cors::cors_layer();
+    let cors = crate::cors::cors_layer(state.settings.allowed_origins.as_ref());
     let session_layer = crate::session::session_layer(&state.settings.session);
     let csrf_middleware = axum::middleware::from_fn(crate::csrf::CsrfMiddleware::middleware);
 
@@ -253,8 +250,6 @@ pub fn build_gateway_with_settings(
         .merge(refresh_router)
         .merge(other_router)
         .merge(session_router)
-        // Last-added middleware executes first on requests. Session must be
-        // outside per-route CSRF middleware so the latter can extract Session.
         .layer(session_layer)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
@@ -266,8 +261,6 @@ pub fn build_gateway_with_settings(
         .layer(axum::middleware::from_fn(crate::cors::csp_middleware))
         .with_state(state);
 
-    // Installing a W3C propagator alone is not enough: this middleware reads
-    // incoming traceparent/tracestate and establishes the request span parent.
     #[cfg(feature = "otel")]
     let app = app.layer(
         axum_tracing_opentelemetry::middleware::OtelAxumLayer::default(),
@@ -276,9 +269,7 @@ pub fn build_gateway_with_settings(
     Ok(app)
 }
 
-/// Per-module/dependency health probe timeout.
 pub const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-
 pub const REFRESH_RATE_PER_SECOND: u64 = 1;
 pub const REFRESH_BURST_SIZE: u32 = 5;
 
