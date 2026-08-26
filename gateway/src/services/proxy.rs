@@ -2,18 +2,8 @@
 //!
 //! Forwards IP geolocation / threat queries to a configurable upstream API
 //! (default: <https://ipapi.co>) and publishes SSE events for live dashboards.
-//!
-//! The upstream URL is set via the `PROXY_UPSTREAM_URL` environment variable
-//! and stored in [`GatewayState::proxy_upstream_url`].
-//!
-//! # DTOs
-//!
-//! All response types implement [`Serialize`], [`Deserialize`], and
-//! `utoipa::ToSchema` for `OpenAPI` documentation.
 
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use axum::{
     Router,
@@ -51,97 +41,78 @@ impl ServiceModule for ProxyService {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
+/// Typed query parameters for `/proxy/check`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyCheckQuery {
+    /// IP to inspect. Defaults to Google's public DNS address for the demo.
+    pub ip: Option<IpAddr>,
+}
 
-/// Proxy check response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ProxyCheckResponse {
-    /// The checked IP address.
     pub ip: String,
-    /// Country name.
     pub country: String,
-    /// Whether the IP is a known proxy / VPN.
     pub proxy: bool,
-    /// Risk score (0–1).
     pub risk_score: f64,
 }
 
-/// A single history entry.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HistoryEntry {
-    /// RFC3339 timestamp.
     pub timestamp: String,
-    /// Check status.
     pub status: String,
 }
 
-/// Proxy check history response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ProxyHistoryResponse {
-    /// List of historical check results.
     pub history: Vec<HistoryEntry>,
 }
 
-/// Health check response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ProxyHealthResponse {
     pub status: String,
     pub service: String,
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/// Run an IP proxy check against the configured upstream API and publish an
-/// SSE event so live dashboards can react.
-///
-/// Accepts an optional `?ip=` query parameter (defaults to `8.8.8.8`).
 #[utoipa::path(
     get,
     path = "/proxy/check",
+    params(ProxyCheckQuery),
     responses(
         (status = 200, description = "Proxy check result", body = ProxyCheckResponse),
         (status = 400, description = "Invalid request parameters"),
-        (status = 503, description = "Upstream API unavailable"),
+        (status = 502, description = "Upstream API unavailable"),
     ),
     tag = "proxy",
 )]
 async fn check_handler(
     State(state): State<GatewayState>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(params): Query<ProxyCheckQuery>,
 ) -> Result<Json<ProxyCheckResponse>, AppError> {
-    let raw_ip = params
-        .get("ip")
-        .cloned()
-        .unwrap_or_else(|| "8.8.8.8".to_string());
+    let parsed_ip = params
+        .ip
+        .unwrap_or(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
 
-    // Validate the IP strictly. The upstream API would also reject bad
-    // input, but we never want to forward arbitrary user-supplied path
-    // segments into an outbound URL — that turns the proxy into an
-    // open-redirect / SSRF surface regardless of the upstream.
-    let parsed_ip = IpAddr::from_str(&raw_ip)
-        .map_err(|_| AppError::BadRequest("ip must be a valid IPv4 or IPv6 address".into()))?;
-
-    let url = format!("{}/{}/json/", state.proxy_upstream_url, parsed_ip);
-    let upstream = state.http_client.get(&url).send().await.map_err(|e| {
-        tracing::warn!(error = %e, upstream_url = %url, "upstream fetch failed");
-        AppError::internal("upstream fetch failed", e)
-    })?;
+    let base = state.proxy_upstream_url.trim_end_matches('/');
+    let url = format!("{base}/{parsed_ip}/json/");
+    let upstream = state
+        .http_client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| AppError::upstream("proxy request failed", e))?;
 
     if !upstream.status().is_success() {
-        return Err(AppError::internal(
-            "upstream returned non-2xx",
-            std::io::Error::other(format!("upstream returned status {}", upstream.status())),
+        return Err(AppError::upstream(
+            "proxy upstream returned non-success status",
+            std::io::Error::other(format!("status {}", upstream.status())),
         ));
     }
 
     let body: serde_json::Value = upstream
         .json()
         .await
-        .map_err(|e| AppError::internal("upstream response parse failed", e))?;
+        .map_err(|e| AppError::upstream("proxy upstream response parse failed", e))?;
 
     let country = body
         .get("country_name")
@@ -159,7 +130,6 @@ async fn check_handler(
         .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
 
-    // Publish an SSE event for live dashboards
     sse::publish_event(
         &state.tx,
         GatewayEvent::Custom(
@@ -181,7 +151,6 @@ async fn check_handler(
     }))
 }
 
-/// Return mock proxy check history.
 #[utoipa::path(
     get,
     path = "/proxy/check/history",
@@ -205,12 +174,11 @@ async fn check_history_handler() -> Json<ProxyHistoryResponse> {
     })
 }
 
-/// Proxy service health check.
 #[utoipa::path(
     get,
     path = "/proxy/health",
     responses(
-        (status = 200, description = "Proxy service healthy", body = ProxyHealthResponse),
+        (status = 200, description = "Proxy service process healthy", body = ProxyHealthResponse),
     ),
     tag = "proxy",
 )]
