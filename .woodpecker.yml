@@ -61,6 +61,9 @@ steps:
       - cargo install cargo-leptos --locked
       - cargo install stylance-cli --locked
       - cargo leptos build --release -p live-search
+      - mkdir -p live-search/target/site/pkg
+      - stylance live-search --output-file live-search/target/site/pkg/live-search.css
+      - test -s live-search/target/site/pkg/live-search.css
       - cargo leptos build --release -p i18n-demo
     depends_on:
       - clippy
@@ -76,6 +79,7 @@ steps:
     environment:
       DOCKER_HOST: tcp://docker:2375
       DOCKER_TLS_CERTDIR: ""
+      DOCKER_BUILDKIT: "1"
     commands:
       - until docker info >/dev/null 2>&1; do sleep 1; done
       - docker build -f live-search.Dockerfile -t rwf-live-search:test .
@@ -102,7 +106,8 @@ steps:
       - apt-get install -y --no-install-recommends chromium ca-certificates
       - rm -rf /var/lib/apt/lists/*
       - chromium --version
-      - test -f "$LIVE_SEARCH_PKG_DIR/live_search.js"
+      - test -s "$LIVE_SEARCH_PKG_DIR/live_search.js"
+      - test -s "$LIVE_SEARCH_PKG_DIR/live-search.css"
       - cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
     depends_on:
       - fmt
