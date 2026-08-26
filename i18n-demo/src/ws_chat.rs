@@ -19,17 +19,12 @@ use uuid::Uuid;
 
 const HUB_CAPACITY: usize = 256;
 
-/// One chat event circulating through the hub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatEvent {
-    /// Per-message UUID v4 for de-duplication/threading.
     pub id: Uuid,
-    /// Random identifier assigned to the sending connection.
     pub from: Uuid,
     /// UTC timestamp serialized by Chrono as RFC3339.
     pub at: chrono::DateTime<chrono::Utc>,
-    /// Chat payload. The WebSocket protocol configuration caps complete
-    /// messages and individual frames at [`Self::MAX_TEXT_BYTES`].
     pub text: String,
 }
 
@@ -53,11 +48,6 @@ static HUB: LazyLock<broadcast::Sender<ChatEvent>> = LazyLock::new(|| {
     tx
 });
 
-/// Return true when a browser Origin has the same authority as the Host header.
-///
-/// Browsers send origins without a path, but accepting an optional trailing
-/// slash keeps the comparison robust. Requests without Origin are allowed so
-/// non-browser WebSocket clients remain usable.
 fn origin_matches_host(origin: &str, host: &str) -> bool {
     let Some(without_scheme) = origin
         .strip_prefix("http://")
@@ -74,7 +64,7 @@ fn origin_matches_host(origin: &str, host: &str) -> bool {
 /// Browser-originated upgrades must be same-origin. The protocol layer rejects
 /// oversized frames/messages before application code receives them; the
 /// in-loop length check remains as defense in depth.
-pub fn chat_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+pub async fn chat_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
     if let Some(origin_value) = headers.get(ORIGIN) {
         let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
             return StatusCode::FORBIDDEN.into_response();
@@ -125,9 +115,6 @@ async fn handle_socket(socket: WebSocket) {
             broadcast = rx.recv() => {
                 match broadcast {
                     Ok(event) => {
-                        // The sender has its own Receiver attached to HUB, so without
-                        // this check it receives its own event despite the public docs
-                        // promising fan-out to every *other* client.
                         if event.from == from {
                             continue;
                         }
