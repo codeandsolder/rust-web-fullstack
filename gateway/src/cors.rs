@@ -1,57 +1,27 @@
 //! Shared CORS and CSP configuration for gateway and tests.
-//!
-//! Explicitly allowed origins are credential-enabled so the session-cookie
-//! example works across the documented development origins. The wildcard
-//! debug mode intentionally does not allow credentials: browsers forbid
-//! combining credentialed CORS with wildcard origins/methods/headers.
 
 use axum::http::{HeaderName, HeaderValue};
 use tower_http::cors::{AllowHeaders, AllowMethods, Any, CorsLayer};
 
-/// Build credentialed CORS for a concrete origin allowlist.
 fn credentialed(origins: Vec<HeaderValue>) -> CorsLayer {
     CorsLayer::new()
         .allow_credentials(true)
-        // With credentials, tower-http rejects wildcard methods/headers.
-        // Mirroring the preflight request keeps the demo general without
-        // producing an invalid `*` + credentials response.
         .allow_methods(AllowMethods::mirror_request())
         .allow_headers(AllowHeaders::mirror_request())
         .allow_origin(origins)
 }
 
-/// Default CORS allowlist used when `ALLOWED_ORIGINS` is unset or empty.
-fn localhost_default() -> CorsLayer {
-    credentialed(
-        [
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://localhost:3002",
-        ]
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect(),
-    )
-}
-
-/// Build the canonical CORS layer.
+/// Build CORS from the already-resolved gateway allowlist.
 ///
-/// Resolution:
-/// - unset/empty → credentialed localhost development allowlist;
-/// - `*` → non-credentialed permissive debug mode;
-/// - comma-separated origins → credentialed explicit allowlist.
-pub fn cors_layer() -> CorsLayer {
-    let raw = std::env::var("ALLOWED_ORIGINS").unwrap_or_default();
-    let trimmed = raw.trim();
-
-    if trimmed.is_empty() {
-        return localhost_default();
-    }
+/// `*` is deliberately non-credentialed. Concrete origin lists are
+/// credential-enabled so session cookies work across configured origins.
+#[must_use]
+pub fn cors_layer(allowed_origins: &str) -> CorsLayer {
+    let trimmed = allowed_origins.trim();
 
     if trimmed == "*" {
         tracing::warn!(
-            "CORS: ALLOWED_ORIGINS=* permits any origin and disables credentialed CORS. \
-             This is a debug-only mode; do not use in production."
+            "CORS allowlist is `*`: permitting any origin without credentials; debug only"
         );
         return CorsLayer::new()
             .allow_methods(Any)
@@ -62,7 +32,7 @@ pub fn cors_layer() -> CorsLayer {
     let origins: Vec<HeaderValue> = trimmed
         .split(',')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|origin| !origin.is_empty())
         .filter_map(|origin| match origin.parse() {
             Ok(value) => Some(value),
             Err(e) => {
@@ -73,21 +43,13 @@ pub fn cors_layer() -> CorsLayer {
         .collect();
 
     if origins.is_empty() {
-        // Fail closed: an invalid explicit allowlist should not silently turn
-        // into the localhost default or an allow-any policy.
-        tracing::error!("ALLOWED_ORIGINS contained no valid origins; CORS will deny all origins");
+        tracing::error!("CORS allowlist contains no valid origins; cross-origin requests denied");
     }
 
     credentialed(origins)
 }
 
-/// Build a CSP middleware suitable for the gateway's HTML pages.
-///
-/// The showcase still permits inline scripts/styles because Swagger/SSR demo
-/// pages rely on them. It does **not** require `unsafe-eval`. The remaining
-/// baseline directives explicitly deny plugins/embedding and restrict base/form
-/// targets. Production applications should replace inline allowances with
-/// nonces or hashes.
+/// Add a baseline CSP if the response has not already supplied one.
 #[allow(
     clippy::unused_async,
     reason = "axum middleware handlers await next.run(request)"
@@ -109,9 +71,8 @@ pub async fn csp_middleware(
     );
     const HEADER: HeaderName = HeaderName::from_static("content-security-policy");
 
-    // A small custom middleware is kept for explicit "if not present"
-    // semantics. `SetResponseHeaderLayer` would also work; axum's Body does
-    // not need to implement Clone for that layer.
+    // SetResponseHeaderLayer would also work; the custom middleware is kept
+    // only because the "if not already supplied" behavior is explicit here.
     let mut response = next.run(request).await;
     if !response.headers().contains_key(&HEADER) {
         response.headers_mut().insert(HEADER, POLICY);
