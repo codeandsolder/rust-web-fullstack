@@ -1,381 +1,264 @@
 # rust-web-fullstack
 
-A working showcase of **Leptos 0.8 + PostgreSQL + Axum** patterns from the `rust-web-fullstack` skill.
-Four example crates demonstrating full-stack Rust patterns with server-side rendering,
-hydration assets, real-time database notifications, service-oriented routing,
-compile-time-checked internationalization, and end-to-end testing.
+A reference workspace for **Leptos 0.8 + Axum 0.8 + PostgreSQL/sqlx 0.9**.
+It is intentionally small enough to study, but exercises the failure modes that
+toy examples usually omit: SSR + hydration assets, durable recovery around
+LISTEN/NOTIFY, rotating refresh tokens, typed configuration, readiness checks,
+Docker builds, and real browser E2E tests.
 
-## What It Demonstrates
+## Workspace
 
-| Crate | Pattern | Highlights |
-|-------|---------|------------|
-| **live-search** | Full-stack Leptos SSR + PostgreSQL FTS | PgListener + SSE push, sqlx migrations, full-text search with `tsvector`, reactive UI |
-| **gateway** | ServiceModule trait + multi-service composition | JWT auth middleware, Tower service layers, mock modular services |
-| **i18n-demo** | Compile-time-checked internationalization | `leptos_i18n` 0.6 with JSON locales, `t!` macro, runtime locale switcher (EN ↔ DE) |
-| **e2e-tests** | chromiumoxide E2E tests | Browser automation, SSE stream validation, cross-service integration |
+| Path | What it demonstrates |
+|---|---|
+| `live-search/` | Leptos SSR/hydration, PostgreSQL FTS + pg_trgm search, Moka cache, PgListener, SSE |
+| `gateway/` | composable Axum services, Ed25519 JWTs, rotating refresh tokens, sessions/CSRF/CORS/CSP, OpenAPI |
+| `i18n-demo/` | compile-time-checked EN/DE translations and a hardened minimal WebSocket hub |
+| `e2e-tests/` | isolated Postgres via testcontainers plus chromiumoxide browser tests |
+| `crates/config/` | validated TOML + `RWF_*` environment configuration |
+| `crates/domain/` | framework-free domain types and invariants |
+| `migrations/` | the **single** SQLx migration history used by every service sharing the database |
 
-## Architecture
+The workspace uses Edition 2024 and pins Rust **1.94** as its supported toolchain/MSRV.
 
-```
-                           ┌─────────────────┐
-                           │    Browser       │
-                           │ (Leptos WASM)    │
-                           └──────┬──────────┘
-                                  │ HTTP / SSE
-                          ┌───────┴──────────┐
-                          │   Axum Router     │
-                          │   (:3000)         │
-                          │   live-search     │
-                          └───┬───────────────┘
-                              │ sqlx
-                      ┌───────┴──────────┐
-                      │   PostgreSQL 17   │
-                      │   FTS + NOTIFY    │
-                      └───────┬──────────┘
-                              │ PgListener
-                      ┌───────┴──────────┐
-                      │   SSE Stream      │
-                      │   (tokio + tower) │
-                      └──────────────────┘
+## Quick start
 
-┌──────────────────┐    ┌──────────────────┐
-│   Gateway (:3001)│    │  i18n-demo (:3002)│
-│   JWT Auth       │    │  leptos_i18n 0.6  │
-│   Mock services  │    │  EN ↔ DE switcher │
-│   ServiceModule  │    │  t! macro         │
-└──────────────────┘    └──────────────────┘
-```
-
-`i18n-demo` runs on port **3002** and has no DB dependency — the four
-crates are independent builds composed in `docker-compose.yml`.
-
-## Quick Start
-
-### Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/install/)
-- [Rust](https://rustup.rs/) 1.94 or later
-- [psql](https://www.postgresql.org/download/) (for manual seeding)
-- Chromium or Chrome for browser E2E tests
-
-### Docker Compose (recommended)
+Clone the repository:
 
 ```bash
-# Clone the repo
-git clone https://git.onhir.eu/jan/rust-web-fullstack.git
+git clone https://github.com/codeandsolder/rust-web-fullstack.git
 cd rust-web-fullstack
-
-# Production stack — requires JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM
-# supplied via the secrets manager. The gateway service in docker-compose.yml
-# is configured to refuse to start without them.
-docker compose up --build -d
-
-# OR for local exploration, use the dev profile with ephemeral keys:
-#   docker compose --profile dev up -d gateway-dev
-# This requires ALLOW_DEV_KEYS=1 + the --dev-keys flag, both of which the
-# gateway-dev service sets for you.
-
-# Seed the database with sample data
-SEED_ALLOW_DESTRUCTIVE=0 ./scripts/seed-db.sh
-
-# Check logs
-docker compose logs -f
-
-# Visit
-#   Live search: http://localhost:3000
-#   Gateway:     http://localhost:3001/health
 ```
 
-### Manual Setup
+For local exploration, start the dev stack explicitly. Listing the services keeps
+the production gateway (which requires real JWT keys) out of the command:
 
 ```bash
-# 1. Start PostgreSQL
-docker compose up -d postgres
-
-# 2. Seed the database
-./scripts/seed-db.sh
-
-# 3. Run live-search (SSR mode)
-DATABASE_URL=postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo \
-  cargo run -p live-search --features ssr
-
-# 4. In another terminal, run the gateway
-cargo run -p gateway-example
-
-# 5. In another terminal, run the i18n-demo (no DB needed)
-cargo run -p i18n-demo --features ssr
-
-# 6. Open http://localhost:3000 (live-search), http://localhost:3001/health (gateway),
-#    http://localhost:3002 (i18n-demo)
+docker compose --profile dev up --build \
+  postgres live-search i18n-demo gateway-dev
 ```
 
-## Tests
+Services:
+
+- live-search: <http://localhost:3000>
+- gateway-dev: <http://localhost:3001>
+- i18n-demo: <http://localhost:3002>
+- PostgreSQL: `localhost:5432`, database `rwf_demo`
+
+The dev gateway uses ephemeral Ed25519 keys and is deliberately guarded by
+`ALLOW_DEV_KEYS=1`. It also disables the session cookie's `Secure` flag because
+the Compose dev endpoint is plain localhost HTTP. Do not copy those two settings
+into production.
+
+## Production gateway configuration
+
+The normal `gateway` Compose service fails fast unless required secrets are
+provided:
 
 ```bash
-# Unit tests
-make test
+export JWT_PRIVATE_KEY_PEM='-----BEGIN PRIVATE KEY----- ...'
+export JWT_PUBLIC_KEY_PEM='-----BEGIN PUBLIC KEY----- ...'
+export ADMIN_PASSWORD='a-long-demo-password'
+export ADMIN_USER_ID='00000000-0000-0000-0000-000000000001' # optional override
 
-# E2E tests. The script starts PostgreSQL and both services, then runs
-# browser/API tests against the correct BASE_URL.
-make test-e2e
-
-# Or manually:
-./scripts/test-e2e.sh
+docker compose up --build postgres live-search gateway
 ```
 
-> E2E tests use the `browser-tests` feature flag for chromiumoxide-based browser tests. Run with: `cargo test -p e2e-tests --features browser-tests`.
+The password demo is intentionally bound to exactly one `ADMIN_USER_ID`. Knowing
+the demo password is **not** permission to choose an arbitrary UUID as a JWT
+subject. A real application should replace this credential pair with a user
+store and password hashing.
 
-## Feature Flags
+Access JWTs are short-lived (15 minutes by default). Refresh tokens are random
+opaque values; only their hashes are stored. Rotation is transactional, records
+replacement lineage, and revokes the whole token family if an already-used token
+is replayed. Logout revokes refresh state; an already-issued access JWT remains
+valid until its `exp` unless you add a separate access-token revocation system.
 
-The workspace defines **per-crate** Cargo feature flags that opt in to observability and developer tooling:
+## Configuration
 
-| Flag | Crates | Description |
-|------|--------|-------------|
-| `otel` | gateway, live-search | OpenTelemetry OTLP export via OTLP/HTTP+protobuf (reqwest+rustls). Off by default; requires a collector endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`). Wires `tracing-opentelemetry` and `axum-tracing-opentelemetry`. **SQLx query spans are pending `sqlx-otel` 0.9 compatibility** — do not rely on per-query spans yet. |
-| `dev-tools` | gateway, live-search | Development-only instrumentation: `console-subscriber` (Tokio console, requires `RUSTFLAGS="--cfg tokio_unstable"`), extra logging spans. Not for production. |
+`crates/config` loads:
 
-## EdDSA JWT Keys
+1. built-in defaults,
+2. `config.toml` (or `RWF_CONFIG`),
+3. `RWF_*` environment overrides.
 
-The gateway uses **EdDSA (Ed25519)** for JWT signing — the modern, fast, small-signature algorithm that supersedes HS256. The crypto backend is `aws-lc-rs` via `jsonwebtoken`'s `aws_lc_rs` feature, which is the recommended high-performance crypto provider for EdDSA in Rust. Each running gateway needs a key pair. Each issued JWT contains a unique `jti` (UUID) claim; combined with DB-backed refresh tokens this provides revocation support.
-
-Generate a fresh key pair with OpenSSL:
+Nested keys use `__`:
 
 ```bash
-# Private key (PKCS#8 PEM)
-openssl genpkey -algorithm ed25519 -out jwt-private.pem
-
-# Public key (SPKI PEM, derived from the private key)
-openssl pkey -in jwt-private.pem -pubout -out jwt-public.pem
+RWF_GATEWAY__PORT=4000
+RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://example.com
+RWF_GATEWAY__SESSION__COOKIE_SECURE=true
+RWF_GATEWAY__SSE_BROADCAST_BUFFER=512
+RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50
+RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER=512
 ```
 
-Point the gateway at the key files:
+The loader validates cross-field invariants such as nonzero broadcast capacity,
+positive timeouts/TTLs, and `pool_min_connections <= pool_max_connections`.
+Malformed security booleans fail startup instead of silently weakening a setting.
 
-```bash
-export JWT_PRIVATE_KEY_PEM="$(cat jwt-private.pem)"
-export JWT_PUBLIC_KEY_PEM="$(cat jwt-public.pem)"
-```
+Secrets such as `DATABASE_URL`, JWT keys, and the demo password remain deployment
+environment variables.
 
-Both environment variables must be set; `Settings::load` rejects empty or non-PEM values with a descriptive error.
+## One migration history
 
-**`--dev-keys` fallback**: for local exploration only, start the gateway binary with `ALLOW_DEV_KEYS=1 --dev-keys` (both required). The guard exists to prevent accidentally booting the gateway with ephemeral keys in production. When enabled, the startup logs FNV-1a fingerprints of the generated keys (not the keys themselves); the private key never leaves process memory or logs. Keys vanish on restart and clients cannot verify old tokens.
+Both live-search and gateway use the same PostgreSQL database in Compose, so they
+must also resolve the same SQLx migration set. The root `migrations/` directory is
+the only authoritative history and is used by both binaries and testcontainers.
 
-**Security note**: never commit private keys. `.gitignore` already excludes `.env`; keep it that way. The gateway requires real keys in production; for local exploration, use `ALLOW_DEV_KEYS=1 --dev-keys`.
+Do not add service-local SQLx migration directories against the same database;
+SQLx will otherwise see the other service's applied versions as missing.
 
-## Benchmarks
+## Live search and durable event recovery
 
-Criterion benchmarks ship with the live-search and gateway crates:
+Search combines PostgreSQL full-text search with a pg_trgm title fallback, so the
+trigram index is part of the actual query rather than decorative schema.
 
-- `cargo bench -p live-search` — search-result FTS query throughput.
-- `cargo bench -p gateway-example` — JWT sign/verify throughput.
+PostgreSQL LISTEN/NOTIFY is used for low-latency wakeups, **not** durable delivery.
+Reconnect recovery is driven by a durable `event_seq`:
 
-Run either with the criterion HTML reports enabled (`features = ["html_reports"]` is workspace-default).
+- inserts receive a transaction-serialized sequence value,
+- sequence order therefore matches visible commit order,
+- reconnect replay pages every row newer than the last delivered sequence,
+- the cursor advances during replay and normal notification delivery.
 
-## What's New (v3 Showcase Upgrade)
+This avoids the two classic broken approaches: ordering UUIDv4 values, and using
+a plain sequence as a high-water mark without accounting for concurrent commit
+order.
 
-This version brings the project to a high-end Rust 2026 showcase standard:
+The browser SSE feed uses named events (`connected`, `search_result`,
+`stream_lagged`). The client subscribes to each name it handles and does not mark
+itself connected merely because `EventSource::new()` succeeded.
 
-- **EdDSA JWT** with `aws-lc-rs` — replaces HS256. Key pair loaded from `JWT_PRIVATE_KEY_PEM` / `JWT_PUBLIC_KEY_PEM` env vars with a `--dev-keys` fallback.
-- **Refresh tokens** — `refresh_tokens` migration ships with full DB-backed rotation. `refresh_handler` accepts a `refresh_token` and atomically revokes/rotates. `logout_handler` revokes all of a subject's active refresh tokens (when a DB pool is configured). JWT access tokens are short-lived (24h) and use `EdDSA` (Ed25519).
-- **OpenTelemetry** — OTLP export behind the `otel` feature flag. Wires `tracing-opentelemetry`, `axum-tracing-opentelemetry`, `sqlx-otel` for end-to-end trace propagation.
-- **axum-prometheus** — `/metrics` endpoints on gateway and live-search.
-- **tower-governor** — rate limiting on gateway auth routes (two governor instances for login vs. refresh).
-- **tower-sessions + CSRF** — HttpOnly/Secure/SameSite=Lax session cookies via `tower-sessions` with `axum-tower-sessions-csrf` layered on top for state-changing endpoints.
-- **axum-valid + validator** — typed, validated DTOs on every public gateway handler.
-- **Trigram fuzzy search** — `pg_trgm` GIN index on `search_results.title` for typo-tolerant search.
-- **pg_stat_statements** — query performance monitoring, preloaded via Postgres config.
-- **moka cache** — hot search query caching in live-search (60s TTL, 1000 entries).
-- **stylance** — scoped CSS in `live-search` (with `stylance-cli` emitting the actual stylesheet at build time). The `i18n-demo` crate uses handwritten CSS with `[data-i18n-demo]` attribute-selector scoping instead.
-- **leptos-use**, **lepticons** — richer Leptos ecosystem integration.
-- **leptos-struct-table** — typed result-list rendering in `live-search/src/app.rs`.
-- **leptos-forms-rs** — typed form structs (Bitcode server-fn encoding for binary payloads).
-- **utoipa + Swagger UI** — documented API at `/docs` on the gateway.
-- **criterion benchmarks** — throughput bench for JWT auth, latency bench for search queries.
-- **console-subscriber** — Tokio console instrumentation behind `dev-tools` feature.
-- **testcontainers** — per-test Postgres 17 isolation in E2E tests, removing the shared-db dependency.
-- **sccache** — shared Cargo cache across Docker layers (`RUSTC_WRAPPER=sccache`, `SCCACHE_DIR=/var/cache/sccache`); configured via `docker-compose.yml` and the three Dockerfiles.
-- **nextest** — `cargo nextest run` in CI (`.woodpecker.yml`); faster test fan-out than `cargo test`.
-- **insta** — JSON snapshot testing for SSE payload shape (e2e-tests/tests/sse_test.rs).
+`/health` is process liveness. `/readyz` probes PostgreSQL and is what Compose
+uses for live-search readiness.
 
-## CI/CD
+## Gateway health and proxy behavior
 
-This project uses [Woodpecker CI](https://woodpecker-ci.org/) with Forgejo Actions.
-The `.woodpecker.yml` workflow runs:
+`ServiceModule::health_check` is required, so a new module cannot accidentally
+inherit an unconditional green probe. The aggregate gateway `/health` also checks
+PostgreSQL because login/refresh functionality requires it.
 
-| Step | Description |
-|------|-------------|
-| `check-workspace` | Workspace, SSR, and hydrate/WASM `cargo check` |
-| `unit-tests` | `cargo test --workspace --lib` |
-| `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `clippy-live-search-ssr` | `cargo clippy -p live-search --features ssr --all-targets -- -D warnings` |
-| `fmt` | `cargo fmt --all -- --check` |
-| `e2e-tests` | Full E2E suite against PostgreSQL 17 (`--features browser-tests`); runs after `fmt`, `clippy`, `leptos-build` |
+The proxy example accepts a typed `IpAddr`; upstream transport/status/parse
+failures are logged internally and returned as `502 Bad Gateway` rather than
+leaking implementation errors as generic 500 responses.
 
-## Project Structure
+Rate limiting uses peer IP by default. That is deliberate: forwarded-IP headers
+must not become trusted limiter keys until a deployment has a trusted reverse
+proxy that strips attacker-supplied forwarding headers.
 
-```
-rust-web-fullstack/
-├── Cargo.toml                  # Workspace root (edition 2024, lints table)
-├── rust-toolchain.toml         # Pinned Rust 1.94.0 + WASM target
-├── Cargo.lock
-├── clippy.toml                 # Strict clippy lints for crates & examples
-├── docker-compose.yml          # Postgres + live-search + i18n-demo + gateway
-├── Makefile                    # Common development commands
-├── ci/
-│   └── leptosfmt.Dockerfile    # CI image with leptosfmt preinstalled
-├── .woodpecker.yml             # CI pipeline (check, clippy, fmt, audit, e2e)
-├── .env.example                # Environment variable template
-├── .dockerignore               # Docker build exclusions
-├── LICENSE                     # MIT
-├── README.md                   # ← you are here
-├── scripts/
-│   ├── init-db.sql             # PostgreSQL extensions (pg_trgm, pgcrypto, pg_stat_statements)
-│   ├── seed-db.sh              # Idempotent seed data
-│   └── test-e2e.sh             # Local E2E test runner
-├── references/                 # Reference patterns referenced by SKILL.md
-│   ├── architecture-patterns.md
-│   ├── axum-patterns.md
-│   ├── leptos-patterns.md
-│   ├── postgres-patterns.md
-│   └── testing-patterns.md
-├── live-search/                # Leptos SSR + WASM hydrate + sqlx + SSE
-│   ├── Cargo.toml              # ssr / hydrate / otel / dev-tools features
-│   ├── migrations/             # sqlx migrations (search_results, trigram)
-│   ├── benches/
-│   │   └── db_bench.rs         # Criterion benchmark for FTS queries
-│   └── src/
-│       ├── main.rs             # Thin launcher → bootstrap → shutdown
-│       ├── lib.rs              # Public module surface + hydrate entry
-│       ├── app.rs              # Leptos components + server functions
-│       ├── bootstrap.rs        # Pool, migrations, listener, axum router
-│       ├── db.rs               # PgPool + PgListener + watchdog
-│       ├── cache.rs            # moka in-memory search cache
-│       ├── events.rs           # SseEvent types
-│       ├── sse.rs              # SSE handler (broadcast → text/event-stream)
-│       ├── shutdown.rs         # Graceful shutdown drain
-│       ├── otel.rs             # OpenTelemetry init (feature-gated)
-│       └── styles.rs           # stylance-scoped CSS classes
-├── gateway/                    # Pure axum + JWT + service registry
-│   ├── Cargo.toml              # package name `gateway-example`
-│   ├── migrations/             # refresh_tokens table (wiring is TODO)
-│   ├── benches/
-│   │   └── auth_bench.rs       # Criterion JWT sign/verify benchmark
-│   └── src/
-│       ├── main.rs             # Bin entry point + ALLOW_DEV_KEYS guard
-│       ├── lib.rs              # Public module surface
-│       ├── gateway.rs          # GatewayState + router composition
-│       ├── module.rs           # ServiceModule trait + ServiceHealthError
-│       ├── cors.rs             # Shared CORS layer (ALLOWED_ORIGINS env)
-│       ├── pem.rs              # PKCS#8 / SPKI DER / PEM encode
-│       ├── settings.rs         # env-based Settings + --dev-keys
-│       ├── sse.rs              # GatewayEvent + SSE broadcast
-│       ├── openapi.rs          # utoipa schema + Swagger UI at /docs
-│       ├── otel.rs             # OpenTelemetry init (feature-gated)
-│       ├── auth/
-│       │   ├── mod.rs          # Re-exports
-│       │   ├── error.rs        # AppError + IntoResponse
-│       │   ├── jwt.rs          # EdDSA JWT create/validate
-│       │   ├── handlers.rs     # login / refresh / logout / protected
-│       │   └── middleware.rs   # Bearer-token validation
-│       └── services/
-│           ├── mod.rs
-│           ├── search.rs       # SearchService + health_check probe
-│           ├── proxy.rs        # ProxyService + check_history
-│           └── monitor.rs      # MonitorService dashboard
-├── i18n-demo/                  # Compile-time-checked i18n showcase
-│   ├── Cargo.toml              # ssr / hydrate features
-│   ├── build.rs                # leptos_i18n codegen
-│   ├── locales/                # JSON locale files (en.json, de.json)
-│   └── src/
-│       ├── main.rs             # SSR server
-│       ├── lib.rs              # Public module surface + hydrate entry
-│       ├── app.rs              # Leptos components (t! macros)
-│       ├── i18n.rs             # Generated t!/Locale module
-│       └── styles.rs           # CSS constants + include_str!
-└── e2e-tests/                  # chromiumoxide-based browser E2E
-    ├── Cargo.toml              # browser-tests feature
-    ├── tests/
-    │   ├── live_search_test.rs # SSR + search + live feed + SSE
-    │   ├── sse_test.rs         # SSE event delivery + insta snapshot
-    │   └── gateway_test.rs     # Gateway endpoints + auth
-    └── src/
-        ├── lib.rs              # Shared helpers (base_url, join_url)
-        └── common/
-            ├── mod.rs          # Public re-exports
-            ├── once.rs         # SharedServer<T> lazy one-shot bootstrap
-            ├── chromium.rs     # setup/teardown + locate_chrome()
-            ├── live_search_env.rs   # In-process live-search launcher
-            ├── gateway_env.rs       # In-process gateway launcher
-            ├── db.rs           # testcontainer Postgres fixture
-            └── json.rs         # (any JSON helpers)
-```
+## Sessions, CORS, CSRF, CSP
 
-> **`crates/config`** — A small shared crate (`rwf_config`) used by both `live-search` and `gateway` for layered configuration: hardcoded defaults → `config.toml` → `RWF_*` env vars. Both binaries call `Config::load()` at startup. See `crates/config/src/lib.rs`.
+The gateway demonstrates a cookie session alongside Bearer JWTs:
 
-## Crate Details
+- session cookies are `HttpOnly` and `Secure` by default,
+- credentialed CORS uses explicit origins/methods/headers rather than wildcards,
+- mutating session routes are CSRF protected,
+- session-store failures return 5xx instead of HTTP 200 error payloads,
+- CSP is added without overwriting an existing policy.
 
-### `live-search` (Leptos + Axum SSR + PostgreSQL)
+The two auth styles are examples of different threat models, not an argument that
+every endpoint should use both at once.
 
-- **Dependencies**: Leptos 0.8, leptos_axum, Axum 0.8, sqlx 0.9 (PostgreSQL), tokio, tokio-stream, serde, uuid, chrono
-- **Features**:
-  - `ssr` — Server-side rendering (required for the server binary)
-  - `hydrate` — WASM hydration (for client-side binary)
-- **Demonstrates**:
-  - Full-text search with PostgreSQL `tsvector` / GIN indexes
-  - `LISTEN`/`NOTIFY` via sqlx PgListener for real-time updates
-  - SSE push from Axum to Leptos reactive signals
-  - sqlx migrations (compile-time checked queries)
-  - Fine-grained reactivity with Leptos 0.8 signals
-- **Port**: 3000
+## OpenTelemetry
 
-### `gateway-example` (Axum + JWT + ServiceModule)
+The optional `otel` features export traces over OTLP/HTTP. If
+`OTEL_EXPORTER_OTLP_ENDPOINT` is unset, the examples default to
+`http://127.0.0.1:4318`.
 
-- **Dependencies**: Axum 0.8, Tower 0.5, jsonwebtoken 10, uuid
-- **Demonstrates**:
-  - `ServiceModule` trait for swappable service backends
-  - JWT authentication middleware as Tower layer
-  - Multi-service route composition with CORS
-  - Health-check endpoint and modular error handling
-- **Port**: 3001
+Both Axum routers install OpenTelemetry middleware that extracts incoming W3C
+`traceparent`/`tracestate`; setting a global propagator alone would not do that.
 
-### `e2e-tests` (chromiumoxide)
+`sqlx-otel` is currently **not enabled** by the active `otel` feature. The lockfile
+still contains 0.3 (SQLx 0.8 generation). Upstream 0.5 supports SQLx 0.9, but the
+manifest and lockfile should be upgraded together in a dedicated dependency
+refresh before enabling it.
 
-- **Dependencies**: chromiumoxide 0.9, reqwest 0.13, tokio, serde_json
-- **Demonstrates**:
-  - Browser automation with chromiumoxide
-  - Real DOM interaction and assertion
-  - SSE event stream validation
-  - Cross-service integration testing
-- **Note**: Set `CHROME_PATH=/path/to/chrome-or-chromium` if browser autodetection does not find a usable binary.
+## i18n and WebSocket example
 
-## Troubleshooting
+The i18n demo has compile-time-checked EN/DE translation keys. SSR starts in
+English and the hydrated client updates the document `<html lang>` attribute when
+the locale changes.
 
-### `relation "search_results" does not exist`
-Run `./scripts/seed-db.sh` to initialize the schema and seed data.
+The WebSocket chat is still only an in-memory demo, but it demonstrates minimum
+browser/server hygiene:
 
-### Workspace build fails
-Run the workspace, SSR, and hydrate checks because the `live-search` server
-binary and client bundle are intentionally gated behind separate features:
+- same-origin browser upgrades (`Origin` vs `Host`),
+- protocol-level 1 KiB frame/message limits,
+- no sender echo,
+- explicit lag handling.
+
+A production authenticated WebSocket service should use a configured Origin
+allowlist, durable/shared messaging if horizontally scaled, and application
+shutdown wiring for active connections.
+
+## Build and validation
+
+Basic static/test pass:
+
 ```bash
 cargo check --workspace --all-targets
-cargo check -p live-search --features ssr --all-targets
-rustup target add wasm32-unknown-unknown
-cargo check -p live-search --target wasm32-unknown-unknown --features hydrate --lib
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --lib
 ```
 
-### `aws-lc-rs` fails to compile
-Install `cmake` and a C compiler (`build-essential` on Debian/Ubuntu, `base-devel` on Arch,
-`Xcode Command Line Tools` on macOS). `aws-lc-rs` requires a C toolchain at build time
-(the `aws-lc-sys` C library is bundled and compiled from source).
+SSR/hydration production builds:
 
-### E2E tests fail
-- Ensure PostgreSQL is running and seeded.
-- Ensure Chrome or Chromium is installed, or set `CHROME_PATH`.
-- Run `./scripts/test-e2e.sh` for the full automated pipeline.
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install cargo-leptos --locked
+cargo install stylance-cli --locked
 
-## License
+cargo leptos build --release -p live-search
+cargo leptos build --release -p i18n-demo
+```
 
-MIT — see [LICENSE](LICENSE) for details.
+Stylance's Rust macro provides typed/hashed class names; `stylance-cli` is what
+actually transforms/bundles CSS. It is therefore a real build step.
 
----
+### Browser E2E
 
-*Part of the `rust-web-fullstack` skill showcase. Repo: https://git.onhir.eu/rust-web-fullstack*
+Browser tests mount the real Leptos SSR route tree and use real build artifacts;
+they do not substitute a text-only fixture for the frontend.
+
+Requirements: Docker daemon, Chromium/Chrome, and the live-search Leptos build.
+
+```bash
+LIVE_SEARCH_PKG_DIR=live-search/target/site/pkg \
+CHROME_PATH=/usr/bin/chromium \
+cargo test --release --locked -p e2e-tests --tests \
+  --features browser-tests -- --test-threads=1 --nocapture
+```
+
+Tests fail when required infrastructure/artifacts are missing rather than silently
+skipping the coverage CI claims to provide.
+
+## CI
+
+`.woodpecker.yml` checks workspace/feature matrices, Clippy, formatting,
+`cargo-audit`, Leptos production builds, Docker images, and browser E2E. The E2E
+job installs Chromium and both Docker jobs are wired to Docker-in-Docker.
+
+The pipeline also checks the `live-search` `otel` feature. Keep CI feature
+coverage in sync whenever optional features are added or removed.
+
+One reproducibility caveat: `cargo install --locked` locks dependencies of the
+tool version selected at install time; it does not itself pin that top-level tool
+version. Pin CI tool versions if long-term reproducibility is important.
+
+## Canonical development notes
+
+The maintained implementation notes live in [`SKILL.md`](SKILL.md). The most
+important code entry points are:
+
+- `live-search/src/bootstrap.rs`
+- `live-search/src/db.rs`
+- `live-search/src/app.rs`
+- `gateway/src/gateway.rs`
+- `gateway/src/auth/refresh.rs`
+- `gateway/src/settings.rs`
+- `e2e-tests/src/common/live_search_env.rs`
+- `e2e-tests/tests/live_search_test.rs`
+- `.woodpecker.yml`
+
+If documentation and implementation diverge, fix both in the same change.
