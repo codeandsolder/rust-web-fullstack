@@ -7,7 +7,7 @@
 //! * Rate limiting is applied at the router level via `tower_governor`.
 //! * JWT errors are mapped to distinct error variants.
 //! * Secrets (passwords, tokens) are never included in log output.
-//! * Login request payloads are validated with `axum-valid` + `validator`.
+//! * Public auth request payloads are typed and validated with `axum-valid`.
 
 use std::str::FromStr;
 
@@ -34,6 +34,14 @@ pub struct LoginRequest {
     pub user_id: String,
     #[validate(length(min = 12, max = 1024))]
     pub password: String,
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RefreshRequest {
+    /// Opaque refresh token returned by login or the previous refresh.
+    #[validate(length(min = 43, max = 1024))]
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -81,9 +89,6 @@ pub async fn login_handler(
     let s = &state.settings;
     let parsed_user_id = UserId::from_str(&user_id)?;
 
-    // The intentionally-small demo has one configured credential pair. A
-    // shared password must not become a capability to choose an arbitrary JWT
-    // subject simply by submitting a different syntactically-valid UUID.
     if parsed_user_id != s.admin_user_id {
         return Err(AppError::AuthError);
     }
@@ -146,16 +151,19 @@ pub async fn login_handler(
 #[utoipa::path(
     post,
     path = "/auth/refresh",
+    request_body = RefreshRequest,
     responses(
         (status = 200, description = "Token refreshed", body = RefreshResponse),
         (status = 401, description = "Invalid refresh token"),
-        (status = 503, description = "Refresh store unavailable"),
+        (status = 500, description = "Refresh store unavailable"),
     ),
     tag = "auth",
 )]
 pub async fn refresh_handler(
     State(state): State<GatewayState>,
-    axum::extract::Json(body): axum::extract::Json<serde_json::Value>,
+    axum_valid::Valid(axum::Json(RefreshRequest { refresh_token })): axum_valid::Valid<
+        axum::Json<RefreshRequest>,
+    >,
 ) -> Result<Json<RefreshResponse>, AppError> {
     let pool = state.db_pool.as_ref().ok_or_else(|| {
         AppError::internal(
@@ -164,16 +172,16 @@ pub async fn refresh_handler(
         )
     })?;
 
-    let raw = body
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .ok_or(AppError::AuthError)?;
-
     let now = chrono::Utc::now();
-    let rotation = super::refresh::rotate(pool, raw, now, state.refresh_token_ttl_secs)
-        .await
-        .map_err(|e| AppError::internal("refresh-token rotation", e))?
-        .ok_or(AppError::AuthError)?;
+    let rotation = super::refresh::rotate(
+        pool,
+        &refresh_token,
+        now,
+        state.refresh_token_ttl_secs,
+    )
+    .await
+    .map_err(|e| AppError::internal("refresh-token rotation", e))?
+    .ok_or(AppError::AuthError)?;
 
     let token = create_jwt(
         &rotation.subject,
