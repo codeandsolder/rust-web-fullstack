@@ -1,10 +1,6 @@
 //! SSR server binary for the i18n-demo application.
 //!
-//! Sets up:
-//! - Axum HTTP server with Leptos SSR routes and static assets.
-//! - Graceful shutdown via `CancellationToken` on `Ctrl+C` / `SIGTERM`.
-//!
-//! No database or SSE — this is a pure i18n demonstration.
+//! Sets up Axum + Leptos SSR routes, static assets, and graceful shutdown.
 
 #![cfg(feature = "ssr")]
 
@@ -14,11 +10,9 @@ use anyhow::Context;
 use axum::Router;
 use axum::http::{StatusCode, Uri};
 use axum::response::IntoResponse;
-use axum::routing::any;
-use axum::routing::get;
+use axum::routing::{any, get};
 use leptos::config::get_configuration;
-use leptos_axum::{LeptosRoutes, generate_route_list};
-use leptos_utils::probed_server_fn_handler;
+use leptos_axum::{LeptosRoutes, generate_route_list, handle_server_fns};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tower_http::services::ServeDir;
@@ -27,33 +21,24 @@ use tracing_subscriber::EnvFilter;
 
 use i18n_demo::app;
 
-/// Fallback handler that does not use `State<S>` – works with `Router<()>`.
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
 }
 
-/// Spawn a task that fires the shutdown token on Ctrl+C (all platforms) or
-/// SIGTERM (Unix).  The token is observed by every clone/child, propagating
-/// shutdown to all long-running tasks.
 fn spawn_signal_handler(shutdown: CancellationToken) {
     tokio::spawn(async move {
-        #[expect(
-            clippy::expect_used,
-            reason = "signal handler installation can only fail in unrecoverable runtime states"
-        )]
         let ctrl_c = async {
-            signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
+            if let Err(e) = signal::ctrl_c().await {
+                tracing::error!(error = %e, "failed to install Ctrl+C handler");
+            }
         };
+
         #[cfg(unix)]
         let terminate = async {
-            #[expect(
-                clippy::expect_used,
-                reason = "signal handler installation can only fail in unrecoverable runtime states"
-            )]
-            let mut sig = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+            let Ok(mut sig) = signal::unix::signal(signal::unix::SignalKind::terminate()) else {
+                tracing::error!("failed to install SIGTERM handler");
+                return;
+            };
             sig.recv().await;
         };
         #[cfg(not(unix))]
@@ -76,48 +61,31 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // ---- Graceful shutdown via CancellationToken -------------------------
-    //
-    // The shutdown token propagates to the signal handler and to axum's
-    // graceful shutdown.
-
     let shutdown = CancellationToken::new();
     spawn_signal_handler(shutdown.clone());
-
-    // ---- Leptos configuration & routes ------------------------------------
 
     let conf = get_configuration(None).context("failed to read Leptos configuration")?;
     let leptos_options = conf.leptos_options;
     let routes = generate_route_list(app::App);
 
-    // ---- Axum router ------------------------------------------------------
-    //
-    // Build a stateful router `Router<LeptosOptions>` so the `LeptosRoutes`
-    // trait bound is satisfied.  Both `/api/{*fn_name}` and
-    // `/api/api/{*fn_name}` are registered for the doubled-prefix workaround.
-
+    // `#[server(endpoint = "name")]` endpoints are relative to Leptos's
+    // default `/api` prefix. Mount one canonical catch-all; `/api/api/*` was a
+    // workaround for a configuration bug, not a Leptos requirement.
     let axum_app = Router::new()
-        // ---- static assets (hydration JS/WASM, CSS) ------------------------
-        //
-        // Must be before .leptos_routes() so /pkg/* takes priority.
         .nest_service("/pkg", ServeDir::new("./pkg"))
-        // WebSocket chat demo — see `ws_chat.rs`.
         .route("/ws/chat", get(i18n_demo::ws_chat::chat_handler))
-        .route("/api/{*fn_name}", any(probed_server_fn_handler))
-        .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
-        .layer(TraceLayer::new_for_http())
+        .route("/api/{*fn_name}", any(handle_server_fns))
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, routes, {
             let lo = leptos_options.clone();
             move || app::shell(lo.clone())
         })
-        .fallback(fallback_handler);
+        .fallback(fallback_handler)
+        // Router::layer applies to routes already registered, so global
+        // tracing belongs after the Leptos routes and fallback are added.
+        .layer(TraceLayer::new_for_http());
 
-    // Convert to `Router<()>` – the only router type that implements the
-    // tower `Service` traits needed by `axum::serve`.
     let axum_app: Router<()> = axum_app.with_state(leptos_options);
-
-    // ---- serve ------------------------------------------------------------
 
     let port: u16 = std::env::var("PORT")
         .ok()
