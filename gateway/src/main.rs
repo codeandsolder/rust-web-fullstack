@@ -1,8 +1,4 @@
 //! Gateway example binary — entry point.
-//!
-//! Configures tracing, loads validated configuration, runs the workspace's
-//! shared database migrations, builds the Axum router, and serves requests with
-//! graceful shutdown.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,36 +14,24 @@ async fn main() -> anyhow::Result<()> {
     let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
     if dev_keys && std::env::var("ALLOW_DEV_KEYS").ok().as_deref() != Some("1") {
         anyhow::bail!(
-            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start. \
-             This is a deliberate guard against accidentally enabling ephemeral keys."
+            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start"
         );
     }
 
-    // Load the typed workspace configuration exactly once. Legacy gateway env
-    // variables remain supported where they pre-date the RWF_* config layer.
+    // Non-secret runtime configuration has one canonical source: rwf-config.
+    // Override it with `RWF_GATEWAY__...`, not a parallel set of ad-hoc env
+    // variables. Secret key/password material remains in Settings.
     let cfg = Config::load().context("failed to load workspace config")?;
-    let port = match std::env::var("GATEWAY_PORT") {
-        Ok(value) => value
-            .parse::<u16>()
-            .with_context(|| format!("invalid GATEWAY_PORT value {value:?}"))?,
-        Err(std::env::VarError::NotPresent) => cfg.gateway.port,
-        Err(e) => return Err(e).context("failed to read GATEWAY_PORT"),
-    };
-    let proxy_upstream_url = std::env::var("PROXY_UPSTREAM_URL")
-        .unwrap_or_else(|_| cfg.gateway.proxy_upstream_url.clone());
-
+    let port = cfg.gateway.port;
+    let proxy_upstream_url = cfg.gateway.proxy_upstream_url.clone();
     let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
         .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
     let access_token_ttl_secs = i64::try_from(cfg.gateway.access_token_ttl_secs)
         .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
-    if refresh_token_ttl_secs <= 0 || access_token_ttl_secs <= 0 {
-        anyhow::bail!("gateway token TTLs must be positive");
-    }
 
-    // ---- Telemetry / tracing ----
     #[cfg(feature = "otel")]
     let provider =
-        gateway_example::otel::init_telemetry().context("failed to initialize `OTel` telemetry")?;
+        gateway_example::otel::init_telemetry().context("failed to initialize OTel telemetry")?;
 
     #[cfg(not(feature = "otel"))]
     tracing_subscriber::fmt()
@@ -58,27 +42,21 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // ---- Settings ----
     let mut settings = if dev_keys {
         gateway_example::settings::Settings::load_dev_keys_from_env()?
     } else {
         gateway_example::settings::Settings::load()?
     };
-    // The typed config is the canonical source for token lifetime. This avoids
-    // the previous split-brain state where GatewayState and JWT minting used
-    // two independently-loaded TTL values.
     settings.access_token_ttl_secs = access_token_ttl_secs;
+    settings.allowed_origins = Arc::from(cfg.gateway.cors.allowed_origins.as_str());
+    settings.sse_broadcast_buffer = cfg.gateway.sse_broadcast_buffer;
+    settings.session.cookie_secure = cfg.gateway.session.cookie_secure;
 
-    // ---- DB pool + migrations ----
-    // Refresh-token issuance is part of every successful login, so a gateway
-    // without its database is not a useful degraded mode. Fail fast instead of
-    // starting a service whose login endpoint can only return 503.
     let db_pool = create_db_pool().await?;
     run_migrations(&db_pool)
         .await
         .context("gateway migrations failed")?;
 
-    // ---- Service modules ----
     let service_modules: Vec<Arc<dyn module::ServiceModule>> = vec![
         Arc::new(services::search::SearchService),
         Arc::new(services::proxy::ProxyService),
@@ -159,9 +137,6 @@ async fn create_db_pool() -> anyhow::Result<sqlx::PgPool> {
         .context("failed to connect to PostgreSQL")
 }
 
-/// Run the same migration history used by live-search. Keeping one SQLx
-/// migration set for the shared database prevents either service from treating
-/// the other service's applied versions as missing migrations.
 async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     sqlx::migrate!("../migrations").run(pool).await?;
     Ok(())
