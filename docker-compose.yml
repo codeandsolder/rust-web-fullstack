@@ -31,7 +31,9 @@ services:
     ports:
       - "3000:3000"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      # Compose readiness includes the database dependency. `/health` remains
+      # a pure process-liveness endpoint for orchestrators that distinguish the two.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/readyz"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -55,8 +57,6 @@ services:
       timeout: 3s
       retries: 10
 
-  # Production gateway. Compose explicitly passes required host variables into
-  # the container; merely exporting them on the host is not otherwise enough.
   gateway:
     build:
       context: .
