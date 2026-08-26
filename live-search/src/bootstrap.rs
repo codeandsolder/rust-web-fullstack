@@ -30,8 +30,8 @@ use axum::{
     routing::{any, get},
 };
 use leptos::config::get_configuration;
-use leptos_axum::{LeptosRoutes, generate_route_list};
 use leptos_axum::handle_server_fns;
+use leptos_axum::{LeptosRoutes, generate_route_list};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -82,8 +82,6 @@ pub fn get_tracer_provider() -> Option<&'static opentelemetry_sdk::trace::SdkTra
 /// # Panics
 /// Panics on the second call (tracing's global subscriber guard).
 fn init_tracing() {
-    // Try OTel first; fall back to plain fmt if OTel init fails or is
-    // disabled.
     #[cfg(feature = "otel")]
     {
         match crate::otel::init_telemetry() {
@@ -92,9 +90,6 @@ fn init_tracing() {
                 return;
             }
             Err(e) => {
-                // OTel init is best-effort; log and fall back to fmt.
-                // We can't use `tracing::warn!` here because the subscriber
-                // isn't set up yet — use eprintln instead.
                 eprintln!("OTel init failed, falling back to fmt subscriber: {e}");
             }
         }
@@ -137,10 +132,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     // ---- database pool & migration ---------------------------------------
 
-    // Project `rwf_config::LiveSearchConfig` into the local `db::PoolTunables`
-    // struct so `db` does not need to depend on `rwf-config` directly
-    // (which would be a circular dependency — `rwf-config` is upstream of
-    // every binary that uses it).
     let pool_tunables = db::PoolTunables {
         max_connections: cfg.live_search.pool_max_connections,
         min_connections: cfg.live_search.pool_min_connections,
@@ -170,10 +161,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     tracing::debug!("SSE broadcast channel created");
 
     // ---- AppContext -------------------------------------------------------
-    //
-    // Construct the unified application context and store it globally (for
-    // server functions) and provide it to the Leptos component tree (for SSR
-    // rendering).
 
     let ctx = Arc::new(state::AppContext::new(
         pool.clone(),
@@ -191,7 +178,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     // ---- PgListener -------------------------------------------------------
 
     let listener_token = shutdown.child_token();
-
     let pool_for_listener = pool.clone();
     let listener_span = tracing::info_span!("pg_listener");
     let cache_for_listener = cache_handle.clone();
@@ -210,6 +196,9 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let leptos_routes = generate_route_list(app::App);
 
     // ---- Axum router ------------------------------------------------------
+    // `#[server(endpoint = "name")]` endpoints are relative to Leptos's
+    // default `/api` prefix. A second `/api/api/*` catch-all is therefore both
+    // unnecessary and misleading.
 
     let broadcast_for_sse = ctx.broadcast.clone();
     let router = Router::new()
@@ -222,8 +211,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
             }),
         )
         .route("/api/{*fn_name}", any(handle_server_fns))
-        .route("/api/api/{*fn_name}", any(handle_server_fns))
-        .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, leptos_routes, {
             let lo = leptos_options.clone();
@@ -237,8 +224,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .fallback(fallback_handler);
 
     // Prometheus metrics endpoint — available when `otel` feature is active.
-    // We shadow the binding instead of mutating it so the non-otel build
-    // doesn't trigger `unused_mut` on the outer `router`.
     #[cfg(feature = "otel")]
     let router = {
         use axum_prometheus::PrometheusMetricLayer;
@@ -250,6 +235,10 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         )
     };
 
+    // `Router::layer` only applies to routes that already exist. Keep global
+    // cross-cutting middleware last so SSR routes, health, fallback and metrics
+    // are all traced.
+    let router = router.layer(TraceLayer::new_for_http());
     let router: Router<()> = router.with_state(leptos_options);
 
     // ---- serve ------------------------------------------------------------
