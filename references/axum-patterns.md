@@ -1,400 +1,169 @@
-> Deep-dive companion to the axum/routing/SSE patterns in [SKILL.md](../SKILL.md) (Patterns 1, 2, 9, 14, 15, 17). Start there for the condensed view, then return here for the full cookbook.
-
 # Axum 0.8 Patterns Reference
 
-## Table of Contents
-1. [SSE Streaming Endpoint](#1-sse-streaming-endpoint)
-2. [Routing & Composition](#2-routing--composition)
-3. [State Management](#3-state-management)
-4. [Middleware](#4-middleware)
-5. [Error Handling](#5-error-handling)
-6. [Broadcast → SSE Pattern](#6-broadcast--sse-pattern)
-7. [Pitfalls](#7-pitfalls)
+This is a compact companion to [`SKILL.md`](../SKILL.md). The repository code is
+the source of truth.
 
----
+## Router construction
 
-## 1. SSE Streaming Endpoint
-
-### Basic SSE Handler
-
-```rust
-use axum::response::sse::{Event, KeepAlive, Sse};
-
-async fn sse_handler() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = tokio_stream::iter(vec![
-        Event::default().data("hello"),
-        Event::default().data("world"),
-    ]).map(Ok);
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-```
-
-Axum auto-sets headers:
-- `Content-Type: text/event-stream`
-- `Cache-Control: no-cache`
-
-### Event Struct API
-
-```rust
-Event::default()
-    .data("plain text")                      // sets data: field
-    .json_data(serde_json::json!({"k":"v"})) // sets data: as JSON (requires "json" feature)
-    .event("custom-event-type")              // sets event: field (for addEventListener)
-    .id("unique-123")                        // sets id: field (for Last-Event-ID reconnect)
-    .retry(Duration::from_secs(30))          // sets retry: field (milliseconds)
-    .comment("ignored by browser")           // sets : field (comment)
-```
-
-### KeepAlive Configuration
-
-```rust
-KeepAlive::new()
-    .interval(Duration::from_secs(15))       // heartbeat interval (default: 15s)
-    .text("keep-alive-text")                 // custom comment text
-    .event(custom_event)                     // or full custom Event
-
-// Built-in default:
-Event::DEFAULT_KEEP_ALIVE  // ":\\n\\n" (empty comment, smallest overhead)
-```
-
-KeepAlive resets its timer on each real event. When the inner stream ends, KeepAlive stops. KeepAlive pings only when the stream is idle.
-
-### Dependencies
-
-```toml
-[dependencies]
-axum = { version = "0.8", features = ["json"] }
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
-futures-util = "0.3"
-```
-
----
-
-## 2. Routing & Composition
-
-### Basic Router
+Basic composition:
 
 ```rust
 let app = Router::new()
-    .route("/", get(index))
     .route("/users", get(list_users).post(create_user))
-    .route("/users/{id}", get(show_user).patch(update_user).delete(delete_user));
+    .nest("/api", api_routes())
+    .fallback(not_found);
 ```
 
-### Path Parameters
+`merge` adds another router at the current level; `nest` adds a path prefix.
+Axum resolves routes by its routing table, not by a generic “first matching route
+wins” rule. Do not rely on textual route declaration order to disambiguate routes.
 
-```rust
-// Single param
-async fn show_user(Path(user_id): Path<Uuid>) -> impl IntoResponse { ... }
+### Global middleware placement
 
-// Multiple params
-async fn team_show(Path((user_id, team_id)): Path<(Uuid, Uuid)>) -> impl IntoResponse { ... }
-```
+`Router::layer(layer)` applies that layer to routes that already exist on the
+router at the time it is called. If routes are added afterward (including
+Leptos-generated routes), they do not retroactively inherit the earlier layer.
 
-### Query Parameters
-
-```rust
-#[derive(Deserialize)]
-struct Pagination { page: usize, per_page: usize }
-
-async fn list(Query(p): Query<Pagination>) -> impl IntoResponse { ... }
-// Parses ?page=2&per_page=30
-```
-
-### Nested Routers
-
-```rust
-fn api_routes() -> Router {
-    Router::new()
-        .route("/posts", get(posts))
-        .route("/users", get(users))
-}
-
-let app = Router::new()
-    .nest("/api", api_routes())  // /api/posts, /api/users
-    .nest("/admin", admin_routes());
-```
-
-### Merge vs Nest
-
-```rust
-// merge: flat addition, no prefix
-let app = Router::new()
-    .merge(api_router)       // routes from api_router added at current level
-    .merge(admin_router);
-
-// nest: prefix addition
-let app = Router::new()
-    .nest("/api", api_router); // /api/ prefix prepended to all routes
-```
-
-### Fallback (404)
+Canonical shape:
 
 ```rust
 let app = Router::new()
-    .route("/users", get(handler))
-    .fallback(not_found);  // catch-all for unmatched routes
-```
-
----
-
-## 3. State Management
-
-### Simple State
-
-```rust
-#[derive(Clone)]
-struct AppState {
-    pool: PgPool,
-    config: Config,
-}
-
-let app = Router::new()
-    .route("/", get(handler))
-    .with_state(state);
-
-async fn handler(State(state): State<AppState>) -> impl IntoResponse { ... }
-```
-
-### Substate via FromRef
-
-```rust
-#[derive(Clone, FromRef)]
-struct AppState {
-    api_state: ApiState,
-    db_pool: PgPool,
-}
-
-// Handler extracts only what it needs:
-async fn api_handler(State(api): State<ApiState>) -> impl IntoResponse { ... }
-async fn db_handler(State(pool): State<PgPool>) -> impl IntoResponse { ... }
-```
-
-### Broadcast Channel in State
-
-```rust
-#[derive(Clone)]
-struct AppState {
-    tx: broadcast::Sender<Event>,
-    pool: PgPool,
-}
-
-// SSE handler subscribes:
-async fn sse(State(state): State<AppState>) -> Sse<...> {
-    let rx = state.tx.subscribe();
-    Sse::new(BroadcastStream::new(rx).filter_map(|r| async { r.ok() }))
-        .keep_alive(KeepAlive::default())
-}
-```
-
----
-
-## 4. Middleware
-
-### from_fn Middleware
-
-```rust
-use axum::middleware;
-
-async fn auth_middleware(request: Request, next: Next) -> Response {
-    // before...
-    let response = next.run(request).await;
-    // after...
-    response
-}
-
-let app = Router::new()
-    .route("/", get(handler))
-    .layer(middleware::from_fn(auth_middleware));
-```
-
-### from_fn_with_state (access app state)
-
-```rust
-async fn logger(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    tracing::info!("{} {}", request.method(), request.uri());
-    next.run(request).await
-}
-
-let app = Router::new()
-    .route_layer(middleware::from_fn_with_state(state.clone(), logger))
-    .with_state(state);
-```
-
-### from_extractor Middleware
-
-```rust
-#[derive(FromRequestParts)]
-struct RequireAuth;
-
-impl<S> FromRequestParts<S> for RequireAuth {
-    type Rejection = StatusCode;
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        // check auth header
-        if parts.headers.get("authorization").is_some() {
-            Ok(Self)
-        } else {
-            Err(StatusCode::UNAUTHORIZED)
-        }
-    }
-}
-
-let app = Router::new()
-    .route("/admin", get(admin))
-    .route_layer(from_extractor::<RequireAuth>());
-```
-
-### Common Middleware (tower-http)
-
-```rust
-use tower_http::{
-    cors::CorsLayer,
-    compression::CompressionLayer,
-    trace::TraceLayer,
-    limit::RequestBodyLimitLayer,
-};
-
-let app = Router::new()
-    .layer(CorsLayer::permissive())
-    .layer(CompressionLayer::new())
+    .route("/api/{*fn_name}", any(handle_server_fns))
+    .leptos_routes(&options, routes, shell)
+    .route("/health", get(health))
+    .fallback(not_found)
     .layer(TraceLayer::new_for_http());
 ```
 
----
+Use `route_layer` for middleware that should apply only to routes already present
+in a sub-router or route method.
 
-## 5. Error Handling
+## State
 
-### IntoResponse for Custom Errors
+Prefer clone-cheap state handles:
+
+```rust
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    tx: broadcast::Sender<MyEvent>,
+    config: Arc<Config>,
+}
+
+async fn handler(State(state): State<AppState>) { /* ... */ }
+```
+
+`PgPool` and `broadcast::Sender` are cheap to clone internally.
+
+## SSE
+
+Axum's SSE response handles the core SSE headers. Use named events deliberately:
+
+```rust
+let event = Event::default()
+    .event("search_result")
+    .json_data(payload)?;
+```
+
+A browser using `addEventListener("search_result", ...)` or an EventSource helper
+subscribed to that name will not receive a different named event such as
+`connected` or `stream_lagged` through that subscription.
+
+Broadcast lag is not connection termination. `tokio::sync::broadcast` drops old
+messages for a lagging receiver and reports `RecvError::Lagged(n)`; handle it
+explicitly and decide whether the client needs a resync signal.
+
+`KeepAlive` only keeps an otherwise-live stream active. If the inner stream ends,
+the SSE response ends.
+
+## Error handling
+
+Internal errors should be logged internally and mapped to stable client-safe
+responses:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
 enum AppError {
     #[error("not found")]
     NotFound,
-    #[error("database: {0}")]
+    #[error("database error")]
     Db(#[from] sqlx::Error),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
-            AppError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        };
-        (status, Json(serde_json::json!({"error": message}))).into_response()
-    }
-}
-
-// Then handlers can use ?:
-async fn handler(pool: State<PgPool>) -> Result<Json<User>, AppError> {
-    let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
-        .fetch_one(&*pool).await?;
-    Ok(Json(user))
-}
-```
-
-### Common Error Response Patterns
-
-```rust
-// JSON error
-(StatusCode::BAD_REQUEST, Json(json!({"error": "bad request"})))
-
-// HTML error
-(StatusCode::NOT_FOUND, Html("<h1>Not Found</h1>"))
-
-// Plain text error
-(StatusCode::INTERNAL_SERVER_ERROR, "something went wrong".to_string())
-
-// With custom headers
-(
-    StatusCode::UNAUTHORIZED,
-    [(header::WWW_AUTHENTICATE, "Bearer")],
-    "unauthorized",
-)
-```
-
----
-
-## 6. Broadcast → SSE Pattern
-
-### Complete Example
-
-```rust
-use axum::{
-    Router,
-    extract::State,
-    response::sse::{Event, KeepAlive, Sse},
-};
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use futures_util::StreamExt;
-
-#[derive(Clone)]
-struct AppState {
-    tx: broadcast::Sender<Event>,
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let (tx, _) = broadcast::channel::<Event>(256);
-    let state = AppState { tx };
-
-    let app = Router::new()
-        .route("/events", get(sse_handler))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-
-async fn sse_handler(
-    State(state): State<AppState>,
-) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let rx = state.tx.subscribe();
-
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|result| async move {
-            match result {
-                Ok(event) => Some(Ok(event)),
-                Err(e) => {
-                    tracing::warn!("broadcast lag: {}", e);
-                    Some(Ok(Event::default()
-                        .event("stream_lagged")
-                        .data(e.to_string())))
-                }
+        match self {
+            Self::NotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "not found"})),
+            ).into_response(),
+            Self::Db(error) => {
+                tracing::error!(error = %error, "database request failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "internal error"})),
+                ).into_response()
             }
-        });
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-// Publisher (background task, HTTP handler, etc.)
-async fn publish_update(tx: &broadcast::Sender<Event>, data: &str) {
-    let event = Event::default()
-        .event("update")
-        .data(data.to_string());
-    if let Err(e) = tx.send(event) {
-        tracing::warn!("no SSE subscribers: {}", e);
+        }
     }
 }
 ```
 
----
+Do **not** return `sqlx::Error::to_string()` or other implementation details to
+clients merely because the handler already has the error available.
 
-## 7. Pitfalls
+Upstream service failures should normally map to gateway-oriented statuses such
+as `502 Bad Gateway` or `503 Service Unavailable`, depending on the failure model.
 
-1. **Sse handler holds broadcast Receiver**: Each SSE connection holds a `broadcast::Receiver`. The channel buffer is shared. If a consumer lags by more than `buffer_size` messages, it's dropped (broadcast semantics).
-2. **KeepAlive on ended stream**: If your inner stream ends, the SSE connection closes. KeepAlive only pings while the stream is alive but slow.
-3. **State must be Clone**: `with_state()` requires `S: Clone`. PgPool is Clone (Arc internally). broadcast::Sender is Clone.
-4. **Route ordering matters**: First matching route wins. Put specific routes before catch-all routes.
-5. **Middleware applies to all child routes**: `Router::layer()` applies to all nested routes. Use `route_layer()` for specific routes.
-6. **SSE + CORS**: EventSource requires same-origin by default. If serving from a different port in dev, add CORS headers.
-7. **Body::from_stream chunking**: Large streams should use `throttle()` or `chunks_timeout()` to avoid overwhelming the network buffer.
-8. **BroadcastStream lag**: `BroadcastStream` wraps `broadcast::Receiver`. When the receiver lags (more than `capacity` messages behind), it returns `RecvError::Lagged(n)`. Always handle this gracefully.
+## Request bodies
+
+Axum has request-body limits. Leptos server functions using normal encodings are
+also subject to the framework's body limit. If a route intentionally accepts a
+large body, configure `DefaultBodyLimit`/the appropriate limit explicitly and
+keep per-route limits as narrow as practical.
+
+## CORS with credentials
+
+Credentialed CORS cannot be combined with wildcard origin/method/header policies.
+For cookie sessions, enumerate the allowed origins and the required methods and
+headers, then enable credentials.
+
+Do not infer a trusted client address from `X-Forwarded-For` until a trusted
+reverse proxy boundary strips untrusted forwarding headers.
+
+## Sessions and CSRF
+
+The gateway deliberately demonstrates cookie sessions alongside Bearer auth.
+Session middleware must run before middleware that extracts `Session` (including
+the CSRF layer). Mutating session routes are CSRF protected; bootstrap/login and
+refresh routes use their own credential models and are not synchronizer-token
+protected.
+
+Session backend failures are server errors. Do not turn a failed session read or
+flush into HTTP 200 with an `{ "error": ... }` body.
+
+## CSP
+
+A custom `from_fn` CSP middleware is fine, but it is not required because Axum's
+response body lacks `Clone`; `SetResponseHeaderLayer` does not impose that body
+bound. If custom middleware is retained, document the actual reason (for example,
+policy construction or if-not-present behavior) rather than a nonexistent Tower
+restriction.
+
+## WebSockets
+
+For browser-facing WebSockets:
+
+- validate `Origin` against the expected host/allowlist,
+- set `WebSocketUpgrade::max_message_size` and `max_frame_size` before upgrade,
+- handle slow-client/backpressure behavior,
+- connect active sockets to application shutdown in production services.
+
+The `i18n-demo` WebSocket is intentionally in-memory but demonstrates the first
+three points.
+
+## Observability
+
+`TraceLayer` creates request tracing, while OpenTelemetry propagation additionally
+requires middleware that extracts incoming `traceparent`/`tracestate`. Setting a
+global W3C propagator alone does not read HTTP headers.
