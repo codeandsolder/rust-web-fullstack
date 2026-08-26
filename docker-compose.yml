@@ -31,8 +31,6 @@ services:
     ports:
       - "3000:3000"
     healthcheck:
-      # Compose readiness includes the database dependency. `/health` remains
-      # a pure process-liveness endpoint for orchestrators that distinguish the two.
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/readyz"]
       interval: 5s
       timeout: 3s
@@ -83,9 +81,8 @@ services:
       live-search:
         condition: service_healthy
 
-  # Dev gateway — ephemeral EdDSA keys, ALLOW_DEV_KEYS=1 guard engaged.
-  # Use this for local exploration: `docker compose --profile dev up gateway-dev`.
-  # NEVER use in production; tokens cannot survive a restart.
+  # Local HTTP profile. Ephemeral keys and non-Secure cookies are both explicit
+  # so browser session/CSRF flows work on http://localhost:3001.
   gateway-dev:
     profiles: ["dev"]
     build:
@@ -98,6 +95,7 @@ services:
       DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
       ALLOW_DEV_KEYS: "1"
       ADMIN_PASSWORD: "synthetic-gateway-test-password"
+      RWF_GATEWAY__SESSION__COOKIE_SECURE: "false"
       RUST_LOG: info
     command: ["/app/gateway-example", "--dev-keys"]
     healthcheck:
