@@ -1,11 +1,13 @@
-//! Shared configuration for the gateway example.
+//! Shared gateway settings.
 //!
-//! Production settings are loaded from environment variables; development can
-//! generate an ephemeral Ed25519 keypair with `--dev-keys`.
+//! Secret/auth material still comes from deployment environment variables.
+//! Non-secret runtime settings are overwritten from `rwf_config::Config` by
+//! production `main`, keeping the typed config tree authoritative.
 
 use std::str::FromStr;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use rwf_domain::UserId;
 
@@ -13,7 +15,9 @@ use crate::pem::{ed25519_spki_der, pem_encode};
 
 pub const JWT_ISS: &str = "gateway-example";
 pub const JWT_AUD: &str = "gateway-example-api";
-const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+pub const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+pub const DEFAULT_ALLOWED_ORIGINS: &str =
+    "http://localhost:3000,http://localhost:3001,http://localhost:3002";
 
 #[must_use]
 fn short_fingerprint(bytes: &[u8]) -> String {
@@ -29,9 +33,7 @@ fn bool_env(name: &str, default: bool) -> anyhow::Result<bool> {
     match std::env::var(name) {
         Ok(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
         Ok(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
-        Ok(value) => anyhow::bail!(
-            "{name} must be true/false or 1/0, got {value:?}"
-        ),
+        Ok(value) => anyhow::bail!("{name} must be true/false or 1/0, got {value:?}"),
         Err(std::env::VarError::NotPresent) => Ok(default),
         Err(e) => Err(e).with_context(|| format!("failed to read {name}")),
     }
@@ -51,10 +53,21 @@ fn positive_i64_env(name: &str, default: i64) -> anyhow::Result<i64> {
     Ok(value)
 }
 
-use anyhow::Context as _;
+fn positive_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {
+    let value = match std::env::var(name) {
+        Ok(raw) => raw
+            .parse::<usize>()
+            .with_context(|| format!("{name} must be a positive integer, got {raw:?}"))?,
+        Err(std::env::VarError::NotPresent) => default,
+        Err(e) => return Err(e).with_context(|| format!("failed to read {name}")),
+    };
+    if value == 0 {
+        anyhow::bail!("{name} must be greater than zero");
+    }
+    Ok(value)
+}
 
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct SessionSettings {
     pub cookie_secure: bool,
     pub cookie_name: String,
@@ -78,10 +91,10 @@ pub struct Settings {
     pub encoding_key: Arc<EncodingKey>,
     pub decoding_key: Arc<DecodingKey>,
     pub access_token_ttl_secs: i64,
-    /// The one identity accepted by the intentionally-simple demo password
-    /// login. A real application should replace this pair with a user store.
     pub admin_user_id: UserId,
     pub default_admin_password: Arc<str>,
+    pub allowed_origins: Arc<str>,
+    pub sse_broadcast_buffer: usize,
     pub session: SessionSettings,
 }
 
@@ -95,17 +108,19 @@ impl std::fmt::Debug for Settings {
             .field("access_token_ttl_secs", &self.access_token_ttl_secs)
             .field("admin_user_id", &self.admin_user_id)
             .field("default_admin_password", &"<redacted>")
+            .field("allowed_origins", &self.allowed_origins)
+            .field("sse_broadcast_buffer", &self.sse_broadcast_buffer)
             .field("session", &self.session)
             .finish()
     }
 }
 
 impl Settings {
-    /// Load production settings.
+    /// Load secrets plus legacy environment fallbacks. Production `main`
+    /// replaces non-secret values with the already-validated typed config.
     ///
     /// # Errors
-    /// Returns an error when required secrets, key material, IDs, booleans or
-    /// TTLs are missing/invalid.
+    /// Returns an error for missing/invalid keys, credentials, IDs or values.
     pub fn load() -> Result<Self, anyhow::Error> {
         let jwt_private_key_pem = std::env::var("JWT_PRIVATE_KEY_PEM")
             .map_err(|_| anyhow::anyhow!("JWT_PRIVATE_KEY_PEM must be set"))?;
@@ -146,25 +161,28 @@ impl Settings {
                 .unwrap_or_else(|_| "rwf_csrf".to_string()),
         };
 
-        let access_token_ttl_secs = positive_i64_env("ACCESS_TOKEN_TTL_SECS", 15 * 60)?;
-
         Ok(Self {
             jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
             encoding_key,
             decoding_key,
-            access_token_ttl_secs,
+            access_token_ttl_secs: positive_i64_env("ACCESS_TOKEN_TTL_SECS", 15 * 60)?,
             admin_user_id,
             default_admin_password: Arc::from(default_admin_password.as_str()),
+            allowed_origins: Arc::from(
+                std::env::var("ALLOWED_ORIGINS")
+                    .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string()),
+            ),
+            sse_broadcast_buffer: positive_usize_env("SSE_BROADCAST_BUFFER", 256)?,
             session,
         })
     }
 
-    /// Construct development settings with a freshly-generated keypair.
+    /// Development settings with an ephemeral keypair and HTTP-friendly
+    /// session cookie. Intended only for local/test use.
     ///
     /// # Errors
-    /// Returns an error when key generation/encoding fails or the password is
-    /// empty.
+    /// Returns an error when key generation/encoding fails or password is empty.
     pub fn load_dev_keys(admin_password: &str) -> Result<Self, anyhow::Error> {
         use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
 
@@ -206,15 +224,15 @@ impl Settings {
             access_token_ttl_secs: 15 * 60,
             admin_user_id,
             default_admin_password: Arc::from(admin_password),
-            session: SessionSettings::default(),
+            allowed_origins: Arc::from(DEFAULT_ALLOWED_ORIGINS),
+            sse_broadcast_buffer: 256,
+            session: SessionSettings {
+                cookie_secure: false,
+                ..SessionSettings::default()
+            },
         })
     }
 
-    /// Load development settings using `ADMIN_PASSWORD` from the environment.
-    ///
-    /// # Errors
-    /// Returns an error if `ADMIN_PASSWORD` is missing/empty or key generation
-    /// fails.
     pub fn load_dev_keys_from_env() -> Result<Self, anyhow::Error> {
         let admin_password = std::env::var("ADMIN_PASSWORD")
             .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;
