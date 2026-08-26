@@ -78,16 +78,15 @@ pub async fn wait(
     // in bootstrap. When the signal fires, the server will start draining.
     shutdown.cancelled().await;
 
-    // ---- close database pool ----------------------------------------------
-
-    db::close_pool(pool).await;
-
-    // ---- drain background tasks -------------------------------------------
+    // ---- drain background tasks BEFORE closing the pool -------------------
     //
-    // A second `cancel()` is idempotent (the signal handler already fired).
-    // Inspect each `JoinError` so a panic is logged rather than silently
-    // swallowed.
-
+    // The PgListener task holds a connection out of the pool. Closing the
+    // pool first would terminate its in-flight queries mid-execution; the
+    // listener needs to observe `shutdown.cancelled()` first, exit cleanly,
+    // and release its connection back to the pool. Order is therefore:
+    //   1. cancel token (idempotent — signal handler already fired)
+    //   2. drain JoinSet with a 10s timeout; abort on timeout
+    //   3. close the pool last
     shutdown.cancel();
     match tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(joined) = tasks.join_next().await {
@@ -115,8 +114,15 @@ pub async fn wait(
         Err(_elapsed) => {
             tracing::warn!("background tasks did not drain within 10s; aborting");
             tasks.abort_all();
+            // Give aborted tasks a brief moment to drop their connections
+            // before we close the pool underneath them.
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
+
+    // ---- close database pool ----------------------------------------------
+
+    db::close_pool(pool).await;
 
     // ---- OTel shutdown ----------------------------------------------------
     //

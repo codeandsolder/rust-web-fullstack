@@ -23,6 +23,7 @@ use crate::gateway::GatewayState;
 
 use super::error::AppError;
 use super::jwt::{Claims, create_jwt};
+use super::refresh::{generate_raw_refresh_token, hash_refresh_token};
 
 // ---------------------------------------------------------------------------
 // Request / Response DTOs
@@ -34,7 +35,7 @@ use super::jwt::{Claims, create_jwt};
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
-    /// User identifier (e.g. email or username).
+    /// User identifier (must be a UUID in this demo).
     #[validate(length(min = 1, max = 255))]
     pub user_id: String,
     /// User password.
@@ -42,11 +43,19 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-/// Login response containing the signed JWT.
+/// Login response containing the signed JWT and the initial refresh token.
+///
+/// Refresh tokens are issued at login and rotated on every successful
+/// `/auth/refresh` call. Storing the refresh token in the database (as a
+/// SHA-256 hash) and the family-id linkage allows the server to revoke the
+/// whole chain if a leaked token is replayed.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LoginResponse {
-    /// Signed `EdDSA` JWT.
+    /// Signed `EdDSA` access JWT (short-lived, e.g. 15 minutes).
     pub token: String,
+    /// Opaque refresh token (long-lived, e.g. 30 days). Send verbatim to
+    /// `/auth/refresh` to obtain a new access JWT and a new refresh token.
+    pub refresh_token: String,
     /// Authenticated user identifier.
     pub user_id: String,
 }
@@ -111,7 +120,9 @@ pub async fn login_handler(
 ) -> Result<Json<LoginResponse>, AppError> {
     let s = &state.settings;
 
-    // Parse user_id as a valid UserId before signing a JWT.
+    // Parse user_id as a valid UserId before signing a JWT. Refuses any
+    // non-UUID subject — prevents a single shared `default_admin_password`
+    // from authenticating as an arbitrary subject.
     let parsed_user_id = UserId::from_str(&user_id)?;
 
     // Constant-time password comparison.
@@ -123,7 +134,43 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&parsed_user_id, &s.encoding_key)?;
+    let token = create_jwt(&parsed_user_id, &s.encoding_key, s.access_token_ttl_secs)?;
+
+    // Issue the initial refresh token. The DB-backed path is required for
+    // any production-grade rotation; the gateway refuses to start login
+    // without a configured DB pool. `generate_raw_refresh_token` is
+    // infallible on Linux/macOS/Windows in practice but propagates RNG
+    // failure as an internal error rather than panicking.
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        AppError::internal(
+            "refresh-token store unavailable",
+            std::io::Error::other("DATABASE_URL not configured; gateway cannot issue refresh tokens"),
+        )
+    })?;
+
+    let (raw_refresh, refresh_jti) = generate_raw_refresh_token()
+        .map_err(|e| AppError::internal("refresh token generation", e))?;
+
+    let now = chrono::Utc::now();
+    let expires_at = now + chrono::Duration::seconds(state.refresh_token_ttl_secs);
+    let hashed = hash_refresh_token(&raw_refresh).to_vec();
+
+    // The first row in a refresh-token family uses its own jti as
+    // `family_id`. Subsequent rotations chain by reusing the same
+    // `family_id` (see `refresh::rotate`).
+    sqlx::query(
+        "INSERT INTO refresh_tokens (jti, family_id, subject, hashed_token, expires_at, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(refresh_jti)
+    .bind(refresh_jti)
+    .bind(Uuid::from(parsed_user_id))
+    .bind(hashed)
+    .bind(expires_at)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::internal("refresh token insert", e))?;
 
     // Persist the authenticated user in the session cookie.  This enables
     // CSRF-protected session-backed routes (e.g. `/session/whoami`,
@@ -138,24 +185,25 @@ pub async fn login_handler(
         .await
         .map_err(|e| AppError::internal("session insert", e))?;
 
-    Ok(Json(LoginResponse { token, user_id }))
+    Ok(Json(LoginResponse {
+        token,
+        refresh_token: raw_refresh,
+        user_id,
+    }))
 }
 
 /// Refresh a JWT token.
 ///
-/// If the gateway was started with a DB pool, the request body is
-/// interpreted as `{"refresh_token": "<opaque>"}` and the refresh
-/// token is rotated atomically (old revoked, new issued). Without a
-/// DB pool the legacy semantics are kept: the body is
-/// `{"token": "<existing JWT>"}` and the server re-issues a new JWT
-/// for the same subject. This dual behaviour lets the example run
-/// without `PostgreSQL` while still exercising the production-grade
-/// rotation flow when configured.
+/// Body is `{"refresh_token": "<opaque>"}`. The refresh token is rotated
+/// atomically (old revoked, new issued in the same transaction). If a
+/// previously-rotated token is replayed, the entire family is revoked —
+/// see [`super::refresh::rotate`].
 ///
 /// # Errors
 ///
-/// Returns [`AppError::AuthError`] if the refresh token is missing or
-/// invalid. Returns [`AppError::Internal`] for DB failures.
+/// Returns [`AppError::AuthError`] if the refresh token is missing, unknown,
+/// expired, or replayed. Returns [`AppError::Internal`] for DB failures or
+/// when the refresh-token store is not configured.
 #[utoipa::path(
     post,
     path = "/auth/refresh",
@@ -170,41 +218,44 @@ pub async fn refresh_handler(
     State(state): State<GatewayState>,
     axum::extract::Json(body): axum::extract::Json<serde_json::Value>,
 ) -> Result<Json<RefreshResponse>, AppError> {
-    // DB-backed rotation path: requires a refresh_token in the body.
-    if let Some(pool) = state.db_pool.as_ref() {
-        let raw = body
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .ok_or(AppError::AuthError)?;
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        AppError::internal(
+            "refresh-token store unavailable",
+            std::io::Error::other("DATABASE_URL not configured; /auth/refresh cannot operate"),
+        )
+    })?;
 
-        let now = chrono::Utc::now();
-        let rotation = super::refresh::rotate(pool, raw, now, state.refresh_token_ttl_secs)
-            .await
-            .map_err(|e| AppError::internal("refresh-token rotation", e))?
-            .ok_or(AppError::AuthError)?;
-
-        let token = create_jwt(&rotation.subject, &state.settings.encoding_key)?;
-
-        return Ok(Json(RefreshResponse {
-            token,
-            refresh_token: Some(rotation.new_raw_token),
-        }));
-    }
-
-    // Legacy fallback (no DB): re-issue using the existing JWT.
-    let token_str = body
-        .get("token")
+    let raw = body
+        .get("refresh_token")
         .and_then(|v| v.as_str())
         .ok_or(AppError::AuthError)?;
-    let claims = super::jwt::validate_jwt(token_str, &state.settings.decoding_key)?;
-    let token = create_jwt(&claims.sub, &state.settings.encoding_key)?;
+
+    let now = chrono::Utc::now();
+    let rotation = super::refresh::rotate(pool, raw, now, state.refresh_token_ttl_secs)
+        .await
+        .map_err(|e| AppError::internal("refresh-token rotation", e))?
+        .ok_or(AppError::AuthError)?;
+
+    let token = create_jwt(
+        &rotation.subject,
+        &state.settings.encoding_key,
+        state.settings.access_token_ttl_secs,
+    )?;
+
     Ok(Json(RefreshResponse {
         token,
-        refresh_token: None,
+        refresh_token: Some(rotation.new_raw_token),
     }))
 }
 
-/// Logout — invalidate the current session / token.
+/// Logout — invalidate the current refresh-token family.
+///
+/// **Semantic**: this endpoint revokes the caller's refresh tokens (the DB
+/// row, marked `revoked_at = NOW()`) and any active refresh tokens for the
+/// same subject. The access JWT remains valid until its (now short,
+/// 15-minute) `exp`; clients should discard both the access JWT and the
+/// refresh token. Use [`crate::session::router`]'s `/session/logout` to
+/// also flush the session cookie.
 ///
 /// # Errors
 ///
@@ -222,22 +273,24 @@ pub async fn logout_handler(
     State(state): State<GatewayState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<LogoutResponse>, AppError> {
-    if let Some(pool) = state.db_pool.as_ref() {
-        sqlx::query(
-            "UPDATE refresh_tokens SET revoked_at = NOW() \
-             WHERE subject = $1 AND revoked_at IS NULL",
-        )
-        .bind(Uuid::from(claims.sub))
-        .execute(pool)
-        .await
-        .map_err(|e| AppError::internal("refresh token revocation", e))?;
-        tracing::info!(subject = %claims.sub, "refresh tokens revoked");
-    } else {
-        tracing::warn!(
-            subject = %claims.sub,
-            "logout called without DB pool; access JWT remains valid until 24 h expiry"
-        );
-    }
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| AppError::internal("refresh store unavailable", std::io::Error::other("DATABASE_URL not configured")))?;
+    let revoked = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() \
+         WHERE subject = $1 AND revoked_at IS NULL",
+    )
+    .bind(Uuid::from(claims.sub))
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::internal("refresh token revocation", e))?
+    .rows_affected();
+    tracing::info!(
+        subject = %claims.sub,
+        revoked_count = revoked,
+        "refresh tokens revoked; access JWT remains valid until exp",
+    );
     Ok(Json(LogoutResponse {
         status: "ok".to_string(),
     }))

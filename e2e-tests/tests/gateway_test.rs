@@ -23,6 +23,12 @@ use e2e_tests::common::GatewayEnv;
 /// MUST match what `GatewayEnv::start()` sets as `ADMIN_PASSWORD`.
 const TEST_PASSWORD: &str = "synthetic-gateway-test-password";
 
+/// A fixed UUID used as the test subject. The gateway's `login_handler`
+/// parses `user_id` as a `UserId` (a UUID newtype), so a literal string
+/// like `"test"` is rejected with 400. Using a constant UUID keeps the
+/// tests deterministic.
+const TEST_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+
 /// Helper to build a reqwest client with a short timeout.
 fn test_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -35,15 +41,16 @@ fn test_client() -> anyhow::Result<reqwest::Client> {
 // Helper: start a shared gateway for the suite
 // ---------------------------------------------------------------------------
 
-use tokio::sync::OnceCell;
+use e2e_tests::common::once::SharedServer;
 
 /// Shared gateway server instance, initialised lazily on first access.
-static GATEWAY: OnceCell<GatewayEnv> = OnceCell::const_new();
+///
+/// Runs on a dedicated background tokio runtime (see [`SharedServer`]) so the
+/// DB pool's sockets stay bound to a live reactor for the whole test binary.
+static GATEWAY: SharedServer<GatewayEnv> = SharedServer::new();
 
 async fn get_gateway() -> anyhow::Result<&'static GatewayEnv> {
-    GATEWAY
-        .get_or_try_init(|| async { GatewayEnv::start().await })
-        .await
+    GATEWAY.get(|| async { GatewayEnv::start().await }).await
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +196,7 @@ async fn auth_login_succeeds() -> anyhow::Result<()> {
     let response = client
         .post(&url)
         .json(&serde_json::json!({
-            "user_id": "test",
+            "user_id": TEST_USER_ID,
             "password": TEST_PASSWORD,
         }))
         .send()
@@ -199,7 +206,7 @@ async fn auth_login_succeeds() -> anyhow::Result<()> {
     let status = response.status();
     assert!(
         status == 200 || status == 201,
-        "Expected 200 or 201 from /auth/login, got {status}"
+        "Expected 200 or 201 from /auth/login, got {status}",
     );
 
     let json: serde_json::Value = response
@@ -218,7 +225,12 @@ async fn auth_login_succeeds() -> anyhow::Result<()> {
         parts.len(),
         3,
         "Expected a JWT (3 dot-separated parts), got {}: {token:.100}",
-        parts.len()
+        parts.len(),
+    );
+    // Verify refresh_token is also returned (DB-backed rotation flow).
+    assert!(
+        json.get("refresh_token").and_then(|v| v.as_str()).is_some(),
+        "login response should contain a 'refresh_token' field when DB pool is configured",
     );
     println!("Auth login succeeded, received JWT ({} chars)", token.len());
 
@@ -260,7 +272,7 @@ async fn auth_protected_accepts_valid_token() -> anyhow::Result<()> {
     let login_response = client
         .post(&login_url)
         .json(&serde_json::json!({
-            "user_id": "test",
+            "user_id": TEST_USER_ID,
             "password": TEST_PASSWORD,
         }))
         .send()
@@ -322,7 +334,7 @@ async fn auth_login_rejects_invalid_password() -> anyhow::Result<()> {
     let response = client
         .post(&url)
         .json(&serde_json::json!({
-            "user_id": "test",
+            "user_id": TEST_USER_ID,
             "password": "definitely-wrong-password",
         }))
         .send()
@@ -384,7 +396,7 @@ async fn gateway_cors_preflight_is_handled() -> anyhow::Result<()> {
     let client = test_client()?;
     let response = client
         .request(reqwest::Method::OPTIONS, &url)
-        .header("Origin", "http://example.com")
+        .header("Origin", "http://localhost:3000")
         .header("Access-Control-Request-Method", "GET")
         .send()
         .await

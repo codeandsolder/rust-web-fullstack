@@ -39,8 +39,7 @@ description: Full-stack Rust web development with Leptos 0.8.x, PostgreSQL via s
 - [Pattern 6: Gateway with ServiceModule Trait](#pattern-6-gateway-with-servicemodule-trait)
 - [Pattern 7: JavaScript-Driven SSE Detection (for Chrome DevTools MCP)](#pattern-7-javascript-driven-sse-detection-for-chrome-devtools-mcp)
 - [Pattern 8: TTL Cleanup via pg_cron](#pattern-8-ttl-cleanup-via-pgcron)
-- [Pattern 9: Server-Fn Catch-All Route (Leptos 0.8 Doubled-Prefix Bug)](#pattern-9-server-fn-catch-all-route-leptos-08-doubled-prefix-bug)
-- [Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)](#pattern-10-ssr--hydration-setup-same-crate-as-both-bin--lib)
+- [Pattern 9: SSR + Hydration Setup (Same Crate as Both Bin & Lib)](#pattern-9-ssr--hydration-setup-same-crate-as-both-bin--lib)
 - [Scoped CSS with stylance](#scoped-css-with-stylance)
 - [Pattern 11: Action.value() vs Action.input()](#pattern-11-actionvalue-vs-actioninput)
 - [Pattern 12: chromiumoxide E2E Helpers](#pattern-12-chromiumoxide-e2e-helpers)
@@ -205,7 +204,21 @@ Starting a Rust web project?
 ### Critical Rules
 
 #### 1. Feature flags are mutually exclusive per build target
-`csr`, `ssr`, `hydrate` cannot coexist. A crate's `[features]` table must use `skip_feature_sets` or explicit negative deps to make any two of them fail at `cargo check` time.
+`csr`, `ssr`, `hydrate` cannot coexist on the same build. Enforce this with a `compile_error!` invariant and exercise the matrix in CI:
+
+```rust
+#[cfg(all(feature = "ssr", feature = "hydrate"))]
+compile_error!("`ssr` and `hydrate` are mutually exclusive per build target");
+#[cfg(all(feature = "csr", feature = "ssr"))]
+compile_error!("`csr` and `ssr` are mutually exclusive per build target");
+#[cfg(all(feature = "csr", feature = "hydrate"))]
+compile_error!("`csr` and `hydrate` are mutually exclusive per build target");
+```
+
+> **Note on `skip_feature_sets`:** this Cargo metadata is consumed by
+> tooling such as `cargo-all-features` to *skip* combinations during
+> matrix testing. It does NOT make `cargo check` fail on a bad
+> combination — that's what the `compile_error!` invariant is for.
 
 #### 2. Leptos 0.8 Action state
 Use `action.value()` (the action's result) not `action.input()` (the dispatched input) when rendering post-action result UI ("No results found.", error banner, success state). Both `input()` and `value()` persist for the lifetime of the `Action`; they differ in what they hold, not in whether they survive completion. See Pattern 11.
@@ -216,14 +229,36 @@ Budget for it in `max_connections` (e.g. `21 = 20 queries + 1 listener`). One `P
 #### 4. `render_app_to_stream_with_context` creates a fresh reactive tree per request
 Context injection is the standard way to share state. Do not put request-scoped resources (`PgPool`, `AppContext`) in a `OnceLock` and rely on them being visible inside `view!` — the tree is built fresh per request.
 
+> **Compatibility note:** the canonical `live-search` server functions
+> resolve an `Arc<AppContext>` through a process-global
+> `OnceLock` (`live_search::state::get()`). This exists for backward
+> compatibility with `#[server]` functions that take no context argument.
+> **New code should accept `Arc<AppContext>` explicitly** via
+> `leptos::context::provide_context` in the SSR shell closure and through
+> the server-fn context — process globals make isolated tests and
+> multiple app instances impossible.
+
 #### 5. SSE auto-headers
 axum's `Sse::new(stream)` automatically sets `Content-Type: text/event-stream` and `Cache-Control: no-cache`. Do NOT add these manually or `SetResponseHeaderLayer` will double-set them and break CORS preflight caches.
 
-#### 6. Server fn path doubling
-`leptos_axum::handle_server_fns` mounted at `/api/*fn_name` will register the route at `/api/api/search` when your server fn macro is configured with `endpoint = "/api/search"`. Fix: use a catch-all handler that tries both — see Pattern 9 below.
+#### 6. Server fn endpoint naming
+The `#[server]` macro defaults `prefix` to `/api` and treats `endpoint`
+as **relative to that prefix**. Therefore:
+
+- `#[server(endpoint = "search")]` mounted at `/api/{*fn_name}` resolves to `/api/search`.
+- `#[server(endpoint = "/api/search")]` resolves to `/api/api/search` — almost certainly not what you want; the doubled path is *not* a Leptos bug, it's the prefix doubled by the absolute path.
+
+Always write `endpoint = "<short-name>"`, never `endpoint = "/api/<...>"`. Mount `leptos_axum::handle_server_fns` at exactly `/api/{*fn_name}`. There is no need for a doubled-prefix probe or catch-all.
 
 #### 7. Static files for hydration
-SSR pages load WASM via `/pkg/{crate}.js` and `/pkg/{crate}_bg.wasm`. You MUST mount `tower_http::services::ServeDir::new("./pkg")` (relative to server CWD) before hydration works. The Leptos build writes these to `./pkg` next to your `Cargo.toml` during `cargo leptos build`.
+SSR pages load WASM via `/pkg/{crate}.js` and `/pkg/{crate}_bg.wasm`. You MUST mount `tower_http::services::ServeDir::new("<site-pkg-dir>")` (where `<site-pkg-dir>` defaults to `target/site/pkg`) before hydration works. `cargo leptos build` writes its artifacts under `target/site/`, NOT next to your `Cargo.toml`.
+
+**Per-app site roots.** When the workspace builds multiple Leptos apps
+(live-search, i18n-demo) the default `CARGO_TARGET_DIR` is shared. The
+second `cargo leptos build` clears the first app's site tree. Set
+distinct `site-root` values in each `Cargo.toml`'s
+`[package.metadata.leptos]`, or invoke `cargo leptos build -p <crate>`
+sequentially with per-app target dirs.
 
 #### 8. chromiumoxide SingletonLock
 Every test that spawns a browser MUST use a unique `user_data_dir` (e.g. `<pid>-<nanos>`). Default `~/.cache/chromiumoxide-runner/SingletonLock` collides when tests run in parallel.
@@ -1129,79 +1164,7 @@ SELECT cron.schedule(
 );
 ```
 
-### Pattern 9: Server-Fn Catch-All Route (Leptos 0.8 Doubled-Prefix Bug)
-
-`leptos_axum::handle_server_fns` registers server functions at the path
-declared by their `endpoint = "..."` macro arg. When that arg starts with
-`/api/`, the resulting route is `/api/api/<fn_name>` — clients calling
-`/api/search` get 404. This is a known wart of Leptos 0.8's macro expansion.
-Fix with a custom handler that probes both paths via
-`leptos::server_fn::axum::get_server_fn_service`:
-
-```rust
-use axum::body::Body;
-use axum::extract::Request;
-use axum::http::{StatusCode, Uri};
-use axum::response::IntoResponse;
-use axum::routing::any;
-
-/// Catch-all handler for server function endpoints.
-///
-/// Probes the exact path first; if not registered, tries a doubled-prefix
-/// variant (e.g. `/api/search` when the `#[server(endpoint = "/api/search")]`
-/// macro registered `/api/api/search`).
-///
-/// # Panics
-/// Panics only if the path-rewrite produces an invalid URI — in practice this
-/// is infallible because we only ever prepend `/api` to an existing valid URI.
-#[expect(
-    clippy::expect_used,
-    reason = "Path rewrite produces a valid URI by construction (prepending /api to a valid path)"
-)]
-async fn server_fn_handler(req: Request<Body>) -> impl IntoResponse {
-    let method = req.method().clone();
-    let original_path = req.uri().path().to_string();
-    let (mut parts, body) = req.into_parts();
-
-    let path_to_try =
-        if leptos::server_fn::axum::get_server_fn_service(&original_path, method.clone()).is_none()
-            && original_path.starts_with("/api/")
-        {
-            let doubled = format!("/api{original_path}");
-            if leptos::server_fn::axum::get_server_fn_service(&doubled, method).is_some() {
-                doubled
-            } else {
-                original_path
-            }
-        } else {
-            original_path
-        };
-
-    if path_to_try != parts.uri.path() {
-        parts.uri = Uri::try_from(&path_to_try).expect("valid URI from path rewrite");
-    }
-
-    let req = Request::from_parts(parts, body);
-    leptos_axum::handle_server_fns(req).await
-}
-```
-
-Mount it with `any` (accepts both GET and POST). For belt-and-braces
-compatibility with the Leptos 0.8 macro, register **both** prefixes:
-
-```rust
-.route("/api/{*fn_name}",      any(server_fn_handler))
-.route("/api/api/{*fn_name}",  any(server_fn_handler))
-```
-
-The `server_fn_handler`'s internal probe via
-`leptos::server_fn::axum::get_server_fn_service` short-circuits to the
-exact registered path, so registering both routes is harmless and avoids
-relying on the probe-fallback path alone. This is the form used in
-`./live-search/src/bootstrap.rs::run` (the SSR entrypoint delegates to
-`bootstrap::run()` from `main.rs`).
-
-### Pattern 10: SSR + Hydration Setup (Same Crate as Both Bin & Lib)
+### Pattern 9: SSR + Hydration Setup (Same Crate as Both Bin & Lib)
 
 ```toml
 # Cargo.toml

@@ -1,4 +1,21 @@
 //! Shared CORS and CSP configuration for gateway and tests.
+//!
+//! # Security note (demo CSP)
+//!
+//! The CSP applied by [`csp_middleware`] permits `'unsafe-inline'` and
+//! `'unsafe-eval'` for **demo simplicity** — the Leptos SSR shell injects
+//! styles inline and the browser-driven SSE detection in
+//! `live-search/src/app.rs` uses `eval` for some interactions.
+//!
+//! **Production deployments must**:
+//! 1. Replace the nonce-less policy with a per-request nonce.
+//! 2. Remove `'unsafe-inline'` and `'unsafe-eval'` from both
+//!    `script-src` and `style-src`.
+//! 3. Add the missing hardening directives:
+//!    `object-src 'none'`, `base-uri 'self'`,
+//!    `frame-ancestors 'none'`, `form-action 'self'`.
+//!
+//! See `csp_middleware` below for the exact header construction.
 
 use axum::http::{HeaderName, HeaderValue};
 use tower_http::cors::{Any, CorsLayer};

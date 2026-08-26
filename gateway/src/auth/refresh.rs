@@ -7,11 +7,24 @@
 //! the hash; the raw token is returned to the client and never
 //! persisted.
 //!
-//! Rotation semantics: every [`rotate`] call atomically revokes the
-//! old token (`UPDATE ... SET revoked_at = NOW()`) and inserts a new
-//! row in the same transaction. Re-using an already rotated token
-//! returns `Ok(None)` which the handler maps to 401, signalling that
-//! the credential may have been stolen.
+//! ## Rotation & family revocation
+//!
+//! Every refresh token belongs to a `family_id`. The first row in a
+//! family uses its own `jti` as the family id (see
+//! [`crate::auth::handlers::login_handler`]). Successive rotations
+//! reuse the same family id and chain through the `replaced_by`
+//! column.
+//!
+//! A successful rotation atomically:
+//! 1. Looks up the supplied token (must be unrevoked, unexpired).
+//! 2. Marks it revoked.
+//! 3. Inserts a new row with the **same `family_id`** and a new `jti`.
+//!
+//! If the supplied token is already revoked or unknown, [`rotate`]
+//! treats this as a replay signal: it revokes every still-active
+//! token in the family before returning `Ok(None)`. This is what
+//! stops an attacker who stole one rotated token from continuing to
+//! use it.
 
 use rwf_domain::UserId;
 use sqlx::PgPool;
@@ -93,13 +106,21 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
 }
 
 /// Atomically revoke the rotated token and insert a new refresh token
-/// whose subject matches the rotated one. Returns the new raw token
-/// and subject on success. Returns `Ok(None)` if the input was already
-/// revoked or expired — the caller maps this to 401 to indicate the
+/// in the same family. Returns the new raw token and subject on
+/// success. Returns `Ok(None)` if the input was already revoked,
+/// expired, or unknown — the caller maps this to 401 to indicate the
 /// credential chain is broken.
 ///
-/// `ttl_secs` controls the lifetime of the freshly-issued token; pass
-/// `cfg.gateway.refresh_token_ttl_secs as i64` for production behaviour.
+/// **Replay defence**: if the supplied token is in the DB at all
+/// (even revoked), every still-active row in the same `family_id`
+/// is revoked in the same transaction before returning `Ok(None)`.
+/// This is what detects token theft: an attacker who replays a
+/// rotated token causes the legitimate user's chain to be killed,
+/// which the client notices on their next successful refresh.
+///
+/// `ttl_secs` controls the lifetime of the freshly-issued token;
+/// pass `cfg.gateway.refresh_token_ttl_secs as i64` for production
+/// behaviour.
 ///
 /// # Errors
 /// Returns [`RefreshError::OsRng`] when entropy cannot be fetched, or
@@ -113,9 +134,10 @@ pub async fn rotate(
     let hashed = hash_refresh_token(raw_token);
     let mut tx = pool.begin().await?;
 
-    let record = sqlx::query_as::<_, (Uuid, Uuid)>(
+    // Try to find an active (unrevoked, unexpired) row for this hash.
+    let active = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
         "
-        SELECT jti, subject
+        SELECT jti, family_id, subject
         FROM refresh_tokens
         WHERE hashed_token = $1
           AND revoked_at IS NULL
@@ -128,8 +150,32 @@ pub async fn rotate(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some((old_jti, subject)) = record else {
-        tx.rollback().await?;
+    let Some((old_jti, family_id, subject)) = active else {
+        // Either the token never existed, or it's revoked/expired.
+        // If it ever existed (any state), treat the request as a
+        // replay signal and revoke the whole family. Otherwise the
+        // rotation request is simply unknown — no revocation needed.
+        let any = sqlx::query_as::<_, (Option<Uuid>,)>(
+            "SELECT family_id FROM refresh_tokens WHERE hashed_token = $1 LIMIT 1",
+        )
+        .bind(hashed)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((Some(stolen_family),)) = any {
+            sqlx::query(
+                "UPDATE refresh_tokens SET revoked_at = $1 \
+                 WHERE family_id = $2 AND revoked_at IS NULL",
+            )
+            .bind(now)
+            .bind(stolen_family)
+            .execute(&mut *tx)
+            .await?;
+            tracing::warn!(
+                family_id = %stolen_family,
+                "refresh-token replay detected; entire family revoked",
+            );
+        }
+        tx.commit().await?;
         return Ok(None);
     };
 
@@ -148,17 +194,18 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
 
-    // Insert a brand-new refresh token with the same subject.
+    // Insert a brand-new refresh token in the same family.
     let (new_raw, new_jti) = generate_raw_refresh_token()?;
     let new_expires_at = now + chrono::Duration::seconds(ttl_secs);
     let new_hashed = hash_refresh_token(&new_raw).to_vec();
     sqlx::query(
         "
-        INSERT INTO refresh_tokens (jti, subject, hashed_token, expires_at, created_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO refresh_tokens (jti, family_id, subject, hashed_token, expires_at, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ",
     )
     .bind(new_jti)
+    .bind(family_id)
     .bind(Uuid::from(subject))
     .bind(new_hashed)
     .bind(new_expires_at)

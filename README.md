@@ -65,11 +65,18 @@ crates are independent builds composed in `docker-compose.yml`.
 git clone https://git.onhir.eu/jan/rust-web-fullstack.git
 cd rust-web-fullstack
 
-# Start everything
+# Production stack — requires JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM
+# supplied via the secrets manager. The gateway service in docker-compose.yml
+# is configured to refuse to start without them.
 docker compose up --build -d
 
+# OR for local exploration, use the dev profile with ephemeral keys:
+#   docker compose --profile dev up -d gateway-dev
+# This requires ALLOW_DEV_KEYS=1 + the --dev-keys flag, both of which the
+# gateway-dev service sets for you.
+
 # Seed the database with sample data
-./scripts/seed-db.sh
+SEED_ALLOW_DESTRUCTIVE=0 ./scripts/seed-db.sh
 
 # Check logs
 docker compose logs -f
@@ -124,7 +131,7 @@ The workspace defines **per-crate** Cargo feature flags that opt in to observabi
 
 | Flag | Crates | Description |
 |------|--------|-------------|
-| `otel` | gateway, live-search | OpenTelemetry OTLP export via OTLP/HTTP+protobuf (reqwest+rustls). Off by default; requires a collector endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`). Wires `tracing-opentelemetry` layers, `axum-tracing-opentelemetry` middleware, and `sqlx-otel` pool instrumentation. |
+| `otel` | gateway, live-search | OpenTelemetry OTLP export via OTLP/HTTP+protobuf (reqwest+rustls). Off by default; requires a collector endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`). Wires `tracing-opentelemetry` and `axum-tracing-opentelemetry`. **SQLx query spans are pending `sqlx-otel` 0.9 compatibility** — do not rely on per-query spans yet. |
 | `dev-tools` | gateway, live-search | Development-only instrumentation: `console-subscriber` (Tokio console, requires `RUSTFLAGS="--cfg tokio_unstable"`), extra logging spans. Not for production. |
 
 ## EdDSA JWT Keys
@@ -152,7 +159,7 @@ Both environment variables must be set; `Settings::load` rejects empty or non-PE
 
 **`--dev-keys` fallback**: for local exploration only, start the gateway binary with `ALLOW_DEV_KEYS=1 --dev-keys` (both required). The guard exists to prevent accidentally booting the gateway with ephemeral keys in production. When enabled, the startup logs FNV-1a fingerprints of the generated keys (not the keys themselves); the private key never leaves process memory or logs. Keys vanish on restart and clients cannot verify old tokens.
 
-**Security note**: never commit private keys. `.gitignore` already excludes `.env`; keep it that way. CI uses a fixed test pair under `scripts/test-keys/` that is **not** suitable for any non-test deployment.
+**Security note**: never commit private keys. `.gitignore` already excludes `.env`; keep it that way. The gateway requires real keys in production; for local exploration, use `ALLOW_DEV_KEYS=1 --dev-keys`.
 
 ## Benchmarks
 
@@ -177,7 +184,7 @@ This version brings the project to a high-end Rust 2026 showcase standard:
 - **Trigram fuzzy search** — `pg_trgm` GIN index on `search_results.title` for typo-tolerant search.
 - **pg_stat_statements** — query performance monitoring, preloaded via Postgres config.
 - **moka cache** — hot search query caching in live-search (60s TTL, 1000 entries).
-- **stylance** — scoped CSS replaces inline `style=` in all frontend crates.
+- **stylance** — scoped CSS in `live-search` (with `stylance-cli` emitting the actual stylesheet at build time). The `i18n-demo` crate uses handwritten CSS with `[data-i18n-demo]` attribute-selector scoping instead.
 - **leptos-use**, **lepticons** — richer Leptos ecosystem integration.
 - **leptos-struct-table** — typed result-list rendering in `live-search/src/app.rs`.
 - **leptos-forms-rs** — typed form structs (Bitcode server-fn encoding for binary payloads).

@@ -44,8 +44,12 @@ fn bench_sign_verify(c: &mut Criterion) {
 
     c.bench_function("sign_verify", |b| {
         b.iter(|| {
-            let token = create_jwt(black_box(&bench_user_id), black_box(&encoding_key))
-                .expect("create_jwt should succeed");
+            let token = create_jwt(
+                black_box(&bench_user_id),
+                black_box(&encoding_key),
+                black_box(60 * 60 * 24),
+            )
+            .expect("create_jwt should succeed");
             let claims = validate_jwt(black_box(&token), black_box(&decoding_key))
                 .expect("validate_jwt should succeed");
             let _ = black_box(claims.sub);

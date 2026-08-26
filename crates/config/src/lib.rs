@@ -8,6 +8,12 @@
 //!
 //! This replaces the previous per-binary ad-hoc `std::env::var` calls,
 //! eliminating the need for hand-rolled fallback logic.
+//!
+//! # Gateway access-token TTL
+//!
+//! Production `Settings` reads `ACCESS_TOKEN_TTL_SECS` directly; this field
+//! exists for the eventual full migration where all gateway settings move
+//! through the typed `Config` loader.
 
 use std::path::Path;
 
@@ -39,6 +45,10 @@ pub struct GatewayConfig {
     /// Overridable via `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS`.
     #[serde(default = "default_gateway_refresh_token_ttl_secs")]
     pub refresh_token_ttl_secs: u64,
+    /// Lifetime of newly-issued access tokens, in seconds.
+    /// Overridable via `RWF_GATEWAY__ACCESS_TOKEN_TTL_SECS`.
+    #[serde(default = "default_gateway_access_token_ttl_secs")]
+    pub access_token_ttl_secs: u64,
 }
 
 impl Default for GatewayConfig {
@@ -50,6 +60,7 @@ impl Default for GatewayConfig {
             session: SessionConfig::default(),
             sse_broadcast_buffer: default_gateway_sse_broadcast_buffer(),
             refresh_token_ttl_secs: default_gateway_refresh_token_ttl_secs(),
+            access_token_ttl_secs: default_gateway_access_token_ttl_secs(),
         }
     }
 }
@@ -62,6 +73,12 @@ const fn default_gateway_refresh_token_ttl_secs() -> u64 {
     // 30 days, matching the previous hand-rolled constant in
     // `gateway/src/auth/refresh.rs::REFRESH_TOKEN_TTL_SECONDS`.
     60 * 60 * 24 * 30
+}
+
+const fn default_gateway_access_token_ttl_secs() -> u64 {
+    // 15 minutes, matching the previous hand-rolled constant in
+    // `gateway/src/settings.rs::Settings::load` (ACCESS_TOKEN_TTL_SECS).
+    15 * 60
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +213,8 @@ impl Config {
     /// - `RWF_GATEWAY__PORT=4000` overrides `gateway.port`
     /// - `RWF_GATEWAY__SSE_BROADCAST_BUFFER=512` overrides
     ///   `gateway.sse_broadcast_buffer`
+    /// - `RWF_GATEWAY__ACCESS_TOKEN_TTL_SECS=600` overrides
+    ///   `gateway.access_token_ttl_secs`
     /// - `RWF_LIVE_SEARCH__DATABASE_URL=...` overrides
     ///   `live_search.database_url`
     /// - `RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50` overrides
@@ -231,6 +250,10 @@ impl Config {
             .set_default(
                 "gateway.refresh_token_ttl_secs",
                 default_gateway_refresh_token_ttl_secs() as i64,
+            )?
+            .set_default(
+                "gateway.access_token_ttl_secs",
+                default_gateway_access_token_ttl_secs() as i64,
             )?
             .set_default("live_search.port", 3000_i64)?
             .set_default(
@@ -367,6 +390,7 @@ mod tests {
         assert_eq!(cfg.live_search.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.refresh_token_ttl_secs, 60 * 60 * 24 * 30);
+        assert_eq!(cfg.gateway.access_token_ttl_secs, 15 * 60);
     }
 
     /// `RWF_CONFIG=/nonexistent.toml` produces a `ConfigPathNotFound` error

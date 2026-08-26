@@ -47,7 +47,7 @@ use crate::styles;
     clippy::unused_async,
     reason = "The `#[server]` body has `.await` under `feature = \"ssr\"`. The non-ssr branch is synchronous (immediate error return) but the function must remain `async` for the server-fn macro's signature; this is the Leptos 0.8 idiom for SSR-gated server functions."
 )]
-#[server(endpoint = "/api/search")]
+#[server(endpoint = "search")]
 pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnError> {
     // The body touches `crate::db::get_pool` (gated by `feature = "ssr"`)
     // and uses `SearchResult`'s `sqlx::FromRow` derive, which only exists

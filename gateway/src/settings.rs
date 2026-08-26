@@ -92,6 +92,9 @@ pub struct Settings {
     pub encoding_key: Arc<EncodingKey>,
     /// Pre-parsed `EdDSA` decoding key (derived from `jwt_public_key_pem`).
     pub decoding_key: Arc<DecodingKey>,
+    /// Access-token lifetime in seconds. Short-lived by design; DB-backed
+    /// refresh tokens carry the long-lived credential. Default: 15 min.
+    pub access_token_ttl_secs: i64,
     /// Shared password that any `user_id` may submit to obtain a token.
     /// Replace with a real user database in production.
     pub default_admin_password: Arc<str>,
@@ -168,11 +171,17 @@ impl Settings {
                 .unwrap_or_else(|| "rwf_csrf".to_string()),
         };
 
+        let access_token_ttl_secs: i64 = std::env::var("ACCESS_TOKEN_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15 * 60); // 15 minutes — short by design
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
             encoding_key,
             decoding_key,
+            access_token_ttl_secs,
             default_admin_password: Arc::from(default_admin_password.as_str()),
             session,
         })
@@ -232,6 +241,7 @@ impl Settings {
             jwt_public_key_pem: Arc::from(public_pem.as_str()),
             encoding_key,
             decoding_key,
+            access_token_ttl_secs: 15 * 60, // 15 minutes — short by design
             default_admin_password: Arc::from(admin_password),
             session: SessionSettings::default(),
         })

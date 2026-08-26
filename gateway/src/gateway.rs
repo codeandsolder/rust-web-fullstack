@@ -54,12 +54,18 @@ pub struct GatewayState {
     /// Base URL for the proxy upstream API (default: <https://ipapi.co>).
     pub proxy_upstream_url: Arc<str>,
     /// Optional `sqlx::PgPool` for refresh-token rotation. `None` means
-    /// the legacy stateless `/auth/refresh` semantics are used.
+    /// `/auth/login` will return 503 (refresh-token issuance is required
+    /// for any non-trivial auth flow).
     pub db_pool: Option<sqlx::PgPool>,
     /// Lifetime of freshly-issued refresh tokens, in seconds. Loaded from
     /// `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS` at startup; the historical
     /// default in `auth/refresh::REFRESH_TOKEN_TTL_SECONDS` is the floor.
     pub refresh_token_ttl_secs: i64,
+    /// Lifetime of freshly-issued access JWTs, in seconds. Loaded from
+    /// `ACCESS_TOKEN_TTL_SECS` env var (default 900 = 15 minutes).
+    /// Short by design; long-lived credentials live in the refresh-token
+    /// table.
+    pub access_token_ttl_secs: i64,
     /// Reusable HTTP client for upstream API calls.
     pub http_client: reqwest::Client,
 }
@@ -74,6 +80,7 @@ impl std::fmt::Debug for GatewayState {
             .field("proxy_upstream_url", &self.proxy_upstream_url)
             .field("db_pool", &self.db_pool.as_ref().map(|_| "PgPool { .. }"))
             .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
+            .field("access_token_ttl_secs", &self.access_token_ttl_secs)
             .field("http_client", &format_args!("reqwest::Client {{ .. }}"))
             .finish()
     }
@@ -108,6 +115,7 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
         "https://ipapi.co".to_string(),
         None,
         cfg.gateway.refresh_token_ttl_secs.cast_signed(),
+        cfg.gateway.access_token_ttl_secs.cast_signed(),
     )
 }
 
@@ -120,12 +128,17 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
 ///
 /// Returns an error if governor configuration fails.
 #[instrument(skip(modules, settings))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Configuration is composed from many orthogonal sources; bundling into a builder is a separate refactor."
+)]
 pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
     refresh_token_ttl_secs: i64,
+    access_token_ttl_secs: i64,
 ) -> Result<Router, anyhow::Error> {
     // 256 is the documented default; production can override via
     // `RWF_GATEWAY__SSE_BROADCAST_BUFFER` (see `main.rs`).
@@ -164,6 +177,7 @@ pub fn build_gateway_with_settings(
         proxy_upstream_url,
         db_pool,
         refresh_token_ttl_secs,
+        access_token_ttl_secs,
         http_client,
     };
 
@@ -203,17 +217,41 @@ pub fn build_gateway_with_settings(
 
     // --- Session management + CSRF ---
     //
-    // The session layer is the innermost middleware (added first) so the
-    // `Session` extractor is available to the CSRF layer (added second)
-    // and to every handler in the router.
+    // **Layer order matters.** With Axum `.layer(...)`, the LAST-added
+    // layer runs FIRST on incoming requests (it wraps the previous
+    // router). The CSRF middleware (`axum_tower_sessions_csrf`) needs
+    // `tower_sessions::Session` in the request extensions, so Session
+    // must run first. We therefore add the Session layer AFTER the
+    // CSRF layer so Session is the outermost.
+    //
+    // CSRF is applied per-route via `route_layer` (not router-wide) so
+    // that bootstrap / credential routes stay reachable without a token:
+    //   - `/auth/login`   — first-time login, no session/token yet
+    //   - `/auth/csrf`    — token bootstrap endpoint
+    //   - `/auth/refresh` — refresh-token rotation, not synchronizer CSRF
+    // `route_layer` middleware runs after router-level `.layer(...)`
+    // middleware, so Session (added below via `.layer(session_layer)`)
+    // still executes before CSRF on the protected routes.
     let session_layer = crate::session::session_layer(&state.settings.session);
 
+    // CSRF middleware, applied per-route below. `FromFnLayer` is `Clone`,
+    // so a single instance can be shared across every protected route.
+    let csrf_middleware = axum::middleware::from_fn(
+        crate::csrf::CsrfMiddleware::middleware,
+    );
+
     // --- Login route (with its own strict rate limiter) ---
+    //
+    // Deliberately NOT CSRF-protected: a first-time browser login has no
+    // session and therefore no synchronizer token yet.
     let login_router = Router::new()
         .route("/auth/login", post(auth::login_handler))
         .layer(login_governor);
 
     // --- Refresh route (separate rate limiter — mirrors login governor) ---
+    //
+    // Deliberately NOT CSRF-protected: `/auth/refresh` authenticates via
+    // rotating refresh tokens, not the synchronizer-token pattern.
     let refresh_router = Router::new()
         .route("/auth/refresh", post(auth::refresh_handler))
         .layer(refresh_governor);
@@ -228,20 +266,27 @@ pub fn build_gateway_with_settings(
         // in scope, `Extension::from_request` returns 500 instead of
         // 401 — a regression that Round 5a was supposed to fix but
         // missed. Mirror the `/auth/protected` pattern.
+        //
+        // CSRF runs first (last-added `route_layer` is outermost), then
+        // the auth middleware, then the handler.
         .route(
             "/auth/logout",
-            post(auth::logout_handler).route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth::auth_middleware,
-            )),
+            post(auth::logout_handler)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::auth_middleware,
+                ))
+                .route_layer(csrf_middleware.clone()),
         )
         .route("/", get(root_handler))
         .route(
             "/auth/protected",
-            get(auth::protected_handler).route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth::auth_middleware,
-            )),
+            get(auth::protected_handler)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::auth_middleware,
+                ))
+                .route_layer(csrf_middleware.clone()),
         )
         .route(
             "/metrics",
@@ -251,24 +296,59 @@ pub fn build_gateway_with_settings(
         .merge(crate::openapi::swagger_ui_router())
         .layer(general_governor);
 
+    // --- Session routes (CSRF-protected) ---
+    //
+    // `/session/logout` is a state-changing POST and keeps CSRF protection
+    // (it had it under the old router-wide layer). `/session/whoami` is a
+    // GET and passes through the CSRF middleware untouched.
+    let session_router = crate::session::router::<GatewayState>()
+        .route_layer(csrf_middleware.clone());
+
+    // --- CSRF bootstrap route ---
+    //
+    // Must be reachable WITHOUT a CSRF token (otherwise clients can never
+    // obtain one). It returns the current token for the session and is
+    // protected by the session middleware (so the token is bound to a
+    // specific cookie). Not CSRF-protected by design.
+    async fn csrf_token_handler(
+        session: tower_sessions::Session,
+    ) -> Result<Json<serde_json::Value>, crate::auth::error::AppError> {
+        let token = crate::csrf::get_or_create_token(&session)
+            .await
+            .map_err(|e| {
+                crate::auth::error::AppError::internal(
+                    "csrf token bootstrap",
+                    std::io::Error::other(e),
+                )
+            })?;
+        Ok(Json(serde_json::json!({
+            "csrf_token": token.as_str(),
+            "header": crate::csrf::TOKEN_HEADER,
+        })))
+    }
+
     // --- Assemble final router with shared middleware ---
     //
-    // Layer order (from innermost to outermost):
-    //   Session → CSRF → Governor (per-route, on sub-routers)
-    //   → Timeout → Prometheus → Trace → CORS → CSP
+    // Layer order (textual = request-time execution order, outermost first):
+    //   CSP → CORS → Trace → Prometheus → Timeout → Session → app
     //
-    // Middleware added LAST runs FIRST on incoming requests.  Session must be
-    // innermost so that the CSRF middleware (which extracts `Session`) has
-    // access to the session data; CORS and CSP are outermost to handle
-    // pre-flight and security headers before any other processing.
-    let app = other_router
-        .merge(login_router) // login governor runs before general governor
-        .merge(refresh_router) // refresh governor runs before general governor
-        .merge(crate::session::router::<GatewayState>()) // mount /session/whoami, /session/logout
+    // Notes:
+    // - Session is applied router-wide via `.layer(session_layer)` and runs
+    //   before the per-route CSRF `route_layer`s, so the CSRF middleware can
+    //   extract `Session`.
+    // - CSRF is NOT applied router-wide. `/auth/login`, `/auth/csrf` and
+    //   `/auth/refresh` are reachable without a token; `/auth/logout`,
+    //   `/auth/protected` and the `/session/*` routes carry CSRF via
+    //   `route_layer`. All module routes (`/proxy/*`, `/search/*`,
+    //   `/monitor/*`) are GET-only, so none of them need CSRF.
+    // - `tower_governor` is added per-route on the sub-routers, not here.
+    let app = Router::new()
+        .route("/auth/csrf", get(csrf_token_handler))
+        .merge(login_router)
+        .merge(refresh_router)
+        .merge(other_router)
+        .merge(session_router)
         .layer(session_layer)
-        .layer(axum::middleware::from_fn(
-            crate::csrf::CsrfMiddleware::middleware,
-        ))
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
@@ -421,14 +501,16 @@ mod tests {
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .context("failed to build reqwest client")?;
-        let state = GatewayState {
+let state = GatewayState {
             tx,
             services: vec![],
             modules,
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             db_pool: None,
+            // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+            access_token_ttl_secs: 15 * 60,
             http_client,
         };
 

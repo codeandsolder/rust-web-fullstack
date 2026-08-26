@@ -72,6 +72,19 @@ async fn main() -> anyhow::Result<()> {
         gateway_example::settings::Settings::load()?
     };
 
+    // ---- DB pool + migrations ----
+    //
+    // We build the pool BEFORE the service modules so we can run migrations
+    // against it. If the pool fails to build, the gateway refuses to start
+    // — silent fallback to "no refresh store" produced a half-broken auth
+    // path in the previous revision.
+    let db_pool = create_db_pool().await?;
+    if let Some(pool) = db_pool.as_ref() {
+        run_migrations(pool)
+            .await
+            .context("gateway migrations failed")?;
+    }
+
     // ---- Service modules ----
     let service_modules: Vec<Arc<dyn module::ServiceModule>> = vec![
         Arc::new(services::search::SearchService),
@@ -87,8 +100,9 @@ async fn main() -> anyhow::Result<()> {
         service_modules,
         settings,
         proxy_upstream_url,
-        create_db_pool().await?,
+        db_pool,
         rwf_cfg.gateway.refresh_token_ttl_secs.cast_signed(),
+        rwf_cfg.gateway.access_token_ttl_secs.cast_signed(),
     )?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -155,13 +169,13 @@ async fn shutdown_signal() {
 /// Build the optional DB pool for refresh-token rotation.
 ///
 /// Returns `Ok(None)` when `DATABASE_URL` is unset or unreachable —
-/// the gateway then runs without a refresh-token store and the
-/// legacy stateless `/auth/refresh` semantics kick in. A connection
-/// failure causes an error so misconfigurations are not silently
-/// downgraded.
+/// the gateway then runs without a refresh-token store and
+/// `/auth/login` will return 503 (refresh-token issuance is required
+/// for any non-trivial auth flow). A connection failure causes an
+/// error so misconfigurations are not silently downgraded.
 async fn create_db_pool() -> anyhow::Result<Option<sqlx::PgPool>> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
-        tracing::info!("DATABASE_URL not set; refresh tokens will use legacy stateless refresh");
+        tracing::info!("DATABASE_URL not set; refresh tokens will be unavailable");
         return Ok(None);
     };
     tracing::info!("creating PostgreSQL pool from DATABASE_URL for refresh-token rotation");
@@ -172,4 +186,26 @@ async fn create_db_pool() -> anyhow::Result<Option<sqlx::PgPool>> {
         .await
         .context("failed to connect to PostgreSQL")?;
     Ok(Some(pool))
+}
+
+/// Run embedded migrations against the given pool.
+///
+/// Migration files live under `./gateway/migrations` relative to the
+/// binary's CWD in production (set via Compose), or the workspace root
+/// in dev (`./migrations` next to `gateway/migrations`). We try the
+/// binary-relative path first and fall back to the dev path.
+async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    let candidates = [
+        std::path::PathBuf::from("./gateway/migrations"),
+        std::path::PathBuf::from("./migrations"),
+        std::path::PathBuf::from("../migrations"),
+    ];
+    let dir = candidates
+        .iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| anyhow::anyhow!("no migrations directory found in any candidate path"))?;
+    tracing::info!(path = %dir.display(), "running embedded gateway migrations");
+    let migrator = sqlx::migrate::Migrator::new(dir.clone()).await?;
+    migrator.run(pool).await?;
+    Ok(())
 }

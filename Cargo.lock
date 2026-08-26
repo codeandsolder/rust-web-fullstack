@@ -3269,8 +3269,6 @@ dependencies = [
 name = "leptos-utils"
 version = "0.1.0"
 dependencies = [
- "axum",
- "leptos",
  "leptos_axum",
 ]
 

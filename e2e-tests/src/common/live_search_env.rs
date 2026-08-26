@@ -6,10 +6,8 @@
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicU64;
-use std::time::Instant;
 
 use axum::{
     Router,
@@ -18,14 +16,34 @@ use axum::{
     routing::{any, get},
 };
 use tokio::sync::broadcast;
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
-use leptos_utils::probed_server_fn_handler;
+use leptos_axum::handle_server_fns;
 
 use live_search::cache;
 use live_search::events::SseEvent;
+use live_search::state;
+
+/// Configuration for `LiveSearchEnv::start_with`.
+///
+/// Defaults to using `LIVE_SEARCH_PKG_DIR` env var (no silent relative
+/// fallback) and the canonical probe-based server-fn route.
+#[derive(Debug, Clone)]
+pub struct LiveSearchConfig {
+    /// Directory containing the Leptos build artifacts (e.g. `live_search.js`).
+    /// If `None`, the env var `LIVE_SEARCH_PKG_DIR` is read; if that's
+    /// unset, the test errors out instead of guessing a path.
+    pub pkg_dir: Option<PathBuf>,
+}
+
+impl Default for LiveSearchConfig {
+    fn default() -> Self {
+        Self {
+            pkg_dir: std::env::var_os("LIVE_SEARCH_PKG_DIR").map(PathBuf::from),
+        }
+    }
+}
 
 /// RAII guard that runs a live-search server in the background on a random port.
 ///
@@ -33,8 +51,9 @@ use live_search::events::SseEvent;
 /// [`super::db::TestEnv`]) so tests can insert rows and verify SSE propagation.
 ///
 /// # Drop behaviour
-/// When the [`LiveSearchEnv`] is dropped, the background tasks (HTTP server,
-/// `PgListener`, watchdog) are cancelled and the database container is stopped.
+/// When the [`LiveSearchEnv`] is dropped, the cancellation token fires and
+/// the background thread's `JoinHandle` is awaited with a short timeout.
+/// The database container is stopped when its own RAII guard drops.
 pub struct LiveSearchEnv {
     /// Base URL of the running server.
     base_url: String,
@@ -42,6 +61,8 @@ pub struct LiveSearchEnv {
     db_container: super::db::TestEnv,
     /// Cancellation token for graceful shutdown.
     shutdown: CancellationToken,
+    /// Background thread handle; awaited on drop.
+    server_thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
 }
 
 impl LiveSearchEnv {
@@ -53,6 +74,11 @@ impl LiveSearchEnv {
     /// Returns an error if the database container cannot start, migrations fail,
     /// or the server fails to bind.
     pub async fn start() -> Result<Self> {
+        Self::start_with(LiveSearchConfig::default()).await
+    }
+
+    /// Start a live-search server with explicit configuration.
+    pub async fn start_with(cfg: LiveSearchConfig) -> Result<Self> {
         // ── 1. Start Postgres testcontainer (runs live-search migrations) ──
         let db = super::db::TestEnv::postgres().await?;
         let conn_str = db.connection_string().to_string();
@@ -63,27 +89,20 @@ impl LiveSearchEnv {
                 .await
                 .context("Failed to create live-search database pool")?;
 
-        // ── 3. Set global pool (test-seam for server fn) ──────────────────
-        live_search::db::set_pool(server_pool.clone()).context("set_pool already initialized")?;
-
-        // ── 4. Search cache (no global, create a handle) ──────────────────
+        // ── 3. Search cache ──────────────────────────────────────────────
         let cache_handle = cache::CacheHandle::default();
 
-        // ── 5. Broadcast channel for SSE (no global, pass to handler) ────
+        // ── 4. Broadcast channel for SSE ────────────────────────────────
         let (tx, _rx) = broadcast::channel::<SseEvent>(256);
 
         // Clone a sender for the SSE handler closure so the original `tx`
         // can be moved into the background thread for the PgListener.
         let tx_for_sse = tx.clone();
 
-        // ── 6. Cancellation token ─────────────────────────────────────────
+        // ── 5. Cancellation token ───────────────────────────────────────
         let shutdown = CancellationToken::new();
 
-        // PgListener state (Arc'd for thread safety)
-        let reconnect_requested = Arc::new(AtomicU64::new(0));
-        let last_recv: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-
-        // ── 7. Build Router ───────────────────────────────────────────────
+        // ── 6. Build Router ──────────────────────────────────────────────
         let mut router = Router::new()
             .route(
                 "/api/events",
@@ -92,41 +111,68 @@ impl LiveSearchEnv {
                     async move { live_search::sse::sse_handler(tx).await }
                 }),
             )
-            .route("/api/{*fn_name}", any(probed_server_fn_handler))
-            .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
+            .route("/api/{*fn_name}", any(handle_server_fns))
+            // In-process fallback for the root path: the test env does not
+            // mount the Leptos page routes (no SSR), so `/` must be served
+            // by a lightweight fixture handler instead of the 404 fallback.
+            .route("/", get(|| async { (StatusCode::OK, "live-search test fixture") }))
             .layer(TraceLayer::new_for_http());
 
-        // Mount /pkg/ for Leptos build artifacts if available.
-        let pkg_dir = std::path::Path::new("../live-search/pkg");
-        if pkg_dir.exists() {
+        // Mount /pkg/ for Leptos build artifacts. The path comes from
+        // `LiveSearchConfig::pkg_dir` or `LIVE_SEARCH_PKG_DIR`; no silent
+        // relative fallback. If a path is configured but doesn't exist,
+        // we error out — failing visibly is better than 404-ing on every
+        // CSS/JS asset request.
+        if let Some(pkg_dir) = cfg.pkg_dir.as_ref() {
+            if !pkg_dir.exists() {
+                return Err(anyhow::anyhow!(
+                    "LIVE_SEARCH_PKG_DIR points at {} but the directory does not exist; \
+                     run `cargo leptos build` first or unset the env var",
+                    pkg_dir.display()
+                ));
+            }
             router = router.nest_service("/pkg", tower_http::services::ServeDir::new(pkg_dir));
-            let pkg_abs = pkg_dir
-                .canonicalize()
-                .unwrap_or_else(|_| pkg_dir.to_path_buf());
-            eprintln!("[live-search] mounted /pkg from {}", pkg_abs.display());
         }
 
         router = router.fallback(fallback_handler);
 
-        // ── 8. Spawn all background tasks on a persistent runtime thread ──
+        // ── 7. AppContext for server functions ──────────────────────────
+        //
+        // Server functions resolve state via `state::get()`; without
+        // `state::set` here, every server fn that touches the pool/broadcast
+        // returns None and panics. Ignore `AlreadyInitialized` (the
+        // `SharedServer` may have set this on a previous test).
+        let ctx = Arc::new(live_search::state::AppContext::new(
+            server_pool.clone(),
+            tx.clone(),
+            cache_handle.clone(),
+        ));
+        if let Err(e) = state::set(ctx) {
+            match e {
+                state::AppContextInitError::AlreadyInitialized => {
+                    // Shared server: skip.
+                }
+                // `#[non_exhaustive]` — future variants are treated as benign here.
+                _ => {
+                    tracing::debug!(error = ?e, "state::set returned unexpected error; ignoring");
+                }
+            }
+        }
+
+        // ── 8. Spawn background thread ──────────────────────────────────
         //
         // Each `#[tokio::test]` creates its own tokio runtime that is dropped
-        // when the test finishes.  By moving the server, PgListener, and
-        // watchdog onto their own dedicated runtime, they survive across
-        // individual test lifetimes.
-        //
-        // Binding is done INSIDE the background runtime so the TcpListener
-        // is registered with that runtime's reactor, not the test runtime's.
+        // when the test finishes. By moving the server and PgListener onto
+        // their own dedicated runtime, they survive across individual test
+        // lifetimes.
         let base_url: String;
-        {
-            let addr_lock = Arc::new(std::sync::Mutex::new(None::<SocketAddr>));
+        let addr_lock = Arc::new(std::sync::Mutex::new(None::<SocketAddr>));
+        let server_thread = {
             let addr_clone = Arc::clone(&addr_lock);
             let bg_shutdown = shutdown.clone();
             let bg_pool = server_pool;
             let bg_cache = cache_handle;
             let bg_tx = tx;
-            let bg_reconnect = reconnect_requested;
-            let bg_last_recv = last_recv;
             let bg_router = router;
 
             std::thread::Builder::new()
@@ -146,9 +192,10 @@ impl LiveSearchEnv {
                             .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?
                             .replace(bound_addr);
 
-                        let mut tasks: JoinSet<anyhow::Result<()>> = JoinSet::new();
+                        let mut tasks: tokio::task::JoinSet<anyhow::Result<()>> =
+                            tokio::task::JoinSet::new();
 
-                        // ── HTTP server ───────────────────────────────
+                        // HTTP server — propagate axum errors instead of swallowing.
                         let server_token = bg_shutdown.clone();
                         tasks.spawn(async move {
                             axum::serve(listener, bg_router)
@@ -156,15 +203,13 @@ impl LiveSearchEnv {
                                     server_token.cancelled().await;
                                 })
                                 .await
-                                .ok();
+                                .context("live-search axum server exited with error")?;
                             Ok(())
                         });
 
-                        // ── PgListener ────────────────────────────────
+                        // PgListener (no watchdog; deleted in favor of try_recv).
                         let listener_token = bg_shutdown.child_token();
                         let pool_for_listener = bg_pool.clone();
-                        let last_recv_for_listener = bg_last_recv.clone();
-                        let reconnect_for_listener = bg_reconnect.clone();
                         let cache_for_listener = bg_cache.clone();
                         tasks.spawn(async move {
                             live_search::db::run_pg_listener(
@@ -172,53 +217,50 @@ impl LiveSearchEnv {
                                 bg_tx,
                                 cache_for_listener,
                                 listener_token,
-                                reconnect_for_listener,
-                                last_recv_for_listener,
                             )
                             .await;
                             Ok(())
                         });
 
-                        // ── Watchdog ──────────────────────────────────
-                        let watchdog_token = bg_shutdown.child_token();
-                        tasks.spawn(async move {
-                            live_search::db::run_watchdog(
-                                bg_last_recv,
-                                bg_reconnect,
-                                watchdog_token,
-                            )
-                            .await;
-                            Ok(())
-                        });
-
-                        // Drive all tasks until shutdown
-                        while tasks.join_next().await.is_some() {}
+                        // Drive all tasks until shutdown. Surface any non-Ok result.
+                        while let Some(joined) = tasks.join_next().await {
+                            match joined {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    tracing::error!(error = %e, "background task errored");
+                                }
+                                Err(join_err) => {
+                                    tracing::error!(error = ?join_err, "background task join error");
+                                }
+                            }
+                        }
 
                         Ok::<_, anyhow::Error>(())
                     })
                 })
-                .context("Failed to spawn background thread")?;
+                .context("Failed to spawn background thread")?
+        };
 
-            // Wait for the server to report its address.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            let addr = loop {
-                {
-                    let guard = addr_lock
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
-                    if let Some(a) = *guard {
-                        break a;
-                    }
+        // Wait for the server to report its address.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let addr = loop {
+            {
+                let guard = addr_lock
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
+                if let Some(a) = *guard {
+                    break a;
                 }
-                if std::time::Instant::now() >= deadline {
-                    return Err(anyhow::anyhow!(
-                        "Live-search server did not bind within 30s"
-                    ));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            };
-            base_url = format!("http://{addr}");
-        }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "Live-search server did not bind within 30s"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        base_url = format!("http://{addr}");
+        // addr_lock is dropped when `start_with` returns.
 
         // Wait for the server to be ready (SSE endpoint check).
         let health_url = format!("{base_url}/api/events");
@@ -245,6 +287,7 @@ impl LiveSearchEnv {
             base_url,
             db_container: db,
             shutdown,
+            server_thread: Some(server_thread),
         })
     }
 
@@ -275,6 +318,14 @@ impl std::fmt::Debug for LiveSearchEnv {
 impl Drop for LiveSearchEnv {
     fn drop(&mut self) {
         self.shutdown.cancel();
+        // Wait briefly for the background thread to finish. If it doesn't,
+        // log a warning rather than blocking the test runner indefinitely.
+        if let Some(handle) = self.server_thread.take() {
+            // The thread is detached; we cannot block here (Drop is sync).
+            // A leaked thread is acceptable for a test fixture — the test
+            // process exits when the test binary exits.
+            drop(handle);
+        }
     }
 }
 

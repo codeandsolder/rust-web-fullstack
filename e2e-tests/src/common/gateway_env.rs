@@ -1,24 +1,21 @@
 //! In-process gateway server launcher for e2e tests.
 //!
-//! Starts a minimal gateway on a random local port.  Does NOT include CSRF /
-//! session / governor middleware so that auth tests can POST without CSRF
-//! tokens.  The server is cleaned up when [`GatewayEnv`] is dropped.
+//! Starts the **production router** (built by
+//! [`gateway_example::gateway::build_gateway_with_settings`]) on a random
+//! local port, with the DB pool wired through to the gateway state so the
+//! DB-backed refresh-token rotation path is exercised. CSRF and session
+//! middleware are therefore live — see [`Self::start`] for the bootstrap
+//! dance required to obtain a CSRF token before POSTing.
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
-use axum::{
-    Router, middleware,
-    routing::{get, post},
-};
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tower_http::trace::TraceLayer;
 
-use gateway_example::gateway::{GatewayState, health_handler, root_handler};
-use gateway_example::module::{ServiceInfo, ServiceModule};
-use gateway_example::sse::GatewayEvent;
+use gateway_example::gateway;
+use gateway_example::module::ServiceModule;
 
 /// Synthetic admin password used for in-test gateway launches.
 ///
@@ -34,6 +31,11 @@ pub const TEST_ADMIN_PASSWORD: &str = "synthetic-gateway-test-password";
 pub struct GatewayEnv {
     addr: SocketAddr,
     shutdown: CancellationToken,
+    /// Held for its `Drop` side-effect: stops the Postgres testcontainer when
+    /// the gateway env is dropped. Declared last so the container is dropped
+    /// after the pool (struct fields drop in declaration order).
+    #[allow(dead_code, reason = "Kept alive for Drop side-effect on GatewayEnv")]
+    db: super::db::TestEnv,
 }
 
 impl GatewayEnv {
@@ -46,11 +48,33 @@ impl GatewayEnv {
     /// itself.
     ///
     /// # Errors
-    /// Returns an error if dev-key generation or PEM encoding fails, or if the
+    /// Returns an error if the Postgres testcontainer cannot start or its
+    /// migrations fail, if dev-key generation or PEM encoding fails, or if the
     /// server fails to bind or become ready within 15 seconds.
     pub async fn start() -> Result<Self> {
         let settings = gateway_example::settings::Settings::load_dev_keys(TEST_ADMIN_PASSWORD)
             .context("failed to load dev keys for gateway")?;
+
+        // Spin up a fresh Postgres testcontainer and run the gateway migrations
+        // so the DB-backed refresh-token rotation path is live. The container
+        // is kept alive by `Self.db` and stopped when the env is dropped.
+        let db = super::db::TestEnv::postgres()
+            .await
+            .context("failed to start Postgres testcontainer for gateway")?;
+        // The gateway migration is applied as inline DDL instead of via
+        // `sqlx::migrate!`: the testcontainer DB is shared with
+        // `TestEnv::postgres()`, which already ran the live-search migrations
+        // (versions 1-3) into the `_sqlx_migrations` table. A second migrator
+        // whose resolved set ({100}) omits those versions would fail with
+        // "migration 1 was previously applied but is missing in the resolved
+        // migrations". Running the single gateway migration as raw SQL bypasses
+        // the `_sqlx_migrations` bookkeeping entirely.
+        sqlx::raw_sql(include_str!(
+            "../../../gateway/migrations/100_create_refresh_tokens.up.sql"
+        ))
+        .execute(db.pool())
+        .await
+        .context("failed to apply gateway refresh_tokens schema")?;
 
         let modules: Vec<Arc<dyn ServiceModule>> = vec![
             Arc::new(gateway_example::services::search::SearchService),
@@ -58,7 +82,18 @@ impl GatewayEnv {
             Arc::new(gateway_example::services::monitor::MonitorService),
         ];
 
-        let app = build_test_gateway(modules, settings)?;
+        // The production router builder owns session/CSRF/governor wiring.
+        // The DB pool is wired through so `/auth/login` can issue refresh
+        // tokens against the real `refresh_tokens` table.
+        let app = gateway::build_gateway_with_settings(
+            modules,
+            settings,
+            "https://ipapi.co".to_string(),
+            Some(db.pool().clone()),
+            60 * 60 * 24 * 30, // refresh TTL
+            15 * 60,             // access JWT TTL
+        )
+        .context("failed to build gateway router")?;
 
         let shutdown = CancellationToken::new();
         let serve_token = shutdown.clone();
@@ -69,12 +104,12 @@ impl GatewayEnv {
             let addr_lock = Arc::new(std::sync::Mutex::new(None::<SocketAddr>));
             let addr_clone = Arc::clone(&addr_lock);
 
-            std::thread::Builder::new()
+            let thread: JoinHandle<Result<()>> = std::thread::Builder::new()
                 .name("gateway-server".into())
                 .spawn(move || -> Result<()> {
                     let rt = tokio::runtime::Runtime::new()
                         .context("failed to create gateway server runtime")?;
-                    rt.block_on(async {
+                    rt.block_on(async move {
                         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                             .await
                             .context("Failed to bind gateway listener")?;
@@ -85,6 +120,7 @@ impl GatewayEnv {
                             .lock()
                             .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?
                             .replace(bound);
+                        // Propagate axum errors instead of swallowing.
                         axum::serve(
                             listener,
                             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -93,14 +129,14 @@ impl GatewayEnv {
                             serve_token.cancelled().await;
                         })
                         .await
-                        .ok();
+                        .context("gateway axum server exited with error")?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })
                 .context("Failed to spawn gateway server thread")?;
 
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            loop {
+            let addr = loop {
                 {
                     let guard = addr_lock
                         .lock()
@@ -113,7 +149,12 @@ impl GatewayEnv {
                     return Err(anyhow::anyhow!("Gateway server did not bind within 15s"));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
-            }
+            };
+            // Stash the JoinHandle so Drop can detach cleanly.
+            // (Drop is sync; we can't await it from here. The thread exits
+            // when the test process exits.)
+            let _ = thread;
+            addr
         };
 
         // Wait for the server to be ready (health check).
@@ -140,6 +181,7 @@ impl GatewayEnv {
         Ok(Self {
             addr: bound_addr,
             shutdown,
+            db,
         })
     }
 
@@ -155,7 +197,7 @@ impl GatewayEnv {
         self.addr
     }
 
-    /// Cancel the graceful-shutdown token and await server termination.
+    /// Cancel the graceful-shutdown token.
     pub async fn shutdown(self) {
         self.shutdown.cancel();
         // Allow a brief moment for the server to drain.
@@ -174,89 +216,7 @@ impl std::fmt::Debug for GatewayEnv {
         f.debug_struct("GatewayEnv")
             .field("addr", &self.addr)
             .field("shutdown", &"<cancellation token>")
+            .field("db", &self.db)
             .finish()
     }
-}
-
-// ──── Test gateway router ─────────────────────────────────────────────────
-
-/// Build a minimal gateway Router without CSRF / session / governor middleware.
-///
-/// This lets tests run auth flows without needing to fetch and echo CSRF tokens.
-fn build_test_gateway(
-    modules: Vec<Arc<dyn ServiceModule>>,
-    settings: gateway_example::settings::Settings,
-) -> Result<Router> {
-    let (tx, _rx) = broadcast::channel::<GatewayEvent>(100);
-
-    let service_infos: Vec<ServiceInfo> = modules
-        .iter()
-        .map(|m| ServiceInfo {
-            name: m.name(),
-            path: m.path(),
-            description: m.description(),
-            enabled: m.enabled(),
-        })
-        .collect();
-
-    // Nest each service's router.
-    let mut service_router: Router<GatewayState> = Router::new();
-    for module in &modules {
-        if module.enabled() {
-            service_router = service_router.nest(&format!("/{}", module.path()), module.router());
-        }
-    }
-
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
-    let state = GatewayState {
-        tx,
-        services: service_infos,
-        modules,
-        settings,
-        proxy_upstream_url: std::sync::Arc::from("https://ipapi.co"),
-        db_pool: None,
-        // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
-        refresh_token_ttl_secs: 60 * 60 * 24 * 30,
-        http_client,
-    };
-
-    let cors = gateway_example::cors::cors_layer();
-
-    Ok(Router::new()
-        .route("/", get(root_handler))
-        .route("/health", get(health_handler))
-        .route("/events", get(gateway_example::sse::sse_handler))
-        .route("/auth/login", post(gateway_example::auth::login_handler))
-        .route(
-            "/auth/refresh",
-            post(gateway_example::auth::refresh_handler),
-        )
-        // `/auth/logout` requires the auth middleware in scope; without
-        // it, `Extension<Claims>::from_request` returns 500 instead of
-        // 401. Mirror the production gateway's wiring.
-        .route(
-            "/auth/logout",
-            post(gateway_example::auth::logout_handler).route_layer(
-                middleware::from_fn_with_state(
-                    state.clone(),
-                    gateway_example::auth::auth_middleware,
-                ),
-            ),
-        )
-        .route(
-            "/auth/protected",
-            get(gateway_example::auth::protected_handler).route_layer(
-                middleware::from_fn_with_state(
-                    state.clone(),
-                    gateway_example::auth::auth_middleware,
-                ),
-            ),
-        )
-        .merge(service_router)
-        .merge(gateway_example::openapi::swagger_ui_router::<GatewayState>())
-        .layer(TraceLayer::new_for_http())
-        .layer(cors)
-        .with_state(state))
 }

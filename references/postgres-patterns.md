@@ -167,7 +167,12 @@ CREATE TABLE search_results (
 CREATE INDEX idx_fts ON search_results USING GIN(fts);
 ```
 
-### BM25-like Ranking with ts_rank
+### PostgreSQL relevance ranking with `ts_rank`
+
+`ts_rank` is PostgreSQL's own ranking function (frequency × proximity ×
+normalization). It is **not** BM25; that term is misleading here. Use it
+for ordering FTS results by heuristic relevance, not as a drop-in for
+Okapi BM25.
 
 ```rust
 let results = sqlx::query_as::<_, SearchResult>(
@@ -210,9 +215,13 @@ CREATE INDEX idx_title_bigm ON docs USING bigm(title);
 
 ### Highlighting Results
 
+Use `websearch_to_tsquery` (not `to_tsquery`) when the input is
+user-supplied — `to_tsquery` raises syntax errors on unescaped
+operators. `websearch_to_tsquery` was added precisely for this case.
+
 ```sql
 SELECT ts_headline('english', body, query, 'MaxWords=50, MinWords=20, StartSel=<mark>, StopSel=</mark>')
-FROM search_results, to_tsquery('english', $1) query
+FROM search_results, websearch_to_tsquery('english', $1) query
 WHERE fts @@ query;
 ```
 
@@ -407,13 +416,22 @@ let user = sqlx::query_as!(User, "SELECT id, name FROM users WHERE id = $1", id)
 
 ### Offline Mode
 
-```bash
-# Generate/update .sqlx cache
-SQLX_OFFLINE=true cargo sqlx prepare
+The two-step is:
 
-# Build without database
-SQLX_OFFLINE=true cargo build
-```
+1. **Generate the cache** (online — needs a live `DATABASE_URL`):
+   ```bash
+   cargo sqlx prepare --workspace
+   # This writes .sqlx/*.json. Commit those files.
+   ```
+2. **Build offline** (no DB needed):
+   ```bash
+   SQLX_OFFLINE=true cargo build
+   ```
+
+> **Common mistake:** `SQLX_OFFLINE=true cargo sqlx prepare` is the
+> reverse of what you want. `SQLX_OFFLINE=true` tells sqlx to *not*
+> connect to the database; running `prepare` in that mode produces an
+> empty/invalid cache. Always run `prepare` online first.
 
 ### JSON Type Annotations
 
@@ -559,7 +577,7 @@ effective_cache_size = 128MB       # OS cache hint
 work_mem = 2MB                     # per-operation limit (keep low)
 maintenance_work_mem = 32MB        # for VACUUM, CREATE INDEX
 max_connections = 20               # 512MB baseline (19 queries + 1 listener); multiply by N processes for multi-process
-synchronous_commit = off           # speed tradeoff (acceptable for proxy data)
+synchronous_commit = off           # speed tradeoff (acceptable for proxy data only; DO NOT use for auth/refresh-token tables)
 wal_compression = on               # reduce WAL size
 autovacuum_max_workers = 1         # lightweight
 random_page_cost = 1.1             # SSD tuned

@@ -2,7 +2,16 @@
 //!
 //! These are imported from `styles.module.css` via `stylance` at compile time
 //! and injected into the page at runtime (SSR: as a `<style>` tag, WASM: via
-//! the DOM). No `stylance-cli` build step is needed.
+//! the DOM).
+//!
+//! # Production build
+//!
+//! Stylance produces hashed class constants in Rust at compile time but
+//! does NOT generate the corresponding CSS file. The actual CSS is
+//! produced by `stylance-cli` at build time (see Dockerfiles). The
+//! CI `leptosfmt` step and `cargo leptos build` invocation must include
+//! `stylance build` for the resulting `live-search.css` to contain
+//! matching hashed-class selectors.
 //!
 //! # Feature notes
 //!

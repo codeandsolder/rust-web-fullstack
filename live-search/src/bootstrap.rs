@@ -8,7 +8,7 @@
 //! - Sqlx migrations on startup.
 //! - Search-result cache (`moka`).
 //! - SSE broadcast channel.
-//! - `PgListener` background task + liveness watchdog.
+//! - `PgListener` background task.
 //! - Leptos SSR application shell and routes.
 //! - Axum HTTP server with graceful shutdown wiring.
 //!
@@ -20,9 +20,7 @@
 use std::net::SocketAddr;
 #[cfg(feature = "otel")]
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::{StatusCode, Uri};
@@ -33,7 +31,7 @@ use axum::{
 };
 use leptos::config::get_configuration;
 use leptos_axum::{LeptosRoutes, generate_route_list};
-use leptos_utils::probed_server_fn_handler;
+use leptos_axum::handle_server_fns;
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -54,7 +52,7 @@ use crate::{db, sse, state};
 #[must_use]
 pub struct ServerHandle {
     /// Cancel this token to trigger graceful shutdown of all long-running
-    /// tasks (HTTP server, `PgListener`, watchdog).
+    /// tasks (HTTP server, `PgListener`).
     pub shutdown: CancellationToken,
     /// Collection of background tasks. The caller should drain them after
     /// signalling shutdown.
@@ -190,42 +188,19 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
 
-    // ---- PgListener + watchdog --------------------------------------------
+    // ---- PgListener -------------------------------------------------------
 
     let listener_token = shutdown.child_token();
-    let watchdog_token = shutdown.child_token();
-
-    let reconnect_requested = Arc::new(AtomicU64::new(0));
-    let last_recv: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
 
     let pool_for_listener = pool.clone();
     let listener_span = tracing::info_span!("pg_listener");
-    let last_recv_for_listener = last_recv.clone();
-    let reconnect_for_listener = reconnect_requested.clone();
     let cache_for_listener = cache_handle.clone();
     tasks.spawn(
         async move {
-            db::run_pg_listener(
-                pool_for_listener,
-                tx,
-                cache_for_listener,
-                listener_token,
-                reconnect_for_listener,
-                last_recv_for_listener,
-            )
-            .await;
+            db::run_pg_listener(pool_for_listener, tx, cache_for_listener, listener_token).await;
             Ok(())
         }
         .instrument(listener_span),
-    );
-
-    let watchdog_span = tracing::info_span!("pg_listener_watchdog");
-    tasks.spawn(
-        async move {
-            db::run_watchdog(last_recv, reconnect_requested, watchdog_token).await;
-            Ok(())
-        }
-        .instrument(watchdog_span),
     );
 
     // ---- Leptos configuration & routes ------------------------------------
@@ -246,8 +221,8 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
                 async move { sse::sse_handler(tx).await }
             }),
         )
-        .route("/api/{*fn_name}", any(probed_server_fn_handler))
-        .route("/api/api/{*fn_name}", any(probed_server_fn_handler))
+        .route("/api/{*fn_name}", any(handle_server_fns))
+        .route("/api/api/{*fn_name}", any(handle_server_fns))
         .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, leptos_routes, {

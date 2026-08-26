@@ -4,8 +4,14 @@
 //! global `OnceLock` (for server‑fn access) and provided via
 //! `leptos::provide_context` (for the SSR component tree).
 //!
-//! The global accessor [`get`] is the production path for server functions;
-//! component code uses `leptos::use_context::<Arc<AppContext>>()` directly.
+//! # Backward compatibility
+//!
+//! The global [`set`] / [`get`] API exists for backward compatibility with
+//! `#[server]` functions that do not take a context argument and therefore
+//! cannot receive the context through the normal Leptos mechanism. **New
+//! code should not use it.** New server functions should accept
+//! `Arc<AppContext>` as a parameter and receive it via
+//! `leptos::context::provide_context` (see [`crate::bootstrap`]).
 //!
 //! # Test seams
 //!

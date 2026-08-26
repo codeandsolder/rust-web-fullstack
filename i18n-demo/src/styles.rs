@@ -1,8 +1,9 @@
-//! Scoped CSS for the i18n-demo app.
+//! # Scoped CSS (handwritten, not Stylance)
 //!
-//! Class names are unhashed constants — `stylance-cli` is not part of the
-//! build pipeline. Selectors are paired via `[data-i18n-demo]` attribute
-//! on the root element of `app.rs`.
+//! Class names are unhashed constants (e.g. `locale-btn`, `search-input`).
+//! Scoping is enforced by the `[data-i18n-demo]` attribute selector
+//! in `home.module.css`. The `stylance` crate is NOT used here — Stylance
+//! is used by `live-search` only.
 
 /// Class for the locale switch buttons.
 pub const LOCALE_BTN: &str = "locale-btn";

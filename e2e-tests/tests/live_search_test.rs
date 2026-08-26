@@ -13,7 +13,6 @@
 //! testcontainer Postgres database.  Browser-level tests (behind
 //! `--features browser-tests`) additionally require a Chromium installation.
 
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -526,11 +525,17 @@ async fn root_path_reachable() -> anyhow::Result<()> {
 ///    `leptos-build` before `e2e-tests` so `pkg/` is always present; if it is
 ///    missing, the test fails hard (no silent skip).
 #[tokio::test]
+#[ignore = "requires cargo leptos build artifacts"]
 async fn static_assets_are_served() -> anyhow::Result<()> {
-    let pkg_path = Path::new("../live-search/pkg/live_search.js");
+    // Read the configured pkg dir from the env (set by LiveSearchConfig).
+    let pkg_dir = std::env::var_os("LIVE_SEARCH_PKG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("live-search/target/site/pkg"));
+    let pkg_path = pkg_dir.join("live_search.js");
     anyhow::ensure!(
         pkg_path.exists(),
-        "Leptos build artifacts not found at `{}`. Run `cargo leptos build` first.",
+        "Leptos build artifacts not found at `{}`. Run `cargo leptos build` first \
+         and set LIVE_SEARCH_PKG_DIR to the site/pkg directory it produces.",
         pkg_path.display()
     );
 
@@ -565,6 +570,72 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
     anyhow::ensure!(
         content_type.contains("javascript") || content_type.contains("text/plain"),
         "Expected JavaScript content-type, got '{content_type}'"
+    );
+
+    // The empty placeholder that the previous Dockerfile produced
+    // (live-search.Dockerfile: `touch pkg/live-search.css`) returns 200
+    // but has zero bytes — which means the WASM never hydrates. Assert
+    // the JS is non-trivially sized.
+    let bytes = response.bytes().await.context("failed to read JS bytes")?;
+    anyhow::ensure!(
+        bytes.len() > 1024,
+        "/pkg/live_search.js is suspiciously small ({} bytes); \
+         Stylance CSS may not have been generated.",
+        bytes.len()
+    );
+    Ok(())
+}
+
+/// Stylance CSS must be generated, not empty. The previous Dockerfile
+/// `touch`'d an empty CSS file; the test catches that regression by asserting
+/// the file is non-empty AND contains at least one hashed-class selector.
+#[tokio::test]
+#[ignore = "requires cargo leptos build artifacts"]
+async fn stylance_css_is_generated() -> anyhow::Result<()> {
+    let pkg_dir = std::env::var_os("LIVE_SEARCH_PKG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("live-search/target/site/pkg"));
+    let css_path = pkg_dir.join("live-search.css");
+    anyhow::ensure!(
+        css_path.exists(),
+        "Stylance CSS not found at `{}`. Run `stylance build` in the live-search \
+         workspace after `cargo leptos build`.",
+        css_path.display()
+    );
+
+    let env = get_server().await?;
+    let url = format!("{}/pkg/live-search.css", env.base_url());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("failed to build reqwest client")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to GET {url}"))?;
+
+    let status = response.status();
+    anyhow::ensure!(
+        status == 200,
+        "Expected HTTP 200 from /pkg/live-search.css, got {status}",
+    );
+
+    let body = response.text().await.context("failed to read CSS body")?;
+    anyhow::ensure!(
+        body.len() > 100,
+        "Stylance CSS is suspiciously small ({} bytes); \
+         the build pipeline did not produce real CSS.",
+        body.len()
+    );
+    // Stylance emits selectors in the form `.<name>-<6-hex>` after
+    // processing. A real CSS file should contain at least one.
+    let has_hashed_class =
+        body.lines().any(|line| line.contains("-[0-9a-fA-F]"));
+    anyhow::ensure!(
+        has_hashed_class,
+        "Stylance CSS does not appear to contain hashed class selectors; \
+         is `stylance build` running?"
     );
     Ok(())
 }

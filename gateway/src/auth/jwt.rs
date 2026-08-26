@@ -45,17 +45,27 @@ fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
 
 /// Create a signed `EdDSA` JWT for the given `user_id`.
 ///
-/// The token expires 24 hours from creation. The caller is expected to provide
-/// a cached [`EncodingKey`] (e.g. from [`Settings::encoding_key`]).
+/// The token expires `ttl_secs` seconds from creation. Production callers
+/// should pass a short value (e.g. 15 minutes) so that DB-backed refresh
+/// tokens carry meaningful state. A 24-hour access token is not a "short-lived
+/// access token".
+///
+/// The caller is expected to provide a cached [`EncodingKey`] (e.g. from
+/// [`Settings::encoding_key`]).
 ///
 /// A random `jti` is generated for every token.
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if encoding fails.
-pub fn create_jwt(user_id: &UserId, encoding_key: &EncodingKey) -> Result<String, AppError> {
+/// Returns [`AppError::Internal`] if encoding fails or `ttl_secs` overflows
+/// the i64 range.
+pub fn create_jwt(
+    user_id: &UserId,
+    encoding_key: &EncodingKey,
+    ttl_secs: i64,
+) -> Result<String, AppError> {
     let now = Utc::now();
-    let exp = unix_seconds(now + chrono::Duration::hours(24))?;
+    let exp = unix_seconds(now + chrono::Duration::seconds(ttl_secs))?;
 
     let claims = Claims {
         sub: *user_id,
@@ -117,7 +127,7 @@ mod tests {
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
         let user_id = UserId::new(Uuid::new_v4());
-        let token = create_jwt(&user_id, &encoding_key)?;
+        let token = create_jwt(&user_id, &encoding_key, 60 * 60 * 24)?;
 
         let claims = validate_jwt(&token, &decoding_key)?;
         assert_eq!(claims.sub, user_id);
@@ -143,7 +153,7 @@ mod tests {
         let wrong_decoding_key = DecodingKey::from_ed_pem(wrong_public_pem.as_bytes())?;
 
         let user_id = UserId::new(Uuid::new_v4());
-        let token = create_jwt(&user_id, &encoding_key)?;
+        let token = create_jwt(&user_id, &encoding_key, 60 * 60 * 24)?;
 
         let result = validate_jwt(&token, &wrong_decoding_key);
         assert!(result.is_err());

@@ -112,6 +112,8 @@ mod tests {
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+            // 24h for the test fixture; production uses 15min via Settings.
+            access_token_ttl_secs: 60 * 60 * 24,
             http_client,
         };
 

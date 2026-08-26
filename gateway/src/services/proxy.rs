@@ -12,6 +12,8 @@
 //! `utoipa::ToSchema` for `OpenAPI` documentation.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 
 use axum::{
     Router,
@@ -111,18 +113,19 @@ async fn check_handler(
     State(state): State<GatewayState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ProxyCheckResponse>, AppError> {
-    let ip = params
+    let raw_ip = params
         .get("ip")
         .cloned()
         .unwrap_or_else(|| "8.8.8.8".to_string());
 
-    // Defensive: reject implausibly long IP strings. The upstream API will
-    // validate format; this is a cheap early-exit for abuse.
-    if ip.len() > 64 {
-        return Err(AppError::BadRequest("ip parameter too long".into()));
-    }
+    // Validate the IP strictly. The upstream API would also reject bad
+    // input, but we never want to forward arbitrary user-supplied path
+    // segments into an outbound URL — that turns the proxy into an
+    // open-redirect / SSRF surface regardless of the upstream.
+    let parsed_ip = IpAddr::from_str(&raw_ip)
+        .map_err(|_| AppError::BadRequest("ip must be a valid IPv4 or IPv6 address".into()))?;
 
-    let url = format!("{}/{ip}/json/", state.proxy_upstream_url);
+    let url = format!("{}/{}/json/", state.proxy_upstream_url, parsed_ip);
     let upstream = state.http_client.get(&url).send().await.map_err(|e| {
         tracing::warn!(error = %e, upstream_url = %url, "upstream fetch failed");
         AppError::internal("upstream fetch failed", e)
@@ -163,7 +166,7 @@ async fn check_handler(
             "proxy_check",
             json!({
                 "timestamp": Utc::now().to_rfc3339(),
-                "ip": ip,
+                "ip": parsed_ip.to_string(),
                 "country": country,
                 "proxy": proxy,
             }),
@@ -171,7 +174,7 @@ async fn check_handler(
     );
 
     Ok(Json(ProxyCheckResponse {
-        ip,
+        ip: parsed_ip.to_string(),
         country,
         proxy,
         risk_score,

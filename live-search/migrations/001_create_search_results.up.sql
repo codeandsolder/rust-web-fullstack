@@ -12,17 +12,20 @@ CREATE TABLE IF NOT EXISTS search_results (
 -- GIN index for full-text search on the fts column
 CREATE INDEX IF NOT EXISTS idx_search_results_fts ON search_results USING GIN(fts);
 
--- Trigger function that sends a JSON notification via pg_notify
--- whenever a new row is inserted.
+-- Trigger function that emits a NOTIFY carrying only the row id.
+--
+-- **The payload is intentionally tiny.** PostgreSQL's default NOTIFY
+-- payload limit is 8000 bytes; an AFTER INSERT trigger that puts
+-- `title`, `url`, and `snippet` into the payload can fail the
+-- transaction if any single row exceeds that bound. The consumer
+-- (live-search/src/db.rs::forward_notification) fetches the full row
+-- by id when it receives the notification, so the broadcast event
+-- still carries the full typed payload.
 CREATE OR REPLACE FUNCTION notify_search_result()
 RETURNS TRIGGER AS $$
 BEGIN
-    PERFORM pg_notify('search_results', json_build_object(
-        'type',    'SearchResult',
-        'title',   NEW.title,
-        'url',     NEW.url,
-        'snippet', NEW.snippet
-    )::text);
+    PERFORM pg_notify('search_results',
+        json_build_object('id', NEW.id)::text);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

@@ -4,14 +4,14 @@ when:
 
 steps:
   check-workspace:
-    # Pinned by digest for reproducible builds (matches gateway.Dockerfile
-    # and live-search.Dockerfile).
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo check --workspace --all-targets
       - cargo check -p live-search --features ssr --all-targets
       - rustup target add wasm32-unknown-unknown
       - cargo check -p live-search --target wasm32-unknown-unknown --features hydrate --lib
+      - cargo check -p i18n-demo --features ssr --all-targets
+      - cargo check -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
     depends_on: []
 
   unit-tests:
@@ -35,9 +35,6 @@ steps:
     depends_on: []
 
   audit:
-    # cargo-audit checks the dependency tree for unfixed RUSTSEC advisories.
-    # Installed from source per step; the build is fast (~10 s) and the
-    # dependency tree is small enough that incremental install is acceptable.
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - cargo install cargo-audit --locked
@@ -45,48 +42,40 @@ steps:
     depends_on:
       - fmt
 
+  # Install leptosfmt in-line. The previously-referenced
+  # woodpecker-rust-leptosfmt:latest image is no longer relied upon; this
+  # step installs leptosfmt per-build to keep the image portable.
   leptosfmt:
-    # Custom image with leptosfmt preinstalled. Build it locally once with:
-    #   docker build -t woodpecker-rust-leptosfmt:latest -f ci/leptosfmt.Dockerfile .
-    #   docker push woodpecker-rust-leptosfmt:latest
-    # Until the image is published, fall back to `cargo install --locked`
-    # which the image build step triggers (see ci/leptosfmt.Dockerfile).
-    image: woodpecker-rust-leptosfmt:latest
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
-      # Scope to workspace crates explicitly. `leptosfmt .` would also walk
-      # any in-tree gitignored snapshots (.slim/worktrees/, .opencode/, etc.)
-      # which may have stale, intentionally-unformatted copies.
-      # Run leptosfmt per-file via stdin (so `--rustfmt` chains rustfmt
-      # afterwards) so the two formatters converge on whitespace inside
-      # `view!` macro bodies. The trailing `cargo fmt --check` is the
-      # authoritative check — the two formatters cannot both pass `--check`
-      # simultaneously due to a known leptosfmt whitespace quirk.
+      - cargo install leptosfmt --locked
       - find live-search i18n-demo -name '*.rs' | while read f; do leptosfmt --rustfmt --stdin --quiet < "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done
       - cargo fmt --all -- --check
     depends_on:
       - fmt
 
   leptos-build:
-    # cargo-leptos builds the SSR bundle AND the WASM hydrate bundle.
-    # Without this step, the e2e `static_assets_are_served` test silently
-    # passes (it's `#[ignore]`d if pkg/ is absent). Running cargo leptos
-    # build in CI proves the full SSR + hydrate pipeline works.
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
       - rustup target add wasm32-unknown-unknown
       - cargo install cargo-leptos --locked
+      - cargo install stylance-cli --locked
       - cargo leptos build --release -p live-search
       - cargo leptos build --release -p i18n-demo
     depends_on:
       - clippy
 
-  # E2E tests run on self-hosted runner with docker.
-  #
-  # Tests launch their own in-process servers via `common::LiveSearchEnv` and
-  # `common::GatewayEnv`, which spin up testcontainer Postgres on a random
-  # port. The `--features browser-tests` flag enables browser-driven tests
-  # in `tests/live_search_test.rs`, which use a dockerized Chromium launched
-  # via `common::DockerBrowser` (testcontainers, no local Chromium install).
+  # Clean-context Docker build verification. Each image is built in an
+  # isolated RUN to ensure the cache trick actually works end-to-end.
+  docker-build:
+    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
+    commands:
+      - docker build -f live-search.Dockerfile -t rwf-live-search:test .
+      - docker build -f i18n-demo.Dockerfile -t rwf-i18n-demo:test .
+      - docker build -f gateway.Dockerfile -t rwf-gateway:test .
+    depends_on:
+      - clippy
+
   e2e-tests:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     services:
@@ -99,9 +88,6 @@ steps:
       - |
         bash -c '
         set -euo pipefail
-        # No env-var configuration needed: tests use testcontainers exclusively.
-        # No local Chromium install needed: tests use a dockerized Chromium
-        # via `common::DockerBrowser` (testcontainers).
         cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
         '
     depends_on:
