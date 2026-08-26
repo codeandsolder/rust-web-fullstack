@@ -29,12 +29,15 @@ impl std::fmt::Debug for TestEnv {
 }
 
 impl TestEnv {
-    /// Start a fresh Postgres 17 container, connect, and run the workspace's
-    /// complete migration history.
+    /// Start a fresh Postgres 17 container, connect, run the workspace's
+    /// complete migration history, and insert a small deterministic fixture row.
+    ///
+    /// The fixture makes browser tests independent of libtest execution order;
+    /// tests that need additional rows should still insert their own data.
     ///
     /// # Errors
     /// Returns an error if the container cannot start, the pool cannot connect,
-    /// or migrations fail.
+    /// migrations fail, or the fixture row cannot be inserted.
     pub async fn postgres() -> Result<Self> {
         let container = Postgres::default()
             .with_tag("17-alpine")
@@ -58,6 +61,21 @@ impl TestEnv {
             .run(&pool)
             .await
             .context("Failed to run workspace migrations")?;
+
+        // Browser search tests must not depend on another integration test
+        // having happened to seed the shared fixture first. Use a URL that is
+        // distinct from the per-test rows in live_search_test.rs so the URL
+        // uniqueness constraint remains useful.
+        sqlx::query(
+            "INSERT INTO search_results (title, url, snippet) \
+             VALUES ($1, $2, $3) ON CONFLICT (url) DO NOTHING",
+        )
+        .bind("Rust Browser Fixture")
+        .bind("https://fixture.invalid/rust-browser")
+        .bind("Deterministic Rust search result for browser end-to-end tests")
+        .execute(&pool)
+        .await
+        .context("Failed to seed deterministic browser fixture")?;
 
         Ok(Self {
             pool,
