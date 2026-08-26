@@ -12,13 +12,14 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
+use futures::future::{BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::AppError;
 use crate::gateway::GatewayState;
-use crate::module::ServiceModule;
+use crate::module::{ServiceHealthError, ServiceModule};
 use crate::sse::{self, GatewayEvent};
 
 #[derive(Debug)]
@@ -38,6 +39,14 @@ impl ServiceModule for ProxyService {
             .route("/check", get(check_handler))
             .route("/check/history", get(check_history_handler))
             .route("/health", get(proxy_health))
+    }
+
+    fn health_check(&self) -> BoxFuture<'_, Result<(), ServiceHealthError>> {
+        // The module object deliberately does not own deployment configuration;
+        // its route-level check is therefore process liveness, not an upstream
+        // network probe. Keeping this explicit prevents an accidental inherited
+        // green status and makes the limitation visible at the implementation.
+        async move { Ok(()) }.boxed()
     }
 }
 
