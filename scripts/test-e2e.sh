@@ -54,10 +54,7 @@ wasm-bindgen \
   --out-dir "$LIVE_SEARCH_PKG_DIR" \
   --out-name live_search \
   target/wasm32-unknown-unknown/release/live_search.wasm
-
-# Keep the same Stylance invocation used by the Docker build. It writes the
-# hashed stylesheet consumed by the Leptos shell/E2E asset assertions.
-stylance build
+stylance live-search --output-file "$LIVE_SEARCH_PKG_DIR/live-search.css"
 
 test -s "$LIVE_SEARCH_PKG_DIR/live_search.js"
 test -s "$LIVE_SEARCH_PKG_DIR/live_search_bg.wasm"
