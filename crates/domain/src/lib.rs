@@ -12,28 +12,19 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-/// A user identifier. Newtype wrapper around `Uuid` to prevent mixing a
-/// `UserId` with a generic `Uuid`, `OrgId`, or other domain identifier at
-/// the type level.
+/// A non-nil user identifier. Newtype wrapper around `Uuid` to prevent mixing
+/// a `UserId` with a generic `Uuid`, `OrgId`, or other domain identifier.
 ///
 /// Wire-format compatibility: serialises as a plain UUID string
 /// (`#[serde(try_from = "Uuid", into = "Uuid")]`), so JWTs containing a
 /// `Claims::sub: UserId` and DB rows containing a `subject: UserId` round-trip
-/// byte-for-byte through `serde_json` and the existing `jsonwebtoken` codec.
+/// through `serde_json` and `jsonwebtoken` without an object wrapper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Uuid", into = "Uuid")]
 #[must_use = "a UserId should not be discarded"]
-pub struct UserId(pub Uuid);
+pub struct UserId(Uuid);
 
 impl UserId {
-    /// Construct a new `UserId` from a raw `Uuid`.
-    ///
-    /// This does NOT reject the nil UUID — use [`UserId::try_from`] /
-    /// `FromStr` for validation at boundaries.
-    pub const fn new(uuid: Uuid) -> Self {
-        Self(uuid)
-    }
-
     /// Return the inner `Uuid` by value.
     #[must_use]
     pub const fn as_uuid(&self) -> Uuid {
@@ -115,9 +106,10 @@ mod tests {
 
     #[test]
     fn serde_json_roundtrips_as_plain_uuid_string() -> Result<(), Box<dyn std::error::Error>> {
-        let id = UserId::new(Uuid::from_u128(0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0));
+        let id = UserId::try_from(Uuid::from_u128(
+            0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0,
+        ))?;
         let json = serde_json::to_string(&id)?;
-        // Wire format must be a plain UUID string (not an object).
         assert_eq!(json, "\"12345678-9abc-def0-1234-56789abcdef0\"");
 
         let parsed: UserId = serde_json::from_str(&json)?;
