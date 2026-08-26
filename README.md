@@ -22,17 +22,10 @@ The workspace uses Edition 2024 and pins Rust **1.94** as its supported toolchai
 
 ## Quick start
 
-Clone the repository:
-
 ```bash
 git clone https://github.com/codeandsolder/rust-web-fullstack.git
 cd rust-web-fullstack
-```
 
-For local exploration, start the dev stack explicitly. Listing the services keeps
-the production gateway (which requires real JWT keys) out of the command:
-
-```bash
 docker compose --profile dev up --build \
   postgres live-search i18n-demo gateway-dev
 ```
@@ -210,11 +203,12 @@ cargo install cargo-leptos --locked
 cargo install stylance-cli --locked
 
 cargo leptos build --release -p live-search
+stylance live-search --output-file live-search/target/site/pkg/live-search.css
 cargo leptos build --release -p i18n-demo
 ```
 
 Stylance's Rust macro provides typed/hashed class names; `stylance-cli` is what
-actually transforms/bundles CSS. It is therefore a real build step.
+actually transforms/bundles CSS. It is therefore a separate build step.
 
 ### Browser E2E
 
@@ -222,6 +216,13 @@ Browser tests mount the real Leptos SSR route tree and use real build artifacts;
 they do not substitute a text-only fixture for the frontend.
 
 Requirements: Docker daemon, Chromium/Chrome, and the live-search Leptos build.
+The helper script performs the asset build and prerequisite checks:
+
+```bash
+CHROME_PATH=/usr/bin/chromium ./scripts/test-e2e.sh
+```
+
+Or invoke the test binary directly after building assets:
 
 ```bash
 LIVE_SEARCH_PKG_DIR=live-search/target/site/pkg \
@@ -236,8 +237,9 @@ skipping the coverage CI claims to provide.
 ## CI
 
 `.woodpecker.yml` checks workspace/feature matrices, Clippy, formatting,
-`cargo-audit`, Leptos production builds, Docker images, and browser E2E. The E2E
-job installs Chromium and both Docker jobs are wired to Docker-in-Docker.
+`cargo-audit`, Leptos production builds, the explicit Stylance bundle, Docker
+images, and browser E2E. The E2E job installs Chromium and Docker-backed jobs are
+wired to Docker-in-Docker.
 
 The pipeline also checks the `live-search` `otel` feature. Keep CI feature
 coverage in sync whenever optional features are added or removed.
