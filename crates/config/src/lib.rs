@@ -1,34 +1,17 @@
-//! Workspace configuration loaded from `config.toml` with
-//! `RWF_*` environment variable overrides.
-//!
-//! Each binary in the workspace calls [`Config::load`] at startup. The
-//! loader reads `config.toml` from the current working directory (or the
-//! path in `RWF_CONFIG`), then layers any matching `RWF_*` environment
-//! variables on top. Missing required keys produce a clear error.
-//!
-//! This replaces the previous per-binary ad-hoc `std::env::var` calls,
-//! eliminating the need for hand-rolled fallback logic.
-//!
-//! # Gateway access-token TTL
-//!
-//! Production `Settings` reads `ACCESS_TOKEN_TTL_SECS` directly; this field
-//! exists for the eventual full migration where all gateway settings move
-//! through the typed `Config` loader.
+//! Typed workspace configuration loaded from `config.toml` plus `RWF_*`
+//! environment overrides.
 
 use std::path::Path;
 
 use serde::Deserialize;
 use thiserror::Error;
 
-/// Top-level workspace config.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub gateway: GatewayConfig,
     #[serde(default)]
     pub live_search: LiveSearchConfig,
-    #[serde(default)]
-    pub otel: OtelConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,16 +20,10 @@ pub struct GatewayConfig {
     pub proxy_upstream_url: String,
     pub cors: CorsConfig,
     pub session: SessionConfig,
-    /// Buffer size for the gateway's SSE broadcast channel.
-    /// Overridable via `RWF_GATEWAY__SSE_BROADCAST_BUFFER`.
     #[serde(default = "default_gateway_sse_broadcast_buffer")]
     pub sse_broadcast_buffer: usize,
-    /// Lifetime of newly-issued refresh tokens, in seconds.
-    /// Overridable via `RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS`.
     #[serde(default = "default_gateway_refresh_token_ttl_secs")]
     pub refresh_token_ttl_secs: u64,
-    /// Lifetime of newly-issued access tokens, in seconds.
-    /// Overridable via `RWF_GATEWAY__ACCESS_TOKEN_TTL_SECS`.
     #[serde(default = "default_gateway_access_token_ttl_secs")]
     pub access_token_ttl_secs: u64,
 }
@@ -68,16 +45,10 @@ impl Default for GatewayConfig {
 const fn default_gateway_sse_broadcast_buffer() -> usize {
     256
 }
-
 const fn default_gateway_refresh_token_ttl_secs() -> u64 {
-    // 30 days, matching the previous hand-rolled constant in
-    // `gateway/src/auth/refresh.rs::REFRESH_TOKEN_TTL_SECONDS`.
     60 * 60 * 24 * 30
 }
-
 const fn default_gateway_access_token_ttl_secs() -> u64 {
-    // 15 minutes, matching the previous hand-rolled constant in
-    // `gateway/src/settings.rs::Settings::load` (ACCESS_TOKEN_TTL_SECS).
     15 * 60
 }
 
@@ -112,8 +83,6 @@ impl Default for SessionConfig {
 pub struct LiveSearchConfig {
     pub port: u16,
     pub database_url: String,
-    /// Pool hardening tunables — all overridable via
-    /// `RWF_LIVE_SEARCH__POOL_*` (see the documented example below).
     #[serde(default = "default_pool_max_connections")]
     pub pool_max_connections: u32,
     #[serde(default = "default_pool_min_connections")]
@@ -124,8 +93,6 @@ pub struct LiveSearchConfig {
     pub pool_idle_timeout_secs: u64,
     #[serde(default = "default_pool_max_lifetime_secs")]
     pub pool_max_lifetime_secs: u64,
-    /// Buffer size for the live-search SSE broadcast channel.
-    /// Overridable via `RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER`.
     #[serde(default = "default_live_search_sse_broadcast_buffer")]
     pub sse_broadcast_buffer: usize,
 }
@@ -146,10 +113,6 @@ impl Default for LiveSearchConfig {
 }
 
 impl LiveSearchConfig {
-    /// Human-readable connection-budget summary used by `db::create_pool`
-    /// and emitted at startup so operators can spot
-    /// `pool.max_connections + 1 (PgListener) > pg.max_connections`
-    /// violations at a glance.
     #[must_use]
     pub fn connection_budget_summary(&self) -> String {
         format!(
@@ -182,60 +145,40 @@ const fn default_live_search_sse_broadcast_buffer() -> usize {
     256
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct OtelConfig {
-    pub endpoint: Option<String>,
-}
-
-/// Errors that can occur when loading the configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    /// The underlying `config` crate returned an error (file not found,
-    /// parse error, missing required key, etc.).
     #[error("config load failed: {0}")]
     Load(#[from] config::ConfigError),
-    /// The required `RWF_CONFIG` path was set but does not exist.
     #[error("RWF_CONFIG path {0} does not exist")]
     ConfigPathNotFound(String),
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
 }
 
 impl Config {
-    /// Load the configuration from `config.toml` (or `RWF_CONFIG`),
-    /// with `RWF_*` environment variable overrides.
+    /// Load defaults, an optional TOML file, then `RWF_*` environment
+    /// overrides (`__` separates nested keys), and validate cross-field
+    /// invariants before returning.
     ///
-    /// Resolution order:
-    /// 1. `RWF_CONFIG` env var (if set) — path to a TOML file
-    /// 2. `./config.toml` (relative to CWD)
-    /// 3. Defaults baked into the structs
-    ///
-    /// Environment variables are layered with the `RWF_` prefix and
-    /// `__` as the section separator. For example:
-    /// - `RWF_GATEWAY__PORT=4000` overrides `gateway.port`
-    /// - `RWF_GATEWAY__SSE_BROADCAST_BUFFER=512` overrides
-    ///   `gateway.sse_broadcast_buffer`
-    /// - `RWF_GATEWAY__ACCESS_TOKEN_TTL_SECS=600` overrides
-    ///   `gateway.access_token_ttl_secs`
-    /// - `RWF_LIVE_SEARCH__DATABASE_URL=...` overrides
-    ///   `live_search.database_url`
-    /// - `RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50` overrides
-    ///   `live_search.pool_max_connections`
-    /// - `RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER=512` overrides
-    ///   `live_search.sse_broadcast_buffer`
+    /// Example: `RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50`.
     ///
     /// # Errors
-    /// Returns [`ConfigError`] if the file is unreadable or unparseable,
-    /// or if a required key is missing.
+    /// Returns [`ConfigError`] for missing explicit files, parse/deserialization
+    /// failures, or invalid values/invariants.
     #[expect(
         clippy::cast_possible_wrap,
         clippy::cast_lossless,
-        reason = "all values are well below i64::MAX — buffer sizes (≤1024), timeouts (≤86400), pool sizes (≤100)"
+        reason = "documented defaults are small fixed values"
     )]
     pub fn load() -> Result<Self, ConfigError> {
         let config_path = std::env::var("RWF_CONFIG").ok();
+        if let Some(path) = config_path.as_deref()
+            && !Path::new(path).exists()
+        {
+            return Err(ConfigError::ConfigPathNotFound(path.to_string()));
+        }
 
         let builder = config::Config::builder()
-            // Hard-coded defaults — kept in sync with the `Default`
-            // impls above.
             .set_default("gateway.port", 3001_i64)?
             .set_default("gateway.proxy_upstream_url", "https://ipapi.co")?
             .set_default(
@@ -284,10 +227,6 @@ impl Config {
                 "live_search.sse_broadcast_buffer",
                 default_live_search_sse_broadcast_buffer() as i64,
             )?
-            .set_default("otel.endpoint", "")?
-            // Layer 2: TOML file (if present). `config` 0.15 requires the
-            // format to be specified explicitly (0.14's `File::with_name`
-            // inferred it from the extension).
             .add_source(
                 config::File::new(
                     config_path.as_deref().unwrap_or("config.toml"),
@@ -295,7 +234,6 @@ impl Config {
                 )
                 .required(false),
             )
-            // Layer 3: RWF_* env vars (highest priority).
             .add_source(
                 config::Environment::with_prefix("RWF")
                     .separator("__")
@@ -303,86 +241,116 @@ impl Config {
             );
 
         let cfg: Self = builder.build()?.try_deserialize()?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
 
-        if let Some(path) = config_path.as_deref()
-            && !Path::new(path).exists()
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |message: &str| Err(ConfigError::Invalid(message.to_string()));
+
+        if self.gateway.proxy_upstream_url.trim().is_empty() {
+            return invalid("gateway.proxy_upstream_url must not be empty");
+        }
+        if self.gateway.sse_broadcast_buffer == 0 {
+            return invalid("gateway.sse_broadcast_buffer must be greater than zero");
+        }
+        if self.gateway.refresh_token_ttl_secs == 0
+            || self.gateway.refresh_token_ttl_secs > i64::MAX as u64
         {
-            return Err(ConfigError::ConfigPathNotFound(path.to_string()));
+            return invalid("gateway.refresh_token_ttl_secs must fit in positive i64");
+        }
+        if self.gateway.access_token_ttl_secs == 0
+            || self.gateway.access_token_ttl_secs > i64::MAX as u64
+        {
+            return invalid("gateway.access_token_ttl_secs must fit in positive i64");
         }
 
-        Ok(cfg)
+        if self.live_search.database_url.trim().is_empty() {
+            return invalid("live_search.database_url must not be empty");
+        }
+        if self.live_search.pool_max_connections == 0 {
+            return invalid("live_search.pool_max_connections must be greater than zero");
+        }
+        if self.live_search.pool_min_connections > self.live_search.pool_max_connections {
+            return invalid(
+                "live_search.pool_min_connections must not exceed pool_max_connections",
+            );
+        }
+        if self.live_search.pool_acquire_timeout_secs == 0 {
+            return invalid("live_search.pool_acquire_timeout_secs must be greater than zero");
+        }
+        if self.live_search.pool_idle_timeout_secs == 0 {
+            return invalid("live_search.pool_idle_timeout_secs must be greater than zero");
+        }
+        if self.live_search.pool_max_lifetime_secs == 0 {
+            return invalid("live_search.pool_max_lifetime_secs must be greater than zero");
+        }
+        if self.live_search.sse_broadcast_buffer == 0 {
+            return invalid("live_search.sse_broadcast_buffer must be greater than zero");
+        }
+
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     use super::*;
 
-    /// Process-wide serialisation mutex for env-mutating tests.
-    ///
-    /// Tests in a single binary run on multiple threads by default
-    /// (`cargo test --test-threads = N CPU cores`). Without this lock,
-    /// the env-var-mutating test races with `defaults_match_documented_values`
-    /// (which reads `RWF_CONFIG` indirectly) and produces ~20% flaky
-    /// failures. Acquire the lock at the top of every test that touches
-    /// the process env. `PoisonError::into_inner` is used so a panic in
-    /// one test doesn't lock out the rest.
     fn env_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    /// Temporarily set `key` to `value` for the duration of `f`, then
-    /// restore the previous value (or remove the var if it was unset).
-    ///
-    /// SAFETY: requires the caller to hold [`env_test_lock`] for the
-    /// duration of the closure so concurrent tests don't observe the
-    /// mutation. Tests within a single `cargo test` binary run on
-    /// multiple threads by default.
-    #[expect(
-        unsafe_code,
-        reason = "std::env::set_var / remove_var; guarded by env_test_lock"
-    )]
+    struct EnvVarGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        #[expect(
+            unsafe_code,
+            reason = "process environment mutation is serialized by env_test_lock"
+        )]
+        fn set(key: &str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        #[expect(
+            unsafe_code,
+            reason = "process environment mutation is serialized by env_test_lock"
+        )]
+        fn drop(&mut self) {
+            match self.original.as_deref() {
+                Some(value) => unsafe { std::env::set_var(&self.key, value) },
+                None => unsafe { std::env::remove_var(&self.key) },
+            }
+        }
+    }
+
     fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
     where
         F: FnOnce() -> R,
     {
-        let original = std::env::var(key).ok();
-        // SAFETY: process-env mutation is safe because the env_test_lock
-        // serialises every test that calls this helper.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        let result = f();
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var(key, v);
-            },
-            None => unsafe {
-                std::env::remove_var(key);
-            },
-        }
-        result
+        let _guard = EnvVarGuard::set(key, value);
+        f()
     }
 
     #[test]
     fn defaults_match_documented_values() {
-        // The env-mutating tests acquire `env_test_lock`; this one
-        // does not need to touch the env but DOES depend on
-        // `RWF_CONFIG` being unset (the loader returns ConfigPathNotFound
-        // if it points to a missing file). Hold the lock so we read a
-        // deterministic env state.
         let _guard = env_test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        #[expect(
-            clippy::expect_used,
-            reason = "fail-fast in test — no meaningful recovery from config load failure"
-        )]
-        let cfg = Config::load().expect("load should succeed with defaults");
+        let cfg = Config::load().unwrap_or_else(|e| panic!("config defaults failed: {e}"));
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);
         assert_eq!(cfg.live_search.pool_max_connections, 20);
@@ -393,22 +361,31 @@ mod tests {
         assert_eq!(cfg.gateway.access_token_ttl_secs, 15 * 60);
     }
 
-    /// `RWF_CONFIG=/nonexistent.toml` produces a `ConfigPathNotFound` error
-    /// (not a silent fallback).
     #[test]
     fn rwf_config_missing_path_errors() {
         let _guard = env_test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = with_env_var("RWF_CONFIG", "/this/path/does/not/exist.toml", Config::load);
-        assert!(
-            matches!(result, Err(ConfigError::ConfigPathNotFound(_))),
-            "expected ConfigPathNotFound for nonexistent RWF_CONFIG, got {result:?}",
-        );
+        assert!(matches!(result, Err(ConfigError::ConfigPathNotFound(_))));
     }
 
-    /// `connection_budget_summary` round-trips the configured pool values
-    /// in a single human-readable line (used by `live-search::bootstrap`).
+    #[test]
+    fn invalid_zero_sse_buffer_is_rejected() {
+        let _guard = env_test_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = with_env_var("RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER", "0", Config::load);
+        assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn invalid_pool_bounds_are_rejected() {
+        let mut cfg = Config::default();
+        cfg.live_search.pool_min_connections = 21;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Invalid(_))));
+    }
+
     #[test]
     fn connection_budget_summary_format() {
         let cfg = LiveSearchConfig::default();
