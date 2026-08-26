@@ -6,6 +6,8 @@ use std::path::Path;
 use serde::Deserialize;
 use thiserror::Error;
 
+const MAX_I64_AS_U64: u64 = 9_223_372_036_854_775_807;
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -255,12 +257,12 @@ impl Config {
             return invalid("gateway.sse_broadcast_buffer must be greater than zero");
         }
         if self.gateway.refresh_token_ttl_secs == 0
-            || self.gateway.refresh_token_ttl_secs > i64::MAX as u64
+            || self.gateway.refresh_token_ttl_secs > MAX_I64_AS_U64
         {
             return invalid("gateway.refresh_token_ttl_secs must fit in positive i64");
         }
         if self.gateway.access_token_ttl_secs == 0
-            || self.gateway.access_token_ttl_secs > i64::MAX as u64
+            || self.gateway.access_token_ttl_secs > MAX_I64_AS_U64
         {
             return invalid("gateway.access_token_ttl_secs must fit in positive i64");
         }
@@ -346,11 +348,11 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_documented_values() {
+    fn defaults_match_documented_values() -> Result<(), ConfigError> {
         let _guard = env_test_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cfg = Config::load().unwrap_or_else(|e| panic!("config defaults failed: {e}"));
+        let cfg = Config::load()?;
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);
         assert_eq!(cfg.live_search.pool_max_connections, 20);
@@ -359,6 +361,7 @@ mod tests {
         assert_eq!(cfg.gateway.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.refresh_token_ttl_secs, 60 * 60 * 24 * 30);
         assert_eq!(cfg.gateway.access_token_ttl_secs, 15 * 60);
+        Ok(())
     }
 
     #[test]
