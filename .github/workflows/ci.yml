@@ -22,8 +22,14 @@ jobs:
     name: Lockfile consistency
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          # This temporary repair job must operate on the actual PR branch,
+          # not GitHub's synthetic pull/<n>/merge ref.
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.94.0 --profile minimal
@@ -47,8 +53,16 @@ jobs:
           path: Cargo.lock
           retention-days: 1
 
+      - name: Commit refreshed lockfile
+        if: github.event_name == 'pull_request' && steps.lockfile.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Refresh Cargo.lock"
+          git push origin "HEAD:${{ github.head_ref }}"
+
       - name: Verify committed lockfile
-        if: steps.lockfile.outputs.changed == 'true'
         run: git diff --exit-code -- Cargo.lock
 
   format:
