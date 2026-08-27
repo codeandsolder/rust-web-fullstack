@@ -40,10 +40,10 @@ jobs:
         id: format
         run: |
           cargo fmt --all
-          find live-search i18n-demo -name '*.rs' -print0 | while IFS= read -r -d '' f; do
+          while IFS= read -r -d '' f; do
             leptosfmt --rustfmt --stdin --quiet < "$f" > "$f.tmp"
             mv "$f.tmp" "$f"
-          done
+          done < <(find live-search i18n-demo -name '*.rs' -print0)
           cargo fmt --all
 
           if git diff --quiet; then
@@ -122,12 +122,8 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ci/github-actions
 
       - name: Install pinned Rust toolchain
         run: |
@@ -161,14 +157,9 @@ jobs:
       - name: Audit dependencies
         run: cargo audit
 
-      - name: Commit refreshed lockfile
+      - name: Verify committed lockfile is current
         if: steps.lockfile.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- Cargo.lock
-          git commit -m "chore: refresh audited lockfile"
-          git push origin HEAD:ci/github-actions
+        run: git diff --exit-code -- Cargo.lock
 
   leptos-build:
     name: Leptos production builds
