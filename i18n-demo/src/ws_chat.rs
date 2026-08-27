@@ -64,6 +64,10 @@ fn origin_matches_host(origin: &str, host: &str) -> bool {
 /// Browser-originated upgrades must be same-origin. The protocol layer rejects
 /// oversized frames/messages before application code receives them; the
 /// in-loop length check remains as defense in depth.
+#[allow(
+    clippy::unused_async,
+    reason = "Axum handler entry point is intentionally async"
+)]
 pub async fn chat_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
     if let Some(origin_value) = headers.get(ORIGIN) {
         let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
