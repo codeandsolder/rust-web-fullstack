@@ -21,6 +21,10 @@ RUN rustup target add wasm32-unknown-unknown && \
     cargo install sccache --locked
 ENV RUSTC_WRAPPER=sccache
 COPY --from=planner /build/recipe.json recipe.json
+# Stylance's import_style proc macro reads this file at compile time. cargo-chef
+# recipes contain Rust manifests/skeletons, not arbitrary CSS assets, so make
+# the stylesheet available before the dependency cook as well as the real build.
+COPY live-search/src/styles.module.css /build/live-search/src/styles.module.css
 # Scope each dependency pre-build to live-search. Cooking the whole workspace
 # for wasm32 pulls native Tokio/Mio networking through unrelated members, and
 # Mio deliberately does not support wasm32 with its net feature enabled.
