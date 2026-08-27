@@ -183,15 +183,15 @@ jobs:
 
       - name: Build live-search
         run: |
-          cargo leptos build --locked --release -p live-search
-          mkdir -p live-search/target/site/pkg
-          stylance live-search --output-file live-search/target/site/pkg/live-search.css
-          test -s live-search/target/site/pkg/live_search.js
-          test -s live-search/target/site/pkg/live_search_bg.wasm
-          test -s live-search/target/site/pkg/live-search.css
+          cargo leptos build --release -p live-search
+          mkdir -p target/site/pkg
+          stylance live-search --output-file target/site/pkg/live-search.css
+          test -s target/site/pkg/live_search.js
+          test -s target/site/pkg/live_search_bg.wasm
+          test -s target/site/pkg/live-search.css
 
       - name: Build i18n-demo
-        run: cargo leptos build --locked --release -p i18n-demo
+        run: cargo leptos build --release -p i18n-demo
 
   docker-build:
     name: Docker images
