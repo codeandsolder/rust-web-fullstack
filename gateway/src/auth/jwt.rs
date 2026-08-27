@@ -126,7 +126,7 @@ mod tests {
         let encoding_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
 
-        let user_id = UserId::new(Uuid::new_v4());
+        let user_id = UserId::try_from(Uuid::new_v4())?;
         let token = create_jwt(&user_id, &encoding_key, 60 * 60 * 24)?;
 
         let claims = validate_jwt(&token, &decoding_key)?;
@@ -152,7 +152,7 @@ mod tests {
         );
         let wrong_decoding_key = DecodingKey::from_ed_pem(wrong_public_pem.as_bytes())?;
 
-        let user_id = UserId::new(Uuid::new_v4());
+        let user_id = UserId::try_from(Uuid::new_v4())?;
         let token = create_jwt(&user_id, &encoding_key, 60 * 60 * 24)?;
 
         let result = validate_jwt(&token, &wrong_decoding_key);
@@ -174,7 +174,7 @@ mod tests {
     fn rejects_expired_token() -> anyhow::Result<()> {
         let (private_pem, public_pem) = dev_keypair_pems()?;
 
-        let user_id = UserId::new(Uuid::new_v4());
+        let user_id = UserId::try_from(Uuid::new_v4())?;
         let expired = Claims {
             sub: user_id,
             exp: 0,
