@@ -381,6 +381,7 @@ pub fn LiveFeedPage() -> impl IntoView {
 
         leptos::task::spawn_local(async move {
             use futures::{StreamExt, stream};
+            use gloo_net::eventsource::State;
             use gloo_timers::future::sleep;
             use leptos::logging;
             use std::time::Duration;
@@ -393,61 +394,70 @@ pub fn LiveFeedPage() -> impl IntoView {
 
                 match gloo_net::eventsource::futures::EventSource::new("/api/events") {
                     Ok(mut event_source) => {
-                        let connected_stream = event_source.subscribe("connected");
                         let result_stream = event_source.subscribe("search_result");
                         let lagged_stream = event_source.subscribe("stream_lagged");
 
-                        match (connected_stream, result_stream, lagged_stream) {
-                            (Ok(connected_events), Ok(result_events), Ok(lagged_events)) => {
-                                let mut all_events = stream::select(
-                                    stream::select(connected_events, result_events),
-                                    lagged_events,
-                                );
-                                while let Some(result) = all_events.next().await {
-                                    if stop.get() {
-                                        return;
-                                    }
-                                    match result {
-                                        Ok((_event_type, msg)) => {
-                                            let Some(data) = msg.data().as_string() else {
-                                                logging::warn!("SSE message had non-string data");
-                                                continue;
-                                            };
-                                            match serde_json::from_str::<SseEvent>(&data) {
-                                                Ok(SseEvent::Connected { .. }) => {
-                                                    connected.set(true);
-                                                }
-                                                Ok(SseEvent::SearchResult {
-                                                    title,
-                                                    url,
-                                                    snippet,
-                                                }) => {
-                                                    results.update(|r| {
-                                                        if r.len() >= 200 {
-                                                            r.pop_front();
-                                                        }
-                                                        r.push_back(LiveResult {
-                                                            title,
-                                                            url,
-                                                            snippet,
+                        match (result_stream, lagged_stream) {
+                            (Ok(result_events), Ok(lagged_events)) => {
+                                while event_source.state() == State::Connecting && !stop.get() {
+                                    sleep(Duration::from_millis(25)).await;
+                                }
+
+                                if stop.get() {
+                                    return;
+                                }
+
+                                if event_source.state() == State::Open {
+                                    connected.set(true);
+                                    let mut all_events = stream::select(result_events, lagged_events);
+                                    while let Some(result) = all_events.next().await {
+                                        if stop.get() {
+                                            return;
+                                        }
+                                        match result {
+                                            Ok((_event_type, msg)) => {
+                                                let Some(data) = msg.data().as_string() else {
+                                                    logging::warn!("SSE message had non-string data");
+                                                    continue;
+                                                };
+                                                match serde_json::from_str::<SseEvent>(&data) {
+                                                    Ok(SseEvent::Connected { .. }) => {
+                                                        connected.set(true);
+                                                    }
+                                                    Ok(SseEvent::SearchResult {
+                                                        title,
+                                                        url,
+                                                        snippet,
+                                                    }) => {
+                                                        results.update(|r| {
+                                                            if r.len() >= 200 {
+                                                                r.pop_front();
+                                                            }
+                                                            r.push_back(LiveResult {
+                                                                title,
+                                                                url,
+                                                                snippet,
+                                                            });
                                                         });
-                                                    });
-                                                }
-                                                Ok(SseEvent::StreamLagged { skipped }) => {
-                                                    logging::warn!(
-                                                        "SSE stream lagged by {skipped} messages"
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    logging::warn!("Invalid SSE message: {e:?}");
+                                                    }
+                                                    Ok(SseEvent::StreamLagged { skipped }) => {
+                                                        logging::warn!(
+                                                            "SSE stream lagged by {skipped} messages"
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        logging::warn!("Invalid SSE message: {e:?}");
+                                                    }
                                                 }
                                             }
-                                        }
-                                        Err(e) => {
-                                            logging::warn!("SSE stream error: {e:?}");
-                                            break;
+                                            Err(e) => {
+                                                logging::warn!("SSE stream error: {e:?}");
+                                                break;
+                                            }
                                         }
                                     }
+                                } else {
+                                    logging::warn!("SSE connection closed before opening");
                                 }
                             }
                             _ => logging::error!("Failed to subscribe to named SSE events"),
