@@ -44,9 +44,6 @@ stylance = { workspace = true }
 # Shared domain types — no platform-specific dependencies, available everywhere.
 rwf-domain = { workspace = true }
 
-# leptos-forms-rs server-function config — enables the typed form pattern
-leptos-forms-rs = { version = "1" }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -61,7 +58,6 @@ tower-http = { workspace = true, features = ["trace", "fs"] }
 thiserror = { workspace = true }
 axum-prometheus = { workspace = true }
 moka = { workspace = true }
-leptos-forms-rs = { version = "1", features = ["ssr"] }
 base64 = { workspace = true }
 rwf-config = { path = "../crates/config" }
 leptos-utils = { workspace = true }
@@ -84,7 +80,6 @@ gloo-net = { workspace = true }
 gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen = { workspace = true }
 console_error_panic_hook = { workspace = true }
-leptos-forms-rs = { version = "1", features = ["hydrate"] }
 rwf-domain = { workspace = true }
 
 [features]
