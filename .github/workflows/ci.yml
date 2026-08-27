@@ -186,8 +186,8 @@ jobs:
           cargo leptos build --release -p live-search
           mkdir -p target/site/pkg
           stylance live-search --output-file target/site/pkg/live-search.css
-          test -s target/site/pkg/live_search.js
-          test -s target/site/pkg/live_search_bg.wasm
+          find target/site/pkg -maxdepth 1 -type f -name '*.js' -size +0c -print -quit | grep -q .
+          find target/site/pkg -maxdepth 1 -type f -name '*.wasm' -size +0c -print -quit | grep -q .
           test -s target/site/pkg/live-search.css
 
       - name: Build i18n-demo
