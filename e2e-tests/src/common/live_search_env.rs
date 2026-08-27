@@ -57,6 +57,15 @@ impl LiveSearchEnv {
         Self::start_with(LiveSearchConfig::default()).await
     }
 
+    /// Start the production live-search route tree with explicit fixture configuration.
+    ///
+    /// # Errors
+    /// Returns an error if Postgres, Leptos configuration, application state,
+    /// an explicitly configured asset directory, binding, or readiness fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "fixture setup keeps the production route tree and background services together"
+    )]
     pub async fn start_with(cfg: LiveSearchConfig) -> Result<Self> {
         let db = super::db::TestEnv::postgres().await?;
         let conn_str = db.connection_string().to_string();
@@ -78,7 +87,17 @@ impl LiveSearchEnv {
         ));
         state::set(Arc::clone(&ctx)).context("live-search AppContext already initialized")?;
 
-        let conf = get_configuration(None).context("failed to load Leptos configuration")?;
+        // The fixture is not launched by cargo-leptos, so load the application's
+        // metadata directly instead of relying on LEPTOS_* environment variables.
+        // In particular, LEPTOS_OUTPUT_NAME at compile time changes the WASM name
+        // HydrationScripts emits and does not match manual wasm-bindgen output.
+        let leptos_manifest =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../live-search/Cargo.toml");
+        let leptos_manifest = leptos_manifest
+            .to_str()
+            .context("live-search Cargo.toml path is not valid UTF-8")?;
+        let conf = get_configuration(Some(leptos_manifest))
+            .context("failed to load live-search Leptos configuration")?;
         let leptos_options = conf.leptos_options;
         let leptos_routes = generate_route_list(live_search::app::App);
 
@@ -222,7 +241,7 @@ impl LiveSearchEnv {
             }
             if std::time::Instant::now() >= deadline {
                 return Err(anyhow::anyhow!(
-                    "Live-search server at {base_url} did not become ready within 30s"
+                    "live-search server at {base_url} did not become ready within 30s"
                 ));
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -253,7 +272,7 @@ impl std::fmt::Debug for LiveSearchEnv {
             .field("base_url", &self.base_url)
             .field("db_container", &self.db_container)
             .field("shutdown", &"<cancellation token>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
