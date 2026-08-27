@@ -134,32 +134,12 @@ jobs:
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked
 
-      - name: Apply patch-level security updates
-        id: lockfile
-        run: |
-          cargo update -p h2 --precise 0.4.16
-          cargo update -p event-listener --precise 5.4.2
-          if git diff --quiet -- Cargo.lock; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            git diff --stat -- Cargo.lock
-          fi
-
-      - name: Upload refreshed lockfile
-        if: steps.lockfile.outputs.changed == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: refreshed-cargo-lock
-          path: Cargo.lock
-          retention-days: 1
-
+      # Audit the exact dependency graph committed to the repository. CI must
+      # not mutate Cargo.lock first: both targeted patched versions are already
+      # present, and `cargo update -p` can legitimately rewrite unrelated
+      # transitive edges even when the requested package version is unchanged.
       - name: Audit dependencies
         run: cargo audit
-
-      - name: Verify committed lockfile is current
-        if: steps.lockfile.outputs.changed == 'true'
-        run: git diff --exit-code -- Cargo.lock
 
   leptos-build:
     name: Leptos production builds
