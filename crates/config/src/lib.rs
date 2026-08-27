@@ -238,6 +238,7 @@ impl Config {
             )
             .add_source(
                 config::Environment::with_prefix("RWF")
+                    .prefix_separator("_")
                     .separator("__")
                     .try_parsing(true),
             );
