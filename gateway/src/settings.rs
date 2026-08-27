@@ -233,6 +233,11 @@ impl Settings {
         })
     }
 
+    /// Load development settings using `ADMIN_PASSWORD` from the environment.
+    ///
+    /// # Errors
+    /// Returns an error if `ADMIN_PASSWORD` is missing or development key
+    /// generation/encoding fails.
     pub fn load_dev_keys_from_env() -> Result<Self, anyhow::Error> {
         let admin_password = std::env::var("ADMIN_PASSWORD")
             .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;
