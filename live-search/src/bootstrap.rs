@@ -5,9 +5,9 @@
 //! `PgListener`, Leptos SSR routes, and graceful shutdown.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 #[cfg(feature = "otel")]
 use std::sync::OnceLock;
-use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::{StatusCode, Uri};
@@ -206,9 +206,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let router = router.layer(TraceLayer::new_for_http());
 
     #[cfg(feature = "otel")]
-    let router = router.layer(
-        axum_tracing_opentelemetry::middleware::OtelAxumLayer::default(),
-    );
+    let router = router.layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
 
     let router: Router<()> = router.with_state(leptos_options);
 

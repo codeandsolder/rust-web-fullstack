@@ -161,7 +161,10 @@ mod tests {
 
     #[test]
     fn origin_validation_accepts_same_host_only() {
-        assert!(origin_matches_host("http://localhost:3002", "localhost:3002"));
+        assert!(origin_matches_host(
+            "http://localhost:3002",
+            "localhost:3002"
+        ));
         assert!(origin_matches_host("https://example.com", "example.com"));
         assert!(!origin_matches_host("https://evil.example", "example.com"));
         assert!(!origin_matches_host("null", "example.com"));
@@ -178,7 +181,10 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::panic, reason = "serde failure would make this test fixture invalid")]
+    #[expect(
+        clippy::panic,
+        reason = "serde failure would make this test fixture invalid"
+    )]
     fn event_round_trips_through_serde_json() {
         let event = ChatEvent::new(Uuid::new_v4(), "hello, room".to_string());
         let json = match serde_json::to_string(&event) {

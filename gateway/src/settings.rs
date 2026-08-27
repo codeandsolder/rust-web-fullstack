@@ -148,8 +148,8 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("failed to parse EdDSA public key PEM: {e}"))?,
         );
 
-        let admin_user_id_raw = std::env::var("ADMIN_USER_ID")
-            .unwrap_or_else(|_| DEFAULT_ADMIN_USER_ID.to_string());
+        let admin_user_id_raw =
+            std::env::var("ADMIN_USER_ID").unwrap_or_else(|_| DEFAULT_ADMIN_USER_ID.to_string());
         let admin_user_id = UserId::from_str(&admin_user_id_raw)
             .with_context(|| format!("invalid ADMIN_USER_ID {admin_user_id_raw:?}"))?;
 

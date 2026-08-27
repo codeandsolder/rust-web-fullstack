@@ -55,8 +55,7 @@ impl TestEnv {
             .await
             .context("Failed to get Postgres host port")?;
 
-        let connection_string =
-            format!("postgres://postgres:postgres@{host}:{host_port}/postgres");
+        let connection_string = format!("postgres://postgres:postgres@{host}:{host_port}/postgres");
 
         let pool = PgPool::connect(&connection_string)
             .await

@@ -10,9 +10,9 @@ use anyhow::Context;
 
 #[cfg(feature = "browser-tests")]
 use chromiumoxide::Page;
+use e2e_tests::common::{LiveSearchEnv, SharedServer};
 #[cfg(feature = "browser-tests")]
 use e2e_tests::common::{element_is_visible, setup, teardown, wait_for_element, wait_for_js_true};
-use e2e_tests::common::{LiveSearchEnv, SharedServer};
 
 static SERVER: SharedServer<LiveSearchEnv> = SharedServer::new();
 
@@ -143,7 +143,10 @@ mod browser_tests {
             Duration::from_secs(10),
         )
         .await;
-        assert!(no_results, "Expected 'No results found.' for nonsense query");
+        assert!(
+            no_results,
+            "Expected 'No results found.' for nonsense query"
+        );
 
         let count: u32 = ctx
             .page
@@ -242,7 +245,10 @@ mod browser_tests {
             Duration::from_secs(10),
         )
         .await;
-        assert!(sentinel_appeared, "Sentinel did not reach the browser via SSE");
+        assert!(
+            sentinel_appeared,
+            "Sentinel did not reach the browser via SSE"
+        );
 
         if let Err(e) = sqlx::query("DELETE FROM search_results WHERE title = $1")
             .bind(&title)
@@ -358,9 +364,7 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    anyhow::ensure!(
-        content_type.contains("javascript") || content_type.contains("text/plain")
-    );
+    anyhow::ensure!(content_type.contains("javascript") || content_type.contains("text/plain"));
     let bytes = response.bytes().await?;
     anyhow::ensure!(bytes.len() > 1024, "hydration JS is suspiciously small");
     Ok(())

@@ -213,11 +213,7 @@ fn result_row_renderer(
     columns: RwSignal<Vec<usize>>,
 ) -> impl IntoView {
     view! {
-        <tr
-            class=class
-            data-testid="result-item"
-            on:click=move |ev| on_select.run(ev)
-        >
+        <tr class=class data-testid="result-item" on:click=move |ev| on_select.run(ev)>
             {SearchResultRow::render_row(row, index, columns)}
         </tr>
     }
@@ -333,8 +329,7 @@ pub fn SearchPage() -> impl IntoView {
                         .and_then(Result::ok)
                         .map(|items| {
                             if items.is_empty() {
-                                view! { <p class=styles::empty>"No results found."</p> }
-                                    .into_any()
+                                view! { <p class=styles::empty>"No results found."</p> }.into_any()
                             } else {
                                 let rows: Vec<SearchResultRow> = items
                                     .iter()
@@ -385,7 +380,7 @@ pub fn LiveFeedPage() -> impl IntoView {
         on_cleanup(move || stop_cleanup.set(true));
 
         leptos::task::spawn_local(async move {
-            use futures::{stream, StreamExt};
+            use futures::{StreamExt, stream};
             use gloo_timers::future::sleep;
             use leptos::logging;
             use std::time::Duration;

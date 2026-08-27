@@ -106,7 +106,9 @@ pub async fn login_handler(
     let pool = state.db_pool.as_ref().ok_or_else(|| {
         AppError::internal(
             "refresh-token store unavailable",
-            std::io::Error::other("DATABASE_URL not configured; gateway cannot issue refresh tokens"),
+            std::io::Error::other(
+                "DATABASE_URL not configured; gateway cannot issue refresh tokens",
+            ),
         )
     })?;
 
@@ -173,15 +175,10 @@ pub async fn refresh_handler(
     })?;
 
     let now = chrono::Utc::now();
-    let rotation = super::refresh::rotate(
-        pool,
-        &refresh_token,
-        now,
-        state.refresh_token_ttl_secs,
-    )
-    .await
-    .map_err(|e| AppError::internal("refresh-token rotation", e))?
-    .ok_or(AppError::AuthError)?;
+    let rotation = super::refresh::rotate(pool, &refresh_token, now, state.refresh_token_ttl_secs)
+        .await
+        .map_err(|e| AppError::internal("refresh-token rotation", e))?
+        .ok_or(AppError::AuthError)?;
 
     let token = create_jwt(
         &rotation.subject,

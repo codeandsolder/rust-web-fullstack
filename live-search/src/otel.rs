@@ -58,17 +58,18 @@ pub fn init_telemetry() -> Result<SdkTracerProvider, TelemetryError> {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,live_search=debug,tower_http=debug"))
-        .add_directive("h2=warn".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?)
-        .add_directive("primp_h2=warn".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?)
-        .add_directive("http2=info".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?);
+    let filter =
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,live_search=debug,tower_http=debug"))
+            .add_directive("h2=warn".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?)
+            .add_directive("primp_h2=warn".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?)
+            .add_directive("http2=info".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?);
 
     let fmt_layer = tracing_subscriber::fmt::layer().with_target(true).compact();
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
