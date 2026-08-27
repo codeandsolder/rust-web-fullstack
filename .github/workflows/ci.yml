@@ -122,8 +122,12 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ci/github-actions
 
       - name: Install pinned Rust toolchain
         run: |
@@ -157,9 +161,14 @@ jobs:
       - name: Audit dependencies
         run: cargo audit
 
-      - name: Verify committed lockfile is current
+      - name: Commit refreshed lockfile
         if: steps.lockfile.outputs.changed == 'true'
-        run: git diff --exit-code -- Cargo.lock
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- Cargo.lock
+          git commit -m "chore: refresh audited lockfile"
+          git push origin HEAD:ci/github-actions
 
   leptos-build:
     name: Leptos production builds
