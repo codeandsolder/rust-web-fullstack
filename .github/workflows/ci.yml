@@ -18,6 +18,39 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  lockfile:
+    name: Lockfile consistency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal
+
+      - name: Resolve manifests
+        id: lockfile
+        run: |
+          cargo metadata --format-version 1 >/dev/null
+          if git diff --quiet -- Cargo.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- Cargo.lock
+          fi
+
+      - name: Upload refreshed lockfile
+        if: steps.lockfile.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: resolved-cargo-lock
+          path: Cargo.lock
+          retention-days: 1
+
+      - name: Verify committed lockfile
+        if: steps.lockfile.outputs.changed == 'true'
+        run: git diff --exit-code -- Cargo.lock
+
   format:
     name: Format
     runs-on: ubuntu-24.04
