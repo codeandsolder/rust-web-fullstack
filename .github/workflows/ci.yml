@@ -33,18 +33,39 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Check rustfmt
-        run: cargo fmt --all -- --check
+      - name: Install Leptos formatter
+        run: cargo +stable install leptosfmt --locked
 
-      - name: Check Leptos view formatting
+      - name: Generate canonical formatting
+        id: format
         run: |
-          cargo +stable install leptosfmt --locked
+          cargo fmt --all
           find live-search i18n-demo -name '*.rs' -print0 | while IFS= read -r -d '' f; do
             leptosfmt --rustfmt --stdin --quiet < "$f" > "$f.tmp"
             mv "$f.tmp" "$f"
           done
           cargo fmt --all
-          git diff --exit-code
+
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --name-only -- '*.rs' > /tmp/formatted-files.txt
+            tar -czf /tmp/formatted-rust.tar.gz -T /tmp/formatted-files.txt
+            git diff --stat
+          fi
+
+      - name: Upload formatter output
+        if: steps.format.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: formatted-rust
+          path: /tmp/formatted-rust.tar.gz
+          retention-days: 1
+
+      - name: Verify formatting
+        if: steps.format.outputs.changed == 'true'
+        run: git diff --exit-code
 
   check:
     name: Check + Clippy
