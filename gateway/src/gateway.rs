@@ -92,10 +92,6 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
 /// Returns an error if TTLs are invalid, the HTTP client cannot be built, or
 /// rate-limiter configuration fails.
 #[instrument(skip(modules, settings, db_pool))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "public compatibility constructor; a typed runtime config can replace it in a later API revision"
-)]
 pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     mut settings: settings::Settings,
@@ -224,8 +220,7 @@ pub fn build_gateway_with_settings(
         .merge(crate::openapi::swagger_ui_router())
         .layer(general_governor);
 
-    let session_router =
-        crate::session::router::<GatewayState>().route_layer(csrf_middleware.clone());
+    let session_router = crate::session::router::<GatewayState>().route_layer(csrf_middleware);
 
     async fn csrf_token_handler(
         session: tower_sessions::Session,
