@@ -1,44 +1,49 @@
 # rust-web-fullstack workspace config
 #
-# Layered configuration for the gateway and live-search binaries.
-# Each binary loads this file via the `config` crate; per-environment
-# overrides are read from `RWF_*` environment variables.
-#
 # Resolution order (highest priority wins):
-#   1. RWF_* environment variables (e.g. RWF_GATEWAY_PORT=4000)
-#   2. This TOML file
-#   3. Hard-coded defaults in the binary
+#   1. RWF_* environment overrides. Nested keys use `__`.
+#   2. This TOML file (or the path in RWF_CONFIG).
+#   3. Typed defaults in crates/config.
 #
-# Required keys are checked at startup; missing keys produce a clear
-# error message rather than a silent fallback.
+# OpenTelemetry follows the standard OTEL_EXPORTER_OTLP_* environment
+# variables directly and is intentionally not duplicated in this config tree.
 
 [gateway]
-# Port the gateway binds to. Overridable via RWF_GATEWAY_PORT.
+# RWF_GATEWAY__PORT=4000
 port = 3001
 
-# Upstream base URL for the proxy / VPN check service.
-# Overridable via RWF_PROXY_UPSTREAM_URL.
+# RWF_GATEWAY__PROXY_UPSTREAM_URL=https://example.invalid
 proxy_upstream_url = "https://ipapi.co"
 
+# RWF_GATEWAY__SSE_BROADCAST_BUFFER=512
+sse_broadcast_buffer = 256
+
+# RWF_GATEWAY__REFRESH_TOKEN_TTL_SECS=2592000
+refresh_token_ttl_secs = 2592000
+
+# RWF_GATEWAY__ACCESS_TOKEN_TTL_SECS=900
+access_token_ttl_secs = 900
+
 [gateway.cors]
-# Comma-separated allowlist. Special value "*" permits any origin
-# (debug only). Overridable via RWF_ALLOWED_ORIGINS.
+# RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://a.example,https://b.example
+# Special value `*` is non-credentialed debug mode.
 allowed_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002"
 
 [gateway.session]
-# Whether the session cookie carries the `Secure` flag.
-# Overridable via RWF_SESSION_COOKIE_SECURE.
+# RWF_GATEWAY__SESSION__COOKIE_SECURE=false
 cookie_secure = true
 
 [live_search]
-# Port live-search binds to. Overridable via RWF_LIVE_SEARCH_PORT.
+# RWF_LIVE_SEARCH__PORT=3000
 port = 3000
 
-# Database URL — the only required setting for live-search.
-# Overridable via RWF_DATABASE_URL.
+# RWF_LIVE_SEARCH__DATABASE_URL=postgres://...
 database_url = "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo"
 
-[otel]
-# OTLP endpoint for the optional `otel` feature. When unset, the
-# telemetry layer is skipped.
-endpoint = "http://localhost:4317"
+# Pool tunables are validated at startup: max > 0, min <= max, timeouts > 0.
+pool_max_connections = 20
+pool_min_connections = 2
+pool_acquire_timeout_secs = 5
+pool_idle_timeout_secs = 600
+pool_max_lifetime_secs = 1800
+sse_broadcast_buffer = 256

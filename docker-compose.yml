@@ -31,11 +31,7 @@ services:
     ports:
       - "3000:3000"
     healthcheck:
-      # `wget` (busybox-static, ~few hundred KB) is installed in the runtime
-      # image. `curl` is NOT installed by default — adding it would bloat
-      # the slim Debian layer. We use `wget -qO-` to dump the body to
-      # /dev/null; a non-2xx response causes the probe to fail.
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/readyz"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -59,9 +55,6 @@ services:
       timeout: 3s
       retries: 10
 
-  # Production gateway — requires JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM
-  # to be passed via environment or secrets manager. Refuses to start without
-  # them (settings::Settings::load() errors out on missing keys).
   gateway:
     build:
       context: .
@@ -70,11 +63,11 @@ services:
     ports:
       - "3001:3001"
     environment:
-      # Production keys must be supplied by the deployment platform
-      # (secrets manager, k8s Secret, etc.). Uncomment and provide:
-      # JWT_PRIVATE_KEY_PEM: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
-      # JWT_PUBLIC_KEY_PEM: "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+      DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
+      JWT_PRIVATE_KEY_PEM: "${JWT_PRIVATE_KEY_PEM:?JWT_PRIVATE_KEY_PEM must be set}"
+      JWT_PUBLIC_KEY_PEM: "${JWT_PUBLIC_KEY_PEM:?JWT_PUBLIC_KEY_PEM must be set}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}"
+      ADMIN_USER_ID: "${ADMIN_USER_ID:-00000000-0000-0000-0000-000000000001}"
       RUST_LOG: info
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
@@ -88,9 +81,8 @@ services:
       live-search:
         condition: service_healthy
 
-  # Dev gateway — ephemeral EdDSA keys, ALLOW_DEV_KEYS=1 guard engaged.
-  # Use this for local exploration: `docker compose --profile dev up gateway-dev`.
-  # NEVER use in production; tokens cannot survive a restart.
+  # Local HTTP profile. Ephemeral keys and non-Secure cookies are both explicit
+  # so browser session/CSRF flows work on http://localhost:3001.
   gateway-dev:
     profiles: ["dev"]
     build:
@@ -100,8 +92,10 @@ services:
     ports:
       - "3001:3001"
     environment:
+      DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
       ALLOW_DEV_KEYS: "1"
       ADMIN_PASSWORD: "synthetic-gateway-test-password"
+      RWF_GATEWAY__SESSION__COOKIE_SECURE: "false"
       RUST_LOG: info
     command: ["/app/gateway-example", "--dev-keys"]
     healthcheck:

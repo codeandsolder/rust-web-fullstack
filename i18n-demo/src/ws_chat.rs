@@ -1,50 +1,34 @@
 //! Bidirectional chat endpoint backed by an in-memory broadcast hub.
 //!
-//! WebSocket upgrade at `/ws/chat`. Clients send text frames; the
-//! server prepends a timestamp + sender-id and fans the message out to
-//! every other connected client. The hub is a single static
-//! [`broadcast::Sender`] — fine for a demo, not for production
-//! persistence or horizontal scaling.
-//!
-//! The handler is intentionally simple. Reach for a proper chat
-//! backend (Redis pub/sub, NATS, server-sent events, sticky
-//! session-aware routing) when you outgrow it.
+//! WebSocket upgrade at `/ws/chat`. Browser requests are same-origin checked,
+//! frame/message size limits are enforced by Axum before large payloads are
+//! buffered, and each accepted text message is fanned out to every *other*
+//! connected client. The hub is in-memory and intentionally demo-only.
 
 use std::sync::LazyLock;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::IntoResponse;
+use axum::http::header::{HOST, ORIGIN};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-/// Channel capacity — 256 matches the gateway SSE buffer. A slow
-/// client that doesn't drain will see `RecvError::Lagged` after this
-/// many undelivered messages.
 const HUB_CAPACITY: usize = 256;
 
-/// One chat event circulating through the hub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatEvent {
-    /// Per-message UUID v4 — the client can use this for de-dupe or
-    /// to thread replies.
     pub id: Uuid,
-    /// The sending client identifier (random UUID generated on
-    /// connection). The endpoint does not authenticate — anyone can
-    /// claim any display name. Replace with a real session id before
-    /// showing this to real users.
     pub from: Uuid,
-    /// Wall-clock timestamp in ISO-8601 with seconds resolution.
+    /// UTC timestamp serialized by Chrono as RFC3339.
     pub at: chrono::DateTime<chrono::Utc>,
-    /// The chat payload. The server enforces a 1 KiB cap on this
-    /// field; longer text frames are dropped with a warn log.
     pub text: String,
 }
 
 impl ChatEvent {
-    /// Construct a new chat event with a fresh id and timestamp.
     #[must_use]
     pub fn new(from: Uuid, text: String) -> Self {
         Self {
@@ -55,32 +39,50 @@ impl ChatEvent {
         }
     }
 
-    /// Hard cap on per-message text — 1 KiB. Frames longer than this
-    /// are dropped at the WebSocket level to keep the broadcast hub
-    /// from being flooded by one chatty client.
+    /// Maximum accepted WebSocket message/frame size.
     pub const MAX_TEXT_BYTES: usize = 1024;
 }
 
-/// Global broadcast hub. Only the `Sender` half is cached — every
-/// accepted WebSocket subscribes and creates its own `Receiver`.
 static HUB: LazyLock<broadcast::Sender<ChatEvent>> = LazyLock::new(|| {
     let (tx, _rx) = broadcast::channel(HUB_CAPACITY);
     tx
 });
 
-/// `WebSocketUpgrade` handler. Returns 101 Switching Protocols on
-/// accept. Rejecting browsers continue to the Leptos fallback.
-pub fn chat_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_socket)
+fn origin_matches_host(origin: &str, host: &str) -> bool {
+    let Some(without_scheme) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = without_scheme.split('/').next().unwrap_or_default();
+    !authority.is_empty() && authority.eq_ignore_ascii_case(host)
 }
 
-/// Inner handler invoked once the WebSocket upgrade completes.
+/// WebSocket upgrade handler.
 ///
-/// Splits the [`WebSocket`] into its `Sink` and `Stream` halves via
-/// the `futures` trait methods, then loops using
-/// `tokio::select!`. The reader forwards text frames into the hub;
-/// the writer pumps hub events back to the client. Both halves
-/// cleanly cancel on exit.
+/// Browser-originated upgrades must be same-origin. The protocol layer rejects
+/// oversized frames/messages before application code receives them; the
+/// in-loop length check remains as defense in depth.
+pub async fn chat_handler(headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
+    if let Some(origin_value) = headers.get(ORIGIN) {
+        let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
+            return StatusCode::FORBIDDEN.into_response();
+        };
+        let Ok(origin) = origin_value.to_str() else {
+            return StatusCode::FORBIDDEN.into_response();
+        };
+        if !origin_matches_host(origin, host) {
+            warn!(origin, host, "rejecting cross-origin websocket upgrade");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+
+    ws.max_message_size(ChatEvent::MAX_TEXT_BYTES)
+        .max_frame_size(ChatEvent::MAX_TEXT_BYTES)
+        .on_upgrade(handle_socket)
+}
+
 async fn handle_socket(socket: WebSocket) {
     let from = Uuid::new_v4();
     info!(client = %from, "chat client connected");
@@ -104,25 +106,20 @@ async fn handle_socket(socket: WebSocket) {
                     continue;
                 };
                 if text.len() > ChatEvent::MAX_TEXT_BYTES {
-                    warn!(
-                        client = %from,
-                        bytes = text.len(),
-                        "dropping oversized chat frame"
-                    );
+                    warn!(client = %from, bytes = text.len(), "dropping oversized chat message");
                     continue;
                 }
                 let event = ChatEvent::new(from, text.to_string());
-                if HUB.send(event).is_err() {
-                    // Only happens when there are no receivers —
-                    // harmless for a demo.
-                    debug!("hub has no other receivers");
-                }
+                let _ = HUB.send(event);
             }
             broadcast = rx.recv() => {
                 match broadcast {
                     Ok(event) => {
+                        if event.from == from {
+                            continue;
+                        }
                         let payload = match serde_json::to_string(&event) {
-                            Ok(p) => p,
+                            Ok(payload) => payload,
                             Err(e) => {
                                 warn!(client = %from, error = %e, "dropping unserializable event");
                                 continue;
@@ -134,11 +131,7 @@ async fn handle_socket(socket: WebSocket) {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!(
-                            client = %from,
-                            skipped,
-                            "client lagged; replay skipped"
-                        );
+                        warn!(client = %from, skipped, "client lagged; replay skipped");
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         debug!("hub closed");
@@ -152,10 +145,6 @@ async fn handle_socket(socket: WebSocket) {
     info!(client = %from, "chat client disconnected");
 }
 
-/// Inspect how many subscribers the hub currently has.
-///
-/// Returns the count of `Receiver`s attached. Useful for `/metrics`
-/// in a real deployment.
 #[must_use]
 pub fn subscriber_count() -> usize {
     HUB.receiver_count()
@@ -171,7 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn new_event_has_unique_ids_and_timestamps() {
+    fn origin_validation_accepts_same_host_only() {
+        assert!(origin_matches_host("http://localhost:3002", "localhost:3002"));
+        assert!(origin_matches_host("https://example.com", "example.com"));
+        assert!(!origin_matches_host("https://evil.example", "example.com"));
+        assert!(!origin_matches_host("null", "example.com"));
+    }
+
+    #[test]
+    fn new_event_has_unique_ids_and_payloads() {
         let e1 = ChatEvent::new(Uuid::new_v4(), "hello".to_string());
         let e2 = ChatEvent::new(Uuid::new_v4(), "world".to_string());
         assert_ne!(e1.id, e2.id);
@@ -181,18 +178,15 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::panic,
-        reason = "serde_json failures on these inputs would indicate the construction is unsound; assert and surface that clearly in the test."
-    )]
+    #[expect(clippy::panic, reason = "serde failure would make this test fixture invalid")]
     fn event_round_trips_through_serde_json() {
         let event = ChatEvent::new(Uuid::new_v4(), "hello, room".to_string());
         let json = match serde_json::to_string(&event) {
-            Ok(s) => s,
+            Ok(value) => value,
             Err(e) => panic!("serialize failed: {e}"),
         };
         let back: ChatEvent = match serde_json::from_str(&json) {
-            Ok(v) => v,
+            Ok(value) => value,
             Err(e) => panic!("deserialize failed: {e}"),
         };
         assert_eq!(back.id, event.id);

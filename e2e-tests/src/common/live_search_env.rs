@@ -1,8 +1,8 @@
 //! In-process live-search server launcher for e2e tests.
 //!
-//! Starts a live-search server with a testcontainer Postgres database on a
-//! random local port.  All background tasks (HTTP server, `PgListener`, watchdog)
-//! run on a dedicated tokio runtime so they survive individual test lifetimes.
+//! The fixture uses the production Leptos application routes and SSR shell,
+//! backed by an isolated Postgres testcontainer. Only the listener address and
+//! injected application state differ from production.
 
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
@@ -15,25 +15,20 @@ use axum::{
     response::IntoResponse,
     routing::{any, get},
 };
+use leptos::config::get_configuration;
+use leptos_axum::{LeptosRoutes, generate_route_list, handle_server_fns};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
-
-use leptos_axum::handle_server_fns;
 
 use live_search::cache;
 use live_search::events::SseEvent;
 use live_search::state;
 
-/// Configuration for `LiveSearchEnv::start_with`.
-///
-/// Defaults to using `LIVE_SEARCH_PKG_DIR` env var (no silent relative
-/// fallback) and the canonical probe-based server-fn route.
 #[derive(Debug, Clone)]
 pub struct LiveSearchConfig {
-    /// Directory containing the Leptos build artifacts (e.g. `live_search.js`).
-    /// If `None`, the env var `LIVE_SEARCH_PKG_DIR` is read; if that's
-    /// unset, the test errors out instead of guessing a path.
+    /// Directory containing cargo-leptos build artifacts. Optional for HTTP
+    /// SSR tests; browser hydration tests set `LIVE_SEARCH_PKG_DIR` explicitly.
     pub pkg_dir: Option<PathBuf>,
 }
 
@@ -45,64 +40,48 @@ impl Default for LiveSearchConfig {
     }
 }
 
-/// RAII guard that runs a live-search server in the background on a random port.
-///
-/// The server connects to a testcontainer Postgres database (spawned by
-/// [`super::db::TestEnv`]) so tests can insert rows and verify SSE propagation.
-///
-/// # Drop behaviour
-/// When the [`LiveSearchEnv`] is dropped, the cancellation token fires and
-/// the background thread's `JoinHandle` is awaited with a short timeout.
-/// The database container is stopped when its own RAII guard drops.
 pub struct LiveSearchEnv {
-    /// Base URL of the running server.
     base_url: String,
-    /// RAII guard for the Postgres testcontainer (dropped last).
     db_container: super::db::TestEnv,
-    /// Cancellation token for graceful shutdown.
     shutdown: CancellationToken,
-    /// Background thread handle; awaited on drop.
     server_thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
 }
 
 impl LiveSearchEnv {
-    /// Start a live-search server backed by a testcontainer Postgres instance.
-    ///
-    /// The server binds to a random port on `127.0.0.1`.
+    /// Start the production live-search route tree on a random local port.
     ///
     /// # Errors
-    /// Returns an error if the database container cannot start, migrations fail,
-    /// or the server fails to bind.
+    /// Returns an error if Postgres, Leptos configuration, application state,
+    /// an explicitly configured asset directory, binding, or readiness fails.
     pub async fn start() -> Result<Self> {
         Self::start_with(LiveSearchConfig::default()).await
     }
 
-    /// Start a live-search server with explicit configuration.
     pub async fn start_with(cfg: LiveSearchConfig) -> Result<Self> {
-        // ── 1. Start Postgres testcontainer (runs live-search migrations) ──
         let db = super::db::TestEnv::postgres().await?;
         let conn_str = db.connection_string().to_string();
-
-        // ── 2. Create server database pool ────────────────────────────────
         let server_pool =
             live_search::db::create_pool(&conn_str, &live_search::db::PoolTunables::default())
                 .await
                 .context("Failed to create live-search database pool")?;
 
-        // ── 3. Search cache ──────────────────────────────────────────────
         let cache_handle = cache::CacheHandle::default();
-
-        // ── 4. Broadcast channel for SSE ────────────────────────────────
         let (tx, _rx) = broadcast::channel::<SseEvent>(256);
-
-        // Clone a sender for the SSE handler closure so the original `tx`
-        // can be moved into the background thread for the PgListener.
         let tx_for_sse = tx.clone();
-
-        // ── 5. Cancellation token ───────────────────────────────────────
         let shutdown = CancellationToken::new();
 
-        // ── 6. Build Router ──────────────────────────────────────────────
+        // Server functions use the same AppContext mechanism as production.
+        let ctx = Arc::new(live_search::state::AppContext::new(
+            server_pool.clone(),
+            tx.clone(),
+            cache_handle.clone(),
+        ));
+        state::set(Arc::clone(&ctx)).context("live-search AppContext already initialized")?;
+
+        let conf = get_configuration(None).context("failed to load Leptos configuration")?;
+        let leptos_options = conf.leptos_options;
+        let leptos_routes = generate_route_list(live_search::app::App);
+
         let mut router = Router::new()
             .route(
                 "/api/events",
@@ -111,61 +90,34 @@ impl LiveSearchEnv {
                     async move { live_search::sse::sse_handler(tx).await }
                 }),
             )
-            .route("/api/{*fn_name}", any(handle_server_fns))
-            // In-process fallback for the root path: the test env does not
-            // mount the Leptos page routes (no SSR), so `/` must be served
-            // by a lightweight fixture handler instead of the 404 fallback.
-            .route("/", get(|| async { (StatusCode::OK, "live-search test fixture") }))
-            .layer(TraceLayer::new_for_http());
+            .route("/api/{*fn_name}", any(handle_server_fns));
 
-        // Mount /pkg/ for Leptos build artifacts. The path comes from
-        // `LiveSearchConfig::pkg_dir` or `LIVE_SEARCH_PKG_DIR`; no silent
-        // relative fallback. If a path is configured but doesn't exist,
-        // we error out — failing visibly is better than 404-ing on every
-        // CSS/JS asset request.
+        // HTTP-level tests need only SSR. Browser tests set an explicit package
+        // directory and therefore fail visibly if the hydration artifacts are
+        // absent, without making ordinary integration tests depend on a WASM build.
         if let Some(pkg_dir) = cfg.pkg_dir.as_ref() {
             if !pkg_dir.exists() {
                 return Err(anyhow::anyhow!(
-                    "LIVE_SEARCH_PKG_DIR points at {} but the directory does not exist; \
-                     run `cargo leptos build` first or unset the env var",
+                    "LIVE_SEARCH_PKG_DIR points at {} but the directory does not exist",
                     pkg_dir.display()
                 ));
             }
             router = router.nest_service("/pkg", tower_http::services::ServeDir::new(pkg_dir));
         }
 
-        router = router.fallback(fallback_handler);
+        let ctx_for_shell = Arc::clone(&ctx);
+        let shell_options = leptos_options.clone();
+        let router = router
+            .with_state(leptos_options.clone())
+            .leptos_routes(&leptos_options, leptos_routes, move || {
+                leptos::context::provide_context(Arc::clone(&ctx_for_shell));
+                live_search::app::shell(shell_options.clone())
+            })
+            .route("/health", get(|| async { (StatusCode::OK, "ok") }))
+            .fallback(fallback_handler)
+            .layer(TraceLayer::new_for_http());
+        let router: Router<()> = router.with_state(leptos_options);
 
-        // ── 7. AppContext for server functions ──────────────────────────
-        //
-        // Server functions resolve state via `state::get()`; without
-        // `state::set` here, every server fn that touches the pool/broadcast
-        // returns None and panics. Ignore `AlreadyInitialized` (the
-        // `SharedServer` may have set this on a previous test).
-        let ctx = Arc::new(live_search::state::AppContext::new(
-            server_pool.clone(),
-            tx.clone(),
-            cache_handle.clone(),
-        ));
-        if let Err(e) = state::set(ctx) {
-            match e {
-                state::AppContextInitError::AlreadyInitialized => {
-                    // Shared server: skip.
-                }
-                // `#[non_exhaustive]` — future variants are treated as benign here.
-                _ => {
-                    tracing::debug!(error = ?e, "state::set returned unexpected error; ignoring");
-                }
-            }
-        }
-
-        // ── 8. Spawn background thread ──────────────────────────────────
-        //
-        // Each `#[tokio::test]` creates its own tokio runtime that is dropped
-        // when the test finishes. By moving the server and PgListener onto
-        // their own dedicated runtime, they survive across individual test
-        // lifetimes.
-        let base_url: String;
         let addr_lock = Arc::new(std::sync::Mutex::new(None::<SocketAddr>));
         let server_thread = {
             let addr_clone = Arc::clone(&addr_lock);
@@ -195,7 +147,6 @@ impl LiveSearchEnv {
                         let mut tasks: tokio::task::JoinSet<anyhow::Result<()>> =
                             tokio::task::JoinSet::new();
 
-                        // HTTP server — propagate axum errors instead of swallowing.
                         let server_token = bg_shutdown.clone();
                         tasks.spawn(async move {
                             axum::serve(listener, bg_router)
@@ -207,7 +158,6 @@ impl LiveSearchEnv {
                             Ok(())
                         });
 
-                        // PgListener (no watchdog; deleted in favor of try_recv).
                         let listener_token = bg_shutdown.child_token();
                         let pool_for_listener = bg_pool.clone();
                         let cache_for_listener = bg_cache.clone();
@@ -222,7 +172,6 @@ impl LiveSearchEnv {
                             Ok(())
                         });
 
-                        // Drive all tasks until shutdown. Surface any non-Ok result.
                         while let Some(joined) = tasks.join_next().await {
                             match joined {
                                 Ok(Ok(())) => {}
@@ -234,14 +183,12 @@ impl LiveSearchEnv {
                                 }
                             }
                         }
-
                         Ok::<_, anyhow::Error>(())
                     })
                 })
                 .context("Failed to spawn background thread")?
         };
 
-        // Wait for the server to report its address.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let addr = loop {
             {
@@ -259,11 +206,9 @@ impl LiveSearchEnv {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
-        base_url = format!("http://{addr}");
-        // addr_lock is dropped when `start_with` returns.
+        let base_url = format!("http://{addr}");
 
-        // Wait for the server to be ready (SSE endpoint check).
-        let health_url = format!("{base_url}/api/events");
+        let health_url = format!("{base_url}/health");
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()
@@ -291,14 +236,11 @@ impl LiveSearchEnv {
         })
     }
 
-    /// The base URL of the running server (e.g. `http://127.0.0.1:54321`).
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    /// Reference to the database test env (for inserting test data, running
-    /// SQL queries, etc.).
     #[must_use]
     pub const fn db(&self) -> &super::db::TestEnv {
         &self.db_container
@@ -318,20 +260,12 @@ impl std::fmt::Debug for LiveSearchEnv {
 impl Drop for LiveSearchEnv {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        // Wait briefly for the background thread to finish. If it doesn't,
-        // log a warning rather than blocking the test runner indefinitely.
         if let Some(handle) = self.server_thread.take() {
-            // The thread is detached; we cannot block here (Drop is sync).
-            // A leaked thread is acceptable for a test fixture — the test
-            // process exits when the test binary exits.
             drop(handle);
         }
     }
 }
 
-// ──── Helper handlers ─────────────────────────────────────────────────────
-
-/// Fallback handler returning 404.
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
 }

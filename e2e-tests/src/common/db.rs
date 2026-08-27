@@ -11,15 +11,9 @@ use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
 /// RAII guard for a test-scoped Postgres database.
-///
-/// The container is dropped (and thus stopped) when the test completes, even on
-/// panic via `Drop`.
 pub struct TestEnv {
     pool: PgPool,
     connection_string: String,
-    /// Held for its `Drop` side-effect, which stops the testcontainer when the
-    /// test scope ends. Never read explicitly — the field needs to stay alive
-    /// on `Self` until `Drop` runs.
     #[allow(dead_code, reason = "Kept alive for Drop side-effect on TestEnv")]
     container: Box<ContainerAsync<Postgres>>,
 }
@@ -35,14 +29,16 @@ impl std::fmt::Debug for TestEnv {
 }
 
 impl TestEnv {
-    /// Start a fresh Postgres 17 container, connect, run all migrations.
+    /// Start a fresh Postgres 17 container, connect, run the workspace's
+    /// complete migration history, and insert a small deterministic fixture row.
     ///
-    /// The `DATABASE_URL` environment variable is **not** consulted — this
-    /// function always uses testcontainers for reliable isolation.
+    /// The Docker host comes from testcontainers rather than being hard-coded to
+    /// localhost. This matters when CI uses `DOCKER_HOST=tcp://docker:2375` and
+    /// the published port lives on the Docker service container.
     ///
     /// # Errors
-    /// Returns an error if the container cannot start, the pool cannot connect,
-    /// or migrations fail.
+    /// Returns an error if the container cannot start, its host/port cannot be
+    /// resolved, the pool cannot connect, migrations fail, or seeding fails.
     pub async fn postgres() -> Result<Self> {
         let container = Postgres::default()
             .with_tag("17-alpine")
@@ -50,27 +46,37 @@ impl TestEnv {
             .await
             .context("Failed to start Postgres testcontainer")?;
 
+        let host = container
+            .get_host()
+            .await
+            .context("Failed to resolve Docker host for Postgres testcontainer")?;
         let host_port = container
             .get_host_port_ipv4(5432)
             .await
             .context("Failed to get Postgres host port")?;
 
         let connection_string =
-            format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
+            format!("postgres://postgres:postgres@{host}:{host_port}/postgres");
 
         let pool = PgPool::connect(&connection_string)
             .await
             .context("Failed to connect to Postgres testcontainer")?;
 
-        // Run live-search migrations to create the search_results table.
-        // NOTE: gateway migrations (refresh_tokens table) are NOT run here
-        // because they use overlapping version numbers in the shared
-        // _sqlx_migrations table. Gateway-specific e2e tests target the real
-        // gateway service via HTTP, not this pool.
-        sqlx::migrate!("../live-search/migrations")
+        sqlx::migrate!("../migrations")
             .run(&pool)
             .await
-            .context("Failed to run live-search migrations")?;
+            .context("Failed to run workspace migrations")?;
+
+        sqlx::query(
+            "INSERT INTO search_results (title, url, snippet) \
+             VALUES ($1, $2, $3) ON CONFLICT (url) DO NOTHING",
+        )
+        .bind("Rust Browser Fixture")
+        .bind("https://fixture.invalid/rust-browser")
+        .bind("Deterministic Rust search result for browser end-to-end tests")
+        .execute(&pool)
+        .await
+        .context("Failed to seed deterministic browser fixture")?;
 
         Ok(Self {
             pool,
@@ -79,13 +85,11 @@ impl TestEnv {
         })
     }
 
-    /// Borrow the database pool.
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    /// The connection string used to connect to the testcontainer.
     #[must_use]
     pub fn connection_string(&self) -> &str {
         &self.connection_string

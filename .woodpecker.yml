@@ -8,6 +8,7 @@ steps:
     commands:
       - cargo check --workspace --all-targets
       - cargo check -p live-search --features ssr --all-targets
+      - cargo check -p live-search --features ssr,otel --all-targets
       - rustup target add wasm32-unknown-unknown
       - cargo check -p live-search --target wasm32-unknown-unknown --features hydrate --lib
       - cargo check -p i18n-demo --features ssr --all-targets
@@ -26,6 +27,8 @@ steps:
     commands:
       - cargo clippy --workspace --all-targets -- -D warnings
       - cargo clippy -p live-search --features ssr --all-targets -- -D warnings
+      - cargo clippy -p live-search --features ssr,otel --all-targets -- -D warnings
+      - cargo clippy -p i18n-demo --features ssr --all-targets -- -D warnings
     depends_on: []
 
   fmt:
@@ -42,9 +45,6 @@ steps:
     depends_on:
       - fmt
 
-  # Install leptosfmt in-line. The previously-referenced
-  # woodpecker-rust-leptosfmt:latest image is no longer relied upon; this
-  # step installs leptosfmt per-build to keep the image portable.
   leptosfmt:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     commands:
@@ -61,15 +61,27 @@ steps:
       - cargo install cargo-leptos --locked
       - cargo install stylance-cli --locked
       - cargo leptos build --release -p live-search
+      - mkdir -p live-search/target/site/pkg
+      - stylance live-search --output-file live-search/target/site/pkg/live-search.css
+      - test -s live-search/target/site/pkg/live-search.css
       - cargo leptos build --release -p i18n-demo
     depends_on:
       - clippy
 
-  # Clean-context Docker build verification. Each image is built in an
-  # isolated RUN to ensure the cache trick actually works end-to-end.
   docker-build:
-    image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
+    image: docker:27-cli
+    services:
+      docker:
+        image: docker:27-dind
+        privileged: true
+        environment:
+          DOCKER_TLS_CERTDIR: ""
+    environment:
+      DOCKER_HOST: tcp://docker:2375
+      DOCKER_TLS_CERTDIR: ""
+      DOCKER_BUILDKIT: "1"
     commands:
+      - until docker info >/dev/null 2>&1; do sleep 1; done
       - docker build -f live-search.Dockerfile -t rwf-live-search:test .
       - docker build -f i18n-demo.Dockerfile -t rwf-i18n-demo:test .
       - docker build -f gateway.Dockerfile -t rwf-gateway:test .
@@ -80,16 +92,23 @@ steps:
     image: rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55
     services:
       docker:
-        image: docker:dind
+        image: docker:27-dind
         privileged: true
         environment:
           DOCKER_TLS_CERTDIR: ""
+    environment:
+      DOCKER_HOST: tcp://docker:2375
+      DOCKER_TLS_CERTDIR: ""
+      CHROME_PATH: /usr/bin/chromium
+      LIVE_SEARCH_PKG_DIR: live-search/target/site/pkg
     commands:
-      - |
-        bash -c '
-        set -euo pipefail
-        cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
-        '
+      - apt-get update
+      - apt-get install -y --no-install-recommends chromium ca-certificates
+      - rm -rf /var/lib/apt/lists/*
+      - chromium --version
+      - test -s "$LIVE_SEARCH_PKG_DIR/live_search.js"
+      - test -s "$LIVE_SEARCH_PKG_DIR/live-search.css"
+      - cargo test --release --locked -p e2e-tests --tests --features browser-tests -- --test-threads=1 --nocapture
     depends_on:
       - fmt
       - audit

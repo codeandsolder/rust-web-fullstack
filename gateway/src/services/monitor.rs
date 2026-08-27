@@ -1,25 +1,19 @@
 //! Monitor service — renders a simple status dashboard.
 //!
-//! The dashboard endpoint now redirects users to the `/health` endpoint
-//! instead of showing a hardcoded status page, ensuring displayed status
-//! reflects actual service health.
-//!
-//! # DTOs
-//!
-//! Response types implement [`Serialize`], [`Deserialize`], and
-//! [`utoipa::ToSchema`] for `OpenAPI` documentation (except HTML responses
-//! which are excluded from the `OpenAPI` schema).
+//! The dashboard endpoint redirects users to the aggregate `/health` endpoint
+//! so displayed status reflects the gateway's health view.
 
 use axum::{
     Router,
     response::{Json, Redirect},
     routing::get,
 };
+use futures::future::{BoxFuture, FutureExt};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::gateway::GatewayState;
-use crate::module::ServiceModule;
+use crate::module::{ServiceHealthError, ServiceModule};
 
 #[derive(Debug)]
 pub struct MonitorService;
@@ -42,24 +36,20 @@ impl ServiceModule for MonitorService {
             .route("/dashboard", get(dashboard_handler))
             .route("/health", get(monitor_health))
     }
+
+    fn health_check(&self) -> BoxFuture<'_, Result<(), ServiceHealthError>> {
+        // This module has no dependency of its own; its health is equivalent to
+        // the process being able to execute the probe.
+        async move { Ok(()) }.boxed()
+    }
 }
 
-// ---------------------------------------------------------------------------
-// DTOs
-// ---------------------------------------------------------------------------
-
-/// Monitor health check response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MonitorHealthResponse {
     pub status: String,
     pub service: String,
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/// Redirects to the aggregate `/health` endpoint.
 #[utoipa::path(
     get,
     path = "/monitor/dashboard",
@@ -72,7 +62,6 @@ async fn dashboard_handler() -> Redirect {
     Redirect::to("/health")
 }
 
-/// Monitor service health check.
 #[utoipa::path(
     get,
     path = "/monitor/health",
@@ -110,10 +99,8 @@ mod tests {
             modules: vec![],
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
-            // 30 days, matching refresh.rs::REFRESH_TOKEN_TTL_SECONDS.
             refresh_token_ttl_secs: 60 * 60 * 24 * 30,
-            // 24h for the test fixture; production uses 15min via Settings.
-            access_token_ttl_secs: 60 * 60 * 24,
+            access_token_ttl_secs: 15 * 60,
             http_client,
         };
 

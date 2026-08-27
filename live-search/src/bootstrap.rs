@@ -1,21 +1,8 @@
 //! Server bootstrap — initialises all subsystems and starts the HTTP listener.
 //!
 //! This module is compiled only under `feature = "ssr"`. It is the single
-//! call that sets up:
-//!
-//! - Tracing subscriber (plain `fmt` or with OpenTelemetry via `otel` feature).
-//! - Database connection pool with connection hardening.
-//! - Sqlx migrations on startup.
-//! - Search-result cache (`moka`).
-//! - SSE broadcast channel.
-//! - `PgListener` background task.
-//! - Leptos SSR application shell and routes.
-//! - Axum HTTP server with graceful shutdown wiring.
-//!
-//! # dev-tools feature note
-//! The `dev-tools` feature (behind `RUSTFLAGS="--cfg tokio_unstable"`) enables
-//! `console-subscriber` for Tokio task inspection. Bake the env var into the
-//! dev Docker image (Phase 2).
+//! call that sets up tracing, PostgreSQL, migrations, cache, SSE, the
+//! `PgListener`, Leptos SSR routes, and graceful shutdown.
 
 use std::net::SocketAddr;
 #[cfg(feature = "otel")]
@@ -30,8 +17,8 @@ use axum::{
     routing::{any, get},
 };
 use leptos::config::get_configuration;
-use leptos_axum::{LeptosRoutes, generate_route_list};
 use leptos_axum::handle_server_fns;
+use leptos_axum::{LeptosRoutes, generate_route_list};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -45,45 +32,25 @@ use crate::cache::CacheHandle;
 use crate::events::SseEvent;
 use crate::{db, sse, state};
 
-/// Handle returned by [`run`]. The caller uses the [`CancellationToken`] to
-/// signal shutdown and the [`tokio::task::JoinSet`] / [`sqlx::PgPool`]
-/// for graceful draining.
+/// Handle returned by [`run`] for cooperative shutdown and task draining.
 #[derive(Debug)]
 #[must_use]
 pub struct ServerHandle {
-    /// Cancel this token to trigger graceful shutdown of all long-running
-    /// tasks (HTTP server, `PgListener`).
     pub shutdown: CancellationToken,
-    /// Collection of background tasks. The caller should drain them after
-    /// signalling shutdown.
     pub tasks: JoinSet<anyhow::Result<()>>,
-    /// Database connection pool. The caller should call [`db::close_pool`] on
-    /// it during the shutdown sequence.
     pub pool: sqlx::PgPool,
 }
 
-/// Global OTel provider, stored so `main` can force-flush / shutdown.
 #[cfg(feature = "otel")]
 static PROVIDER: OnceLock<opentelemetry_sdk::trace::SdkTracerProvider> = OnceLock::new();
 
-/// Retrieve the OTel provider (if any) for shutdown.
 #[cfg(feature = "otel")]
 #[must_use]
 pub fn get_tracer_provider() -> Option<&'static opentelemetry_sdk::trace::SdkTracerProvider> {
     PROVIDER.get()
 }
 
-/// Initialise the tracing subscriber.
-///
-/// When the `otel` feature is active and [`crate::otel::init_telemetry`]
-/// succeeds, an `OTel` layer is added to the subscriber. Otherwise a plain
-/// `fmt` subscriber is installed.
-///
-/// # Panics
-/// Panics on the second call (tracing's global subscriber guard).
 fn init_tracing() {
-    // Try OTel first; fall back to plain fmt if OTel init fails or is
-    // disabled.
     #[cfg(feature = "otel")]
     {
         match crate::otel::init_telemetry() {
@@ -92,9 +59,6 @@ fn init_tracing() {
                 return;
             }
             Err(e) => {
-                // OTel init is best-effort; log and fall back to fmt.
-                // We can't use `tracing::warn!` here because the subscriber
-                // isn't set up yet — use eprintln instead.
                 eprintln!("OTel init failed, falling back to fmt subscriber: {e}");
             }
         }
@@ -110,23 +74,41 @@ fn init_tracing() {
         .init();
 }
 
-/// Health check endpoint (K8s/Docker liveness probe).
+/// Process liveness: if this handler runs, the HTTP process is alive.
 async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-/// Fallback handler (404).
+/// Dependency readiness: verify application state exists and PostgreSQL can
+/// answer a trivial query. This is intentionally separate from liveness so an
+/// orchestrator can stop routing traffic without restart-looping a live process.
+async fn readiness_handler() -> impl IntoResponse {
+    let Some(ctx) = state::get() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "app state unavailable");
+    };
+
+    match sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&ctx.pool)
+        .await
+    {
+        Ok(1) => (StatusCode::OK, "ready"),
+        Ok(_) => (StatusCode::SERVICE_UNAVAILABLE, "database readiness failed"),
+        Err(e) => {
+            tracing::warn!(error = %e, "database readiness probe failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "database unavailable")
+        }
+    }
+}
+
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
 }
 
 /// Bootstraps all subsystems and starts the HTTP server.
 ///
-/// Returns a [`ServerHandle`] for graceful shutdown.
-///
 /// # Errors
-/// Returns an error if the database URL is missing, pool creation fails,
-/// migrations fail, or the TCP listener cannot bind.
+/// Returns an error if configuration, database setup/migrations, or listener
+/// binding fails.
 pub async fn run() -> anyhow::Result<ServerHandle> {
     init_tracing();
 
@@ -135,12 +117,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .ok()
         .unwrap_or_else(|| cfg.live_search.database_url.clone());
 
-    // ---- database pool & migration ---------------------------------------
-
-    // Project `rwf_config::LiveSearchConfig` into the local `db::PoolTunables`
-    // struct so `db` does not need to depend on `rwf-config` directly
-    // (which would be a circular dependency — `rwf-config` is upstream of
-    // every binary that uses it).
     let pool_tunables = db::PoolTunables {
         max_connections: cfg.live_search.pool_max_connections,
         min_connections: cfg.live_search.pool_min_connections,
@@ -154,26 +130,15 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .await
         .context("failed to create database pool")?;
 
-    sqlx::migrate!("./migrations")
+    // Every service sharing this database resolves the exact same SQLx
+    // migration history.
+    sqlx::migrate!("../migrations")
         .run(&pool)
         .await
         .context("failed to run database migrations")?;
 
-    // ---- search cache -----------------------------------------------------
-
     let cache_handle = CacheHandle::default();
-    tracing::debug!("search cache initialized");
-
-    // ---- broadcast channel for SSE ----------------------------------------
-
     let (tx, _rx) = broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
-    tracing::debug!("SSE broadcast channel created");
-
-    // ---- AppContext -------------------------------------------------------
-    //
-    // Construct the unified application context and store it globally (for
-    // server functions) and provide it to the Leptos component tree (for SSR
-    // rendering).
 
     let ctx = Arc::new(state::AppContext::new(
         pool.clone(),
@@ -181,17 +146,11 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         cache_handle.clone(),
     ));
     state::set(Arc::clone(&ctx))?;
-    tracing::debug!("AppContext initialized and stored");
-
-    // ---- cancellation token & task set ------------------------------------
 
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
 
-    // ---- PgListener -------------------------------------------------------
-
     let listener_token = shutdown.child_token();
-
     let pool_for_listener = pool.clone();
     let listener_span = tracing::info_span!("pg_listener");
     let cache_for_listener = cache_handle.clone();
@@ -203,13 +162,9 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .instrument(listener_span),
     );
 
-    // ---- Leptos configuration & routes ------------------------------------
-
     let conf = get_configuration(None).context("failed to read Leptos configuration")?;
     let leptos_options = conf.leptos_options;
     let leptos_routes = generate_route_list(app::App);
-
-    // ---- Axum router ------------------------------------------------------
 
     let broadcast_for_sse = ctx.broadcast.clone();
     let router = Router::new()
@@ -222,8 +177,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
             }),
         )
         .route("/api/{*fn_name}", any(handle_server_fns))
-        .route("/api/api/{*fn_name}", any(handle_server_fns))
-        .layer(TraceLayer::new_for_http())
         .with_state(leptos_options.clone())
         .leptos_routes(&leptos_options, leptos_routes, {
             let lo = leptos_options.clone();
@@ -234,11 +187,9 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
             }
         })
         .route("/health", get(health_handler))
+        .route("/readyz", get(readiness_handler))
         .fallback(fallback_handler);
 
-    // Prometheus metrics endpoint — available when `otel` feature is active.
-    // We shadow the binding instead of mutating it so the non-otel build
-    // doesn't trigger `unused_mut` on the outer `router`.
     #[cfg(feature = "otel")]
     let router = {
         use axum_prometheus::PrometheusMetricLayer;
@@ -250,9 +201,16 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         )
     };
 
-    let router: Router<()> = router.with_state(leptos_options);
+    // Router::layer affects routes already registered. Apply global tracing
+    // only after SSR, health/readiness, fallback, and optional metrics exist.
+    let router = router.layer(TraceLayer::new_for_http());
 
-    // ---- serve ------------------------------------------------------------
+    #[cfg(feature = "otel")]
+    let router = router.layer(
+        axum_tracing_opentelemetry::middleware::OtelAxumLayer::default(),
+    );
+
+    let router: Router<()> = router.with_state(leptos_options);
 
     let port: u16 = std::env::var("PORT")
         .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))

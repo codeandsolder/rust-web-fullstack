@@ -1,26 +1,18 @@
 //! Scoped CSS classes for the live-search UI.
 //!
-//! These are imported from `styles.module.css` via `stylance` at compile time
-//! and injected into the page at runtime (SSR: as a `<style>` tag, WASM: via
-//! the DOM).
+//! `stylance::import_style!` imports deterministic hashed class names into Rust.
+//! The matching stylesheet is generated separately by `stylance-cli` and served
+//! by the Leptos shell as `/pkg/live-search.css`.
 //!
-//! # Production build
+//! The production/CI command is explicit about both crate and output:
 //!
-//! Stylance produces hashed class constants in Rust at compile time but
-//! does NOT generate the corresponding CSS file. The actual CSS is
-//! produced by `stylance-cli` at build time (see Dockerfiles). The
-//! CI `leptosfmt` step and `cargo leptos build` invocation must include
-//! `stylance build` for the resulting `live-search.css` to contain
-//! matching hashed-class selectors.
+//! ```text
+//! stylance live-search --output-file live-search/target/site/pkg/live-search.css
+//! ```
 //!
-//! # Feature notes
-//!
-//! This module is compiled for both SSR and WASM targets. The `stylance`
-//! dependency is available in both configurations (listed in the crate's
-//! shared `[dependencies]`).
+//! This module is compiled for both SSR and WASM targets, so the `stylance`
+//! dependency remains in shared dependencies.
 
 stylance::import_style!(pub css, "styles.module.css");
 
-// Re-export the class constants at the module root so callers can write
-// `styles::nav` instead of `styles::css::nav`.
 pub use css::*;

@@ -9,6 +9,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
+use crate::auth::AppError;
 use crate::settings::SessionSettings;
 
 /// Session cookie name.
@@ -25,10 +26,6 @@ pub struct SessionUser {
 }
 
 /// Build the session-manager layer used by the gateway router.
-///
-/// The layer is placed innermost in the middleware stack so that
-/// [`Session`] is available to both the CSRF middleware and the
-/// session handlers.
 #[must_use]
 pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStore> {
     SessionManagerLayer::new(MemoryStore::default())
@@ -39,14 +36,6 @@ pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStor
 }
 
 /// Mount session-related routes under a common prefix.
-///
-/// Routes:
-/// - `GET  /session/whoami` – return the authenticated user ID (or `null`)
-/// - `POST /session/logout` – flush the session cookie
-///
-/// Generic over state so the router can be merged into any [`axum::Router`]
-/// regardless of its state type (the handlers only extract [`Session`], which
-/// is [`FromRequestParts`] and needs no app state).
 pub fn router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -56,23 +45,27 @@ where
         .route("/session/logout", axum::routing::post(logout))
 }
 
-/// Return the authenticated user ID from the session, or `null` if no
-/// session is active.
-async fn whoami(session: Session) -> axum::Json<serde_json::Value> {
-    match session.get::<SessionUser>(SESSION_USER_KEY).await {
-        Ok(Some(u)) => axum::Json(serde_json::json!({ "user_id": u.user_id })),
-        Ok(None) => axum::Json(serde_json::json!({ "user_id": null })),
-        Err(e) => {
-            tracing::warn!(error = %e, "session whoami: get failed");
-            axum::Json(serde_json::json!({ "error": "session error" }))
-        }
-    }
+/// Return the authenticated user ID from the session, or `null` if no session
+/// is active. Session-store failures are server errors, not successful JSON
+/// responses carrying an `error` field.
+async fn whoami(session: Session) -> Result<axum::Json<serde_json::Value>, AppError> {
+    let user = session
+        .get::<SessionUser>(SESSION_USER_KEY)
+        .await
+        .map_err(|e| AppError::internal("session whoami", e))?;
+
+    Ok(match user {
+        Some(user) => axum::Json(serde_json::json!({ "user_id": user.user_id })),
+        None => axum::Json(serde_json::json!({ "user_id": null })),
+    })
 }
 
-/// Flush the session, removing the cookie and all stored data.
-async fn logout(session: Session) -> axum::Json<serde_json::Value> {
-    if let Err(e) = session.flush().await {
-        tracing::warn!(error = %e, "session logout: flush failed");
-    }
-    axum::Json(serde_json::json!({ "ok": true }))
+/// Flush the session, removing the cookie and all stored data. Do not report a
+/// successful logout if the backing store failed to persist the invalidation.
+async fn logout(session: Session) -> Result<axum::Json<serde_json::Value>, AppError> {
+    session
+        .flush()
+        .await
+        .map_err(|e| AppError::internal("session logout", e))?;
+    Ok(axum::Json(serde_json::json!({ "ok": true })))
 }

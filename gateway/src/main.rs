@@ -1,16 +1,4 @@
 //! Gateway example binary — entry point.
-//!
-//! Configures the tracing subscriber (with optional `OTel` telemetry behind the
-//! `otel` feature), load service modules, build the axum router, and serve
-//! HTTP requests with graceful shutdown.
-//!
-//! # Dev keys
-//!
-//! Pass `--dev-keys` as the first argument to generate an ephemeral `EdDSA`
-//! keypair at startup (keys are logged at `warn!` level).  Do not use
-//! `--dev-keys` in production — the keypair changes on every restart and is
-//! logged in plain text.  `--dev-keys` requires `ALLOW_DEV_KEYS=1` to be set
-//! in the environment as a deliberate guard against accidental use.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,35 +11,27 @@ use rwf_config::Config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Handle `--dev-keys` flag before loading settings.
     let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
     if dev_keys && std::env::var("ALLOW_DEV_KEYS").ok().as_deref() != Some("1") {
         anyhow::bail!(
-            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start. \
-             This is a deliberate guard against accidentally enabling ephemeral keys."
+            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start"
         );
     }
 
-    // Load layered config: config.toml + RWF_* env var overrides.
-    // The port comes from config.gateway.port; the existing
-    // GATEWAY_PORT env var is checked as a fallback for backward
-    // compatibility (it takes precedence over config.toml).
+    // Non-secret runtime configuration has one canonical source: rwf-config.
+    // Override it with `RWF_GATEWAY__...`, not a parallel set of ad-hoc env
+    // variables. Secret key/password material remains in Settings.
     let cfg = Config::load().context("failed to load workspace config")?;
-    let port: u16 = std::env::var("GATEWAY_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(cfg.gateway.port);
-    let proxy_upstream_url = std::env::var("PROXY_UPSTREAM_URL")
-        .unwrap_or_else(|_| cfg.gateway.proxy_upstream_url.clone());
+    let port = cfg.gateway.port;
+    let proxy_upstream_url = cfg.gateway.proxy_upstream_url.clone();
+    let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
+        .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
+    let access_token_ttl_secs = i64::try_from(cfg.gateway.access_token_ttl_secs)
+        .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
 
-    // ---- Telemetry / tracing ----
-    //
-    // With the `otel` feature we use the canonical layered subscriber
-    // (Registry + EnvFilter + fmt + `OTel`).  Without it we fall back to a
-    // simple fmt subscriber.
     #[cfg(feature = "otel")]
     let provider =
-        gateway_example::otel::init_telemetry().context("failed to initialize `OTel` telemetry")?;
+        gateway_example::otel::init_telemetry().context("failed to initialize OTel telemetry")?;
 
     #[cfg(not(feature = "otel"))]
     tracing_subscriber::fmt()
@@ -62,51 +42,37 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // ---- Settings ----
-    //
-    // If `--dev-keys` was passed, generate an ephemeral keypair.  Otherwise
-    // load from environment variables.
-    let settings = if dev_keys {
+    let mut settings = if dev_keys {
         gateway_example::settings::Settings::load_dev_keys_from_env()?
     } else {
         gateway_example::settings::Settings::load()?
     };
+    settings.access_token_ttl_secs = access_token_ttl_secs;
+    settings.allowed_origins = Arc::from(cfg.gateway.cors.allowed_origins.as_str());
+    settings.sse_broadcast_buffer = cfg.gateway.sse_broadcast_buffer;
+    settings.session.cookie_secure = cfg.gateway.session.cookie_secure;
 
-    // ---- DB pool + migrations ----
-    //
-    // We build the pool BEFORE the service modules so we can run migrations
-    // against it. If the pool fails to build, the gateway refuses to start
-    // — silent fallback to "no refresh store" produced a half-broken auth
-    // path in the previous revision.
     let db_pool = create_db_pool().await?;
-    if let Some(pool) = db_pool.as_ref() {
-        run_migrations(pool)
-            .await
-            .context("gateway migrations failed")?;
-    }
+    run_migrations(&db_pool)
+        .await
+        .context("gateway migrations failed")?;
 
-    // ---- Service modules ----
     let service_modules: Vec<Arc<dyn module::ServiceModule>> = vec![
         Arc::new(services::search::SearchService),
         Arc::new(services::proxy::ProxyService),
         Arc::new(services::monitor::MonitorService),
     ];
 
-    // Load workspace config once for tunables that don't fit in `Settings`
-    // (refresh-token TTL, broadcast buffer size, etc.).
-    let rwf_cfg = rwf_config::Config::load().unwrap_or_default();
-
     let app = gateway::build_gateway_with_settings(
         service_modules,
         settings,
         proxy_upstream_url,
-        db_pool,
-        rwf_cfg.gateway.refresh_token_ttl_secs.cast_signed(),
-        rwf_cfg.gateway.access_token_ttl_secs.cast_signed(),
+        Some(db_pool),
+        refresh_token_ttl_secs,
+        access_token_ttl_secs,
     )?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-
     tracing::info!("gateway-example starting on {addr}");
     tracing::info!("  Health: http://{addr}/health");
     tracing::info!("  Login:  http://{addr}/auth/login");
@@ -117,7 +83,6 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind gateway listener on {addr}"))?;
 
-    // Catch Ctrl+C and SIGTERM gracefully.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -126,11 +91,6 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("gateway server exited with an error")?;
 
-    // ---- Shutdown telemetry ----
-    //
-    // Per rust-tracing §1.7: force_flush + shutdown (sync calls in
-    // opentelemetry_sdk 0.32).  The provider is dropped when `provider`
-    // exits scope.
     #[cfg(feature = "otel")]
     {
         let _ = provider.force_flush();
@@ -140,7 +100,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Return a future that resolves when a shutdown signal is received.
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = signal::ctrl_c().await {
@@ -166,46 +125,19 @@ async fn shutdown_signal() {
     }
 }
 
-/// Build the optional DB pool for refresh-token rotation.
-///
-/// Returns `Ok(None)` when `DATABASE_URL` is unset or unreachable —
-/// the gateway then runs without a refresh-token store and
-/// `/auth/login` will return 503 (refresh-token issuance is required
-/// for any non-trivial auth flow). A connection failure causes an
-/// error so misconfigurations are not silently downgraded.
-async fn create_db_pool() -> anyhow::Result<Option<sqlx::PgPool>> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-        tracing::info!("DATABASE_URL not set; refresh tokens will be unavailable");
-        return Ok(None);
-    };
-    tracing::info!("creating PostgreSQL pool from DATABASE_URL for refresh-token rotation");
-    let pool = sqlx::postgres::PgPoolOptions::new()
+async fn create_db_pool() -> anyhow::Result<sqlx::PgPool> {
+    let url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL must be set; refresh-token storage is required")?;
+    tracing::info!("creating PostgreSQL pool for refresh-token rotation");
+    sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
         .acquire_timeout(std::time::Duration::from_secs(5))
         .connect(&url)
         .await
-        .context("failed to connect to PostgreSQL")?;
-    Ok(Some(pool))
+        .context("failed to connect to PostgreSQL")
 }
 
-/// Run embedded migrations against the given pool.
-///
-/// Migration files live under `./gateway/migrations` relative to the
-/// binary's CWD in production (set via Compose), or the workspace root
-/// in dev (`./migrations` next to `gateway/migrations`). We try the
-/// binary-relative path first and fall back to the dev path.
 async fn run_migrations(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    let candidates = [
-        std::path::PathBuf::from("./gateway/migrations"),
-        std::path::PathBuf::from("./migrations"),
-        std::path::PathBuf::from("../migrations"),
-    ];
-    let dir = candidates
-        .iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| anyhow::anyhow!("no migrations directory found in any candidate path"))?;
-    tracing::info!(path = %dir.display(), "running embedded gateway migrations");
-    let migrator = sqlx::migrate::Migrator::new(dir.clone()).await?;
-    migrator.run(pool).await?;
+    sqlx::migrate!("../migrations").run(pool).await?;
     Ok(())
 }
