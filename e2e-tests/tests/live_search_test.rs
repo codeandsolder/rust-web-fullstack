@@ -342,6 +342,14 @@ async fn root_path_is_real_ssr_page() -> anyhow::Result<()> {
         body.contains("data-testid=\"search-input\"") || body.contains("Enter search query"),
         "root did not render the production search page"
     );
+    anyhow::ensure!(
+        body.contains("/pkg/live-search.js"),
+        "SSR hydration loader did not reference /pkg/live-search.js"
+    );
+    anyhow::ensure!(
+        body.contains("/pkg/live-search_bg.wasm"),
+        "SSR hydration loader did not reference /pkg/live-search_bg.wasm"
+    );
     Ok(())
 }
 
@@ -351,22 +359,33 @@ async fn static_assets_are_served() -> anyhow::Result<()> {
     let pkg_dir = std::env::var_os("LIVE_SEARCH_PKG_DIR")
         .map(std::path::PathBuf::from)
         .context("LIVE_SEARCH_PKG_DIR is required for browser tests")?;
-    let pkg_path = pkg_dir.join("live_search.js");
-    anyhow::ensure!(pkg_path.exists(), "missing {}", pkg_path.display());
+    let js_path = pkg_dir.join("live-search.js");
+    let wasm_path = pkg_dir.join("live-search_bg.wasm");
+    anyhow::ensure!(js_path.exists(), "missing {}", js_path.display());
+    anyhow::ensure!(wasm_path.exists(), "missing {}", wasm_path.display());
 
     let env = get_server().await?;
-    let url = format!("{}/pkg/live_search.js", env.base_url());
-    let response = reqwest::get(&url).await?;
-    anyhow::ensure!(response.status() == 200);
-    let content_type = response
+    let js_url = format!("{}/pkg/live-search.js", env.base_url());
+    let js_response = reqwest::get(&js_url).await?;
+    anyhow::ensure!(js_response.status() == 200);
+    let content_type = js_response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
     anyhow::ensure!(content_type.contains("javascript") || content_type.contains("text/plain"));
-    let bytes = response.bytes().await?;
+    let bytes = js_response.bytes().await?;
     anyhow::ensure!(bytes.len() > 1024, "hydration JS is suspiciously small");
+
+    let wasm_url = format!("{}/pkg/live-search_bg.wasm", env.base_url());
+    let wasm_response = reqwest::get(&wasm_url).await?;
+    anyhow::ensure!(wasm_response.status() == 200);
+    let wasm_bytes = wasm_response.bytes().await?;
+    anyhow::ensure!(
+        wasm_bytes.len() > 1024,
+        "hydration WASM is suspiciously small"
+    );
     Ok(())
 }
 
