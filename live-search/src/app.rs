@@ -17,12 +17,6 @@ use lepticons::{Icon, LucideGlyph};
 use leptos_struct_table::{EventHandler, TableContent, TableDataProvider, TableRow};
 use leptos_use::watch_debounced;
 
-use leptos_forms_rs::core::types::FieldType;
-use leptos_forms_rs::validation::ValidationErrors;
-use leptos_forms_rs::{FieldMetadata, Form as LeptosFormTrait};
-
-use serde::{Deserialize, Serialize};
-
 use crate::db::SearchResult;
 #[cfg(target_arch = "wasm32")]
 use crate::events::SseEvent;
@@ -219,31 +213,6 @@ fn result_row_renderer(
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
-pub struct SearchFormData {
-    pub query: String,
-}
-
-impl LeptosFormTrait for SearchFormData {
-    fn default_values() -> Self {
-        Self {
-            query: String::new(),
-        }
-    }
-
-    fn field_metadata() -> Vec<FieldMetadata> {
-        vec![FieldMetadata {
-            name: "query".to_string(),
-            field_type: FieldType::Text,
-            ..Default::default()
-        }]
-    }
-
-    fn validate(&self) -> Result<(), ValidationErrors> {
-        Ok(())
-    }
-}
-
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] converts this to a view fn; must_use is implicit"
@@ -251,8 +220,6 @@ impl LeptosFormTrait for SearchFormData {
 #[component]
 pub fn SearchPage() -> impl IntoView {
     let (query, set_query) = signal(String::new());
-    let (_form_handle, _submit, _reset) =
-        leptos_forms_rs::use_form(SearchFormData::default_values());
 
     let search_action = Action::new(|input: &String| {
         let input = input.clone();
@@ -409,8 +376,7 @@ pub fn LiveFeedPage() -> impl IntoView {
 
                                 if event_source.state() == State::Open {
                                     connected.set(true);
-                                    let mut all_events =
-                                        stream::select(result_events, lagged_events);
+                                    let mut all_events = stream::select(result_events, lagged_events);
                                     while let Some(result) = all_events.next().await {
                                         if stop.get() {
                                             return;
@@ -418,9 +384,7 @@ pub fn LiveFeedPage() -> impl IntoView {
                                         match result {
                                             Ok((_event_type, msg)) => {
                                                 let Some(data) = msg.data().as_string() else {
-                                                    logging::warn!(
-                                                        "SSE message had non-string data"
-                                                    );
+                                                    logging::warn!("SSE message had non-string data");
                                                     continue;
                                                 };
                                                 match serde_json::from_str::<SseEvent>(&data) {
@@ -449,9 +413,7 @@ pub fn LiveFeedPage() -> impl IntoView {
                                                         );
                                                     }
                                                     Err(e) => {
-                                                        logging::warn!(
-                                                            "Invalid SSE message: {e:?}"
-                                                        );
+                                                        logging::warn!("Invalid SSE message: {e:?}");
                                                     }
                                                 }
                                             }
