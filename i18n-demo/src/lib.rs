@@ -11,6 +11,8 @@
 pub mod app;
 pub mod i18n;
 pub mod styles;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ws_chat;
 
 // ---------------------------------------------------------------------------
