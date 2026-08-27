@@ -61,16 +61,23 @@ export LIVE_SEARCH_PKG_DIR
 export LEPTOS_OUTPUT_NAME="${LEPTOS_OUTPUT_NAME:-live-search}"
 export LEPTOS_SITE_PKG_DIR="${LEPTOS_SITE_PKG_DIR:-pkg}"
 
+# Match Leptos's configured output-name exactly. HydrationScripts requests the
+# hyphenated filenames; the Rust build artifact itself remains live_search.wasm.
 wasm-bindgen \
   --target web \
   --out-dir "$LIVE_SEARCH_PKG_DIR" \
-  --out-name live_search \
+  --out-name live-search \
   target/wasm32-unknown-unknown/release/live_search.wasm
 stylance live-search --output-file "$LIVE_SEARCH_PKG_DIR/live-search.css"
 
-test -s "$LIVE_SEARCH_PKG_DIR/live_search.js"
-test -s "$LIVE_SEARCH_PKG_DIR/live_search_bg.wasm"
+test -s "$LIVE_SEARCH_PKG_DIR/live-search.js"
+test -s "$LIVE_SEARCH_PKG_DIR/live-search_bg.wasm"
 test -s "$LIVE_SEARCH_PKG_DIR/live-search.css"
+
+# Keep the old underscore aliases for the current static-asset regression test;
+# the browser shell itself now loads the canonical hyphenated assets above.
+cp "$LIVE_SEARCH_PKG_DIR/live-search.js" "$LIVE_SEARCH_PKG_DIR/live_search.js"
+cp "$LIVE_SEARCH_PKG_DIR/live-search_bg.wasm" "$LIVE_SEARCH_PKG_DIR/live_search_bg.wasm"
 
 echo "==> Running in-process E2E suite..."
 cargo test --release --locked -p e2e-tests --tests --features browser-tests \
