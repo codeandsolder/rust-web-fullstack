@@ -2,7 +2,7 @@
 //!
 //! HTTP tests exercise the same Leptos route tree as production against an
 //! isolated Postgres testcontainer. Browser tests additionally exercise WASM
-//! hydration and the full PostgreSQL -> LISTEN/NOTIFY -> SSE -> browser path.
+//! hydration and the full `PostgreSQL` -> LISTEN/NOTIFY -> SSE -> browser path.
 
 use std::time::Duration;
 
