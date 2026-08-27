@@ -376,7 +376,8 @@ pub fn LiveFeedPage() -> impl IntoView {
 
                                 if event_source.state() == State::Open {
                                     connected.set(true);
-                                    let mut all_events = stream::select(result_events, lagged_events);
+                                    let mut all_events =
+                                        stream::select(result_events, lagged_events);
                                     while let Some(result) = all_events.next().await {
                                         if stop.get() {
                                             return;
@@ -384,7 +385,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                         match result {
                                             Ok((_event_type, msg)) => {
                                                 let Some(data) = msg.data().as_string() else {
-                                                    logging::warn!("SSE message had non-string data");
+                                                    logging::warn!(
+                                                        "SSE message had non-string data"
+                                                    );
                                                     continue;
                                                 };
                                                 match serde_json::from_str::<SseEvent>(&data) {
@@ -413,7 +416,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                                         );
                                                     }
                                                     Err(e) => {
-                                                        logging::warn!("Invalid SSE message: {e:?}");
+                                                        logging::warn!(
+                                                            "Invalid SSE message: {e:?}"
+                                                        );
                                                     }
                                                 }
                                             }
