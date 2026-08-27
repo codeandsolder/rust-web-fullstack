@@ -54,7 +54,6 @@ stylance = "0.8"
 leptos-use = "0.19"
 leptos-struct-table = "0.19"
 lepticons = "0.13"
-leptos-forms-rs = "1"
 utoipa = "5"
 utoipa-axum = "0.2"
 # `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.
