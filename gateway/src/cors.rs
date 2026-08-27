@@ -15,7 +15,6 @@ fn credentialed(origins: Vec<HeaderValue>) -> CorsLayer {
 ///
 /// `*` is deliberately non-credentialed. Concrete origin lists are
 /// credential-enabled so session cookies work across configured origins.
-#[must_use]
 pub fn cors_layer(allowed_origins: &str) -> CorsLayer {
     let trimmed = allowed_origins.trim();
 
