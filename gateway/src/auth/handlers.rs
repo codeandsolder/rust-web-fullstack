@@ -79,6 +79,12 @@ pub struct ProtectedResponse {
     ),
     tag = "auth",
 )]
+/// Authenticate the configured admin and create access/refresh credentials.
+///
+/// # Errors
+/// Returns an authentication error for an invalid user ID or password, and an
+/// internal error if JWT creation, refresh-token persistence, or session-store
+/// persistence fails.
 pub async fn login_handler(
     State(state): State<GatewayState>,
     session: tower_sessions::Session,
@@ -161,6 +167,12 @@ pub async fn login_handler(
     ),
     tag = "auth",
 )]
+/// Rotate a refresh token and issue a new access token.
+///
+/// # Errors
+/// Returns an authentication error for an invalid, expired, revoked, or
+/// replayed refresh token, and an internal error if token rotation, database
+/// access, or JWT creation fails.
 pub async fn refresh_handler(
     State(state): State<GatewayState>,
     axum_valid::Valid(axum::Json(RefreshRequest { refresh_token })): axum_valid::Valid<
@@ -201,6 +213,11 @@ pub async fn refresh_handler(
     ),
     tag = "auth",
 )]
+/// Revoke outstanding refresh tokens for the authenticated subject.
+///
+/// # Errors
+/// Returns an internal error if the refresh-token store is unavailable or the
+/// revocation query fails.
 pub async fn logout_handler(
     State(state): State<GatewayState>,
     Extension(claims): Extension<Claims>,
