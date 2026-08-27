@@ -5,6 +5,7 @@
 # competing set of application servers.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+WORKSPACE_ROOT="$(pwd)"
 
 echo "==> Checking Docker..."
 if ! docker info >/dev/null 2>&1; then
@@ -46,9 +47,20 @@ cargo build --release --locked -p live-search --features ssr
 cargo build --release --locked -p live-search --lib \
   --target wasm32-unknown-unknown --features hydrate
 
-LIVE_SEARCH_PKG_DIR="${LIVE_SEARCH_PKG_DIR:-live-search/target/site/pkg}"
-export LIVE_SEARCH_PKG_DIR
+# Keep the asset path absolute because Cargo runs each integration-test binary
+# with the package directory as its current directory. A relative path that is
+# correct here would otherwise be resolved relative to e2e-tests/ at runtime.
+LIVE_SEARCH_PKG_DIR="${LIVE_SEARCH_PKG_DIR:-$WORKSPACE_ROOT/target/site/pkg}"
 mkdir -p "$LIVE_SEARCH_PKG_DIR"
+LIVE_SEARCH_PKG_DIR="$(cd "$LIVE_SEARCH_PKG_DIR" && pwd)"
+export LIVE_SEARCH_PKG_DIR
+
+# The fixture calls Leptos configuration directly rather than through
+# cargo-leptos, so provide the package metadata values that cargo-leptos would
+# normally export for the server process.
+export LEPTOS_OUTPUT_NAME="${LEPTOS_OUTPUT_NAME:-live-search}"
+export LEPTOS_SITE_PKG_DIR="${LEPTOS_SITE_PKG_DIR:-pkg}"
+
 wasm-bindgen \
   --target web \
   --out-dir "$LIVE_SEARCH_PKG_DIR" \
