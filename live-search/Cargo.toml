@@ -89,7 +89,7 @@ rwf-domain = { workspace = true }
 
 [features]
 default = []
-ssr = ["dep:leptos_axum", "leptos/ssr"]
+ssr = ["dep:leptos_axum", "leptos/ssr", "leptos-use/ssr"]
 hydrate = ["leptos/hydrate"]
 test-seams = []
 otel = [
