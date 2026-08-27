@@ -1,7 +1,7 @@
 //! Server bootstrap — initialises all subsystems and starts the HTTP listener.
 //!
 //! This module is compiled only under `feature = "ssr"`. It is the single
-//! call that sets up tracing, PostgreSQL, migrations, cache, SSE, the
+//! call that sets up tracing, `PostgreSQL`, migrations, cache, SSE, the
 //! `PgListener`, Leptos SSR routes, and graceful shutdown.
 
 use std::net::SocketAddr;
@@ -79,7 +79,7 @@ async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-/// Dependency readiness: verify application state exists and PostgreSQL can
+/// Dependency readiness: verify application state exists and `PostgreSQL` can
 /// answer a trivial query. This is intentionally separate from liveness so an
 /// orchestrator can stop routing traffic without restart-looping a live process.
 async fn readiness_handler() -> impl IntoResponse {
