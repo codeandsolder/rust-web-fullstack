@@ -84,6 +84,11 @@ jobs:
     name: Clippy (native)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Unlike sccache, Cargo's target directory can preserve Clippy metadata and
+    # rustc incremental state. The repository pins rustc, so this is safe to
+    # reuse across successive commits to the same PR.
+    env:
+      CARGO_INCREMENTAL: "1"
     steps:
       - uses: actions/checkout@v7
       - name: Install pinned Rust toolchain
@@ -91,6 +96,19 @@ jobs:
           rustup toolchain install 1.94.0 --profile minimal --component clippy
           rustc --version
           cargo --version
+      - name: Restore Clippy build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps
+            target/debug/examples
+            target/debug/incremental
+          key: clippy-target-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            clippy-target-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock') }}-
+            clippy-target-v1-${{ runner.os }}-rust-1.94.0-
       - name: Clippy
         run: |
           cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -98,6 +116,9 @@ jobs:
           cargo clippy --locked -p live-search --features ssr,otel --all-targets -- -D warnings
           cargo clippy --locked -p gateway-example --features otel --all-targets -- -D warnings
           cargo clippy --locked -p i18n-demo --features ssr --all-targets -- -D warnings
+      - name: Report Clippy cache footprint
+        if: always()
+        run: du -sh target/debug 2>/dev/null || true
 
   wasm-check:
     name: WASM check (${{ matrix.package }})
