@@ -19,8 +19,8 @@ async fn sqlx_span_is_child_of_tracing_parent() -> Result<()> {
     opentelemetry::global::set_tracer_provider(provider.clone());
 
     let tracer = provider.tracer("live-search-otel-test");
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
     let dispatch = tracing::Dispatch::new(subscriber);
     let _dispatch_guard = tracing::dispatcher::set_default(&dispatch);
 
@@ -55,7 +55,10 @@ async fn sqlx_span_is_child_of_tracing_parent() -> Result<()> {
         .find(|span| span.span_kind == SpanKind::Client)
         .context("sqlx-otel did not emit a database client span")?;
 
-    assert_eq!(db_span.span_context.trace_id(), parent.span_context.trace_id());
+    assert_eq!(
+        db_span.span_context.trace_id(),
+        parent.span_context.trace_id()
+    );
     assert_eq!(db_span.parent_span_id, parent.span_context.span_id());
 
     Ok(())
