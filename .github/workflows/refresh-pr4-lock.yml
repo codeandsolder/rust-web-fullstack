@@ -1,0 +1,34 @@
+name: Refresh PR 4 lockfile
+
+on:
+  push:
+    branches: [deps/sqlx-otel-0.5]
+    paths:
+      - Cargo.toml
+      - e2e-tests/Cargo.toml
+      - .github/workflows/refresh-pr4-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-lockfile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Resolve current workspace
+        run: cargo +1.94.0 metadata --format-version 1 >/dev/null
+      - name: Commit generated lockfile
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Refresh OpenTelemetry test lockfile"
+          git push origin HEAD:deps/sqlx-otel-0.5
