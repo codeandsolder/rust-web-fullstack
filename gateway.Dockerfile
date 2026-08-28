@@ -11,9 +11,9 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-RUN cargo install sccache --locked && \
-    cargo install leptosfmt --locked
-ENV RUSTC_WRAPPER=sccache
+RUN cargo install sccache --locked
+ENV RUSTC_WRAPPER=sccache \
+    SCCACHE_DIR=/var/cache/sccache
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,target=/var/cache/sccache \
     cargo chef cook --recipe-path recipe.json --locked --release \

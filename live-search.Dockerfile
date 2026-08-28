@@ -18,7 +18,8 @@ RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
     cargo install stylance-cli --locked && \
     cargo install sccache --locked
-ENV RUSTC_WRAPPER=sccache
+ENV RUSTC_WRAPPER=sccache \
+    SCCACHE_DIR=/var/cache/sccache
 COPY --from=planner /build/recipe.json recipe.json
 # Stylance's import_style proc macro reads this file at compile time. cargo-chef
 # recipes contain Rust manifests/skeletons, not arbitrary CSS assets, so make
