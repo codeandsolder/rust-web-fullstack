@@ -4,6 +4,7 @@
 //!
 //! * Password comparison uses constant-time comparison via `subtle`.
 //! * The demo password is bound to exactly one configured admin identity.
+//! * Successful authentication rotates the session ID to prevent fixation.
 //! * Rate limiting is applied at the router level via `tower_governor`.
 //! * JWT errors are mapped to distinct error variants.
 //! * Secrets (passwords, tokens) are never included in log output.
@@ -81,10 +82,14 @@ pub struct ProtectedResponse {
 )]
 /// Authenticate the configured admin and create access/refresh credentials.
 ///
+/// The server-side session ID is cycled after credentials are accepted but
+/// before authenticated session state is written, so a pre-authentication
+/// session identifier cannot be carried across the privilege boundary.
+///
 /// # Errors
 /// Returns an authentication error for an invalid user ID or password, and an
-/// internal error if JWT creation, refresh-token persistence, or session-store
-/// persistence fails.
+/// internal error if session-ID rotation, JWT creation, refresh-token
+/// persistence, or session-store persistence fails.
 pub async fn login_handler(
     State(state): State<GatewayState>,
     session: tower_sessions::Session,
@@ -107,8 +112,6 @@ pub async fn login_handler(
         return Err(AppError::AuthError);
     }
 
-    let token = create_jwt(&parsed_user_id, &s.encoding_key, s.access_token_ttl_secs)?;
-
     let pool = state.db_pool.as_ref().ok_or_else(|| {
         AppError::internal(
             "refresh-token store unavailable",
@@ -117,6 +120,17 @@ pub async fn login_handler(
             ),
         )
     })?;
+
+    // Rotate before writing authenticated state so an attacker-known
+    // pre-authentication session identifier cannot survive login. Existing
+    // pre-auth state such as the synchronizer CSRF token is retained under the
+    // fresh identifier by tower-sessions.
+    session
+        .cycle_id()
+        .await
+        .map_err(|e| AppError::internal("session id rotation", e))?;
+
+    let token = create_jwt(&parsed_user_id, &s.encoding_key, s.access_token_ttl_secs)?;
 
     let (raw_refresh, refresh_jti) = generate_raw_refresh_token()
         .map_err(|e| AppError::internal("refresh token generation", e))?;
