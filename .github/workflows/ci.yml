@@ -144,8 +144,15 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.17.0"
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal
@@ -153,6 +160,9 @@ jobs:
           cargo --version
       - name: Run library tests
         run: cargo test --locked --workspace --lib
+      - name: Show sccache stats
+        if: always()
+        run: "${SCCACHE_PATH}" --show-stats
 
   audit:
     name: Dependency audit
@@ -178,8 +188,15 @@ jobs:
     name: Leptos production builds
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.17.0"
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
@@ -208,6 +225,9 @@ jobs:
           test -s target/site/pkg/live-search.css
       - name: Build i18n-demo
         run: cargo leptos build --release -p i18n-demo
+      - name: Show sccache stats
+        if: always()
+        run: "${SCCACHE_PATH}" --show-stats
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -239,8 +259,15 @@ jobs:
     name: Browser + integration E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.17.0"
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
@@ -273,3 +300,6 @@ jobs:
         run: docker version
       - name: Run E2E suite
         run: bash scripts/test-e2e.sh
+      - name: Show sccache stats
+        if: always()
+        run: "${SCCACHE_PATH}" --show-stats
