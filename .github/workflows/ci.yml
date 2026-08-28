@@ -341,6 +341,10 @@ jobs:
         run: docker version
       - name: Run E2E suite
         run: bash scripts/test-e2e.sh
+      - name: Verify SQLx OpenTelemetry span parenting
+        run: >-
+          cargo test --release --locked -p e2e-tests --test otel_db_test
+          --features otel-tests -- --test-threads=1 --nocapture
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats

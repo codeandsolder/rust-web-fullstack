@@ -162,10 +162,19 @@ The optional `otel` features export traces over OTLP/HTTP. If
 Both Axum routers install OpenTelemetry middleware that extracts incoming W3C
 `traceparent`/`tracestate`; setting a global propagator alone would not do that.
 
-`sqlx-otel` is currently **not enabled** by the active `otel` feature. The lockfile
-still contains 0.3 (SQLx 0.8 generation). Upstream 0.5 supports SQLx 0.9, but the
-manifest and lockfile should be upgraded together in a dedicated dependency
-refresh before enabling it.
+`live-search` enables `sqlx-otel` 0.5 under its `otel` feature. Request-facing
+application queries use an instrumented `sqlx_otel::Pool<Postgres>` that wraps a
+clone of the same underlying SQLx pool; it does **not** create a second physical
+connection pool. Migrations, LISTEN/NOTIFY, readiness probes, and graceful
+shutdown retain the raw `PgPool` for SQLx-specific APIs and to avoid noisy probe
+spans.
+
+This integration currently exports database **traces only**. live-search does
+not install an OpenTelemetry `MeterProvider`, so `sqlx-otel`'s optional runtime
+pool-metrics task is intentionally not enabled. The existing Axum Prometheus
+layer is a separate metrics pipeline and does not receive native OTel metrics.
+CI includes a focused real-Postgres test that verifies a SQLx `CLIENT` span is
+emitted beneath an active tracing/OpenTelemetry parent span.
 
 ## i18n and WebSocket example
 

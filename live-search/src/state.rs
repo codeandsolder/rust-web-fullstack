@@ -22,11 +22,42 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use sqlx::PgPool;
 use tokio::sync::broadcast;
 
 use crate::cache::CacheHandle;
 use crate::events::SseEvent;
+
+/// Pool used by request-facing application queries.
+///
+/// The `otel` build wraps the raw `SQLx` pool with `sqlx-otel` so queries emit
+/// OpenTelemetry database spans. Infrastructure that needs `SQLx`'s concrete
+/// `PgPool` API (migrations and LISTEN/NOTIFY) keeps using the raw pool.
+#[cfg(feature = "otel")]
+pub type AppPool = sqlx_otel::Pool<sqlx::Postgres>;
+
+/// Pool used by request-facing application queries when telemetry is disabled.
+#[cfg(not(feature = "otel"))]
+pub type AppPool = sqlx::PgPool;
+
+/// Convert the raw `SQLx` pool into the request-facing application pool.
+///
+/// With `otel` enabled this wraps the same underlying pool handle in
+/// `sqlx-otel`; without telemetry it is an identity conversion. Keeping this
+/// construction in one place ensures production and integration tests exercise
+/// the same instrumentation boundary.
+#[cfg(feature = "otel")]
+#[must_use]
+pub fn app_pool_from_raw(raw_pool: sqlx::PgPool) -> AppPool {
+    sqlx_otel::PoolBuilder::from(raw_pool).build()
+}
+
+/// Convert the raw `SQLx` pool into the request-facing application pool when
+/// telemetry is disabled.
+#[cfg(not(feature = "otel"))]
+#[must_use]
+pub const fn app_pool_from_raw(raw_pool: sqlx::PgPool) -> AppPool {
+    raw_pool
+}
 
 /// Error returned when [`set`] is called more than once.
 #[derive(Debug, thiserror::Error)]
@@ -42,8 +73,8 @@ pub enum AppContextInitError {
 /// Construct once at startup, then share via [`Arc`] (either through the
 /// global [`set`] / [`get`] API or via `leptos::provide_context`).
 pub struct AppContext {
-    /// Database connection pool.
-    pub pool: PgPool,
+    /// Database pool used by application queries.
+    pub pool: AppPool,
     /// Broadcast sender for SSE events.
     pub broadcast: broadcast::Sender<SseEvent>,
     /// Search result cache.
@@ -54,7 +85,7 @@ impl AppContext {
     /// Create a new application context from its constituent parts.
     #[must_use]
     pub const fn new(
-        pool: PgPool,
+        pool: AppPool,
         broadcast: broadcast::Sender<SseEvent>,
         cache: CacheHandle,
     ) -> Self {

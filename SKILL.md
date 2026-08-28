@@ -160,7 +160,9 @@ close the database pool and flush telemetry.
 ### 10. Separate liveness from readiness
 
 `live-search` exposes a cheap `/health` liveness endpoint and `/readyz`, which
-probes PostgreSQL. Compose uses readiness.
+probes PostgreSQL. Compose uses readiness. The readiness query deliberately uses
+the raw `PgPool` rather than the application instrumentation wrapper so routine
+orchestrator probes do not create database spans.
 
 The gateway aggregate `/health` checks both registered service modules and the
 PostgreSQL dependency required for login/refresh-token operation.
@@ -304,13 +306,28 @@ The `otel` features use OTLP/HTTP. `OTEL_EXPORTER_OTLP_ENDPOINT` defaults to
 incoming W3C `traceparent`/`tracestate`; configuring a global propagator alone
 does not parent request spans.
 
-`sqlx-otel` is **not currently part of the active `otel` feature**. The lockfile
-still contains 0.3, which targets SQLx 0.8. Upstream 0.5 supports this workspace's
-SQLx/OpenTelemetry generation, but the dependency and lockfile must be upgraded
-together in a dedicated dependency refresh before enabling it.
+`live-search` enables `sqlx-otel` 0.5 under the active `otel` feature. The
+request-facing `AppPool` is an instrumented `sqlx_otel::Pool<Postgres>` wrapping
+a clone of the same underlying `PgPool`, so enabling tracing does not create a
+second physical connection pool or change the configured connection budget.
+Migrations, LISTEN/NOTIFY, readiness, and graceful shutdown continue to use the
+raw `PgPool` because those paths need concrete SQLx APIs or should avoid noisy
+probe spans.
 
-Metrics and trace export are separate concerns even if the examples currently
-gate some observability setup under the same feature.
+The SQLx integration is deliberately **traces only** today. No OpenTelemetry
+`MeterProvider` is installed, so `sqlx-otel`'s optional runtime pool-metrics
+feature is not enabled. `axum-prometheus` is a separate metrics pipeline; it
+does not automatically receive native OpenTelemetry metrics. Add a real OTel
+meter provider before enabling SQLx OTel metrics.
+
+CI includes a focused integration test using a real Postgres testcontainer and
+an in-memory OTel exporter. It executes a query through the production AppPool
+wrapper beneath an active `tracing-opentelemetry` parent and asserts that the
+emitted database `CLIENT` span shares the trace and has the request span as its
+parent.
+
+Metrics and trace export remain separate concerns even when they are gated by
+nearby observability features.
 
 ## WebSocket demo
 
@@ -382,7 +399,8 @@ The maintained GitHub Actions workflow should cover:
 - dependency audit,
 - Leptos production builds,
 - all Dockerfile builds using a Docker daemon,
-- browser E2E with an installed Chromium binary.
+- browser E2E with an installed Chromium binary,
+- a runtime SQLx OTel span-parenting check against real PostgreSQL.
 
 `--locked` protects the committed dependency graph. CI-installed helper tools
 must also pin their top-level versions so a crates.io release cannot silently

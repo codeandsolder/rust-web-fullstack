@@ -29,8 +29,18 @@ nursery = { level = "warn", priority = -1 }
 [features]
 default = []
 # Browser-based tests (chromiumoxide) — gated because they require a real
-# browser installation.  Run with `--features browser-tests`.
+# browser installation. Run with `--features browser-tests`.
 browser-tests = []
+# Focused runtime check for live-search's optional SQLx OpenTelemetry path.
+# This enables the production `otel` feature and only the test-side tracing
+# SDK pieces needed to capture and inspect emitted spans.
+otel-tests = [
+    "live-search/otel",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+]
 
 # The test helpers live in this library crate ([lib] + src/common/) and are
 # imported by each `tests/*.rs` binary. As a result, what used to be
@@ -60,6 +70,10 @@ tower-http = { workspace = true, features = ["fs"] }
 
 # tracing for subscriber init in live_search_env
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true, features = ["testing"] }
 
 # Test infrastructure
 testcontainers = { workspace = true }

@@ -79,16 +79,12 @@ async fn health_handler() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-/// Dependency readiness: verify application state exists and `PostgreSQL` can
-/// answer a trivial query. This is intentionally separate from liveness so an
-/// orchestrator can stop routing traffic without restart-looping a live process.
-async fn readiness_handler() -> impl IntoResponse {
-    let Some(ctx) = state::get() else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "app state unavailable");
-    };
-
+/// Dependency readiness: verify the raw `PostgreSQL` pool can answer a trivial
+/// query. Readiness intentionally bypasses application query instrumentation so
+/// orchestrator probes do not generate repetitive database spans.
+async fn readiness_handler(pool: sqlx::PgPool) -> impl IntoResponse {
     match sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(&ctx.pool)
+        .fetch_one(&pool)
         .await
     {
         Ok(1) => (StatusCode::OK, "ready"),
@@ -126,22 +122,26 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     };
     tracing::info!("{}", cfg.live_search.connection_budget_summary());
 
-    let pool = db::create_pool(&database_url, &pool_tunables)
+    let raw_pool = db::create_pool(&database_url, &pool_tunables)
         .await
         .context("failed to create database pool")?;
 
     // Every service sharing this database resolves the exact same SQLx
-    // migration history.
+    // migration history. Keep migrations on the raw SQLx pool because the
+    // instrumentation wrapper is for application query execution, not SQLx's
+    // migration/listener-specific APIs.
     sqlx::migrate!("../migrations")
-        .run(&pool)
+        .run(&raw_pool)
         .await
         .context("failed to run database migrations")?;
+
+    let app_pool = state::app_pool_from_raw(raw_pool.clone());
 
     let cache_handle = CacheHandle::default();
     let (tx, _rx) = broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
 
     let ctx = Arc::new(state::AppContext::new(
-        pool.clone(),
+        app_pool,
         tx.clone(),
         cache_handle.clone(),
     ));
@@ -151,7 +151,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let mut tasks = JoinSet::new();
 
     let listener_token = shutdown.child_token();
-    let pool_for_listener = pool.clone();
+    let pool_for_listener = raw_pool.clone();
     let listener_span = tracing::info_span!("pg_listener");
     let cache_for_listener = cache_handle.clone();
     tasks.spawn(
@@ -167,6 +167,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let leptos_routes = generate_route_list(app::App);
 
     let broadcast_for_sse = ctx.broadcast.clone();
+    let readiness_pool = raw_pool.clone();
     let router = Router::new()
         .nest_service("/pkg", ServeDir::new("./pkg"))
         .route(
@@ -187,7 +188,13 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
             }
         })
         .route("/health", get(health_handler))
-        .route("/readyz", get(readiness_handler))
+        .route(
+            "/readyz",
+            get(move || {
+                let pool = readiness_pool.clone();
+                async move { readiness_handler(pool).await }
+            }),
+        )
         .fallback(fallback_handler);
 
     #[cfg(feature = "otel")]
@@ -235,6 +242,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     Ok(ServerHandle {
         shutdown,
         tasks,
-        pool,
+        pool: raw_pool,
     })
 }
