@@ -1326,6 +1326,8 @@ dependencies = [
  "leptos-utils",
  "leptos_axum",
  "live-search",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "proptest",
  "reqwest",
  "rwf-domain",
@@ -1338,6 +1340,8 @@ dependencies = [
  "tokio-util",
  "tower-http 0.7.0",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -5607,7 +5611,6 @@ dependencies = [
  "sqlx",
  "sqlx-core",
  "sqlx-postgres",
- "tokio",
 ]
 
 [[package]]
