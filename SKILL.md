@@ -20,7 +20,7 @@ fix this document in the same change.
 | `crates/domain/` | framework-free domain types and invariants |
 | `e2e-tests/` | testcontainers HTTP integration and chromiumoxide browser E2E |
 | `migrations/` | the single SQLx migration history for the shared database |
-| `.woodpecker.yml` | format/check/clippy/build/Docker/browser CI |
+| `.github/workflows/ci.yml` | format/check/clippy/build/Docker/browser CI |
 
 The workspace pins Rust 1.94 as its supported toolchain/MSRV. Newer stable Rust
 versions do not by themselves justify raising that floor.
@@ -46,7 +46,7 @@ cargo test --release --locked -p e2e-tests --tests \
   --features browser-tests -- --test-threads=1 --nocapture
 ```
 
-The Woodpecker pipeline is the executable reference for CI prerequisites.
+The GitHub Actions workflow is the executable reference for CI prerequisites.
 
 ## Critical rules
 
@@ -373,9 +373,9 @@ docker compose --profile dev up --build \
 
 ## CI expectations
 
-The pipeline should cover:
+The maintained GitHub Actions workflow should cover:
 
-- workspace check and clippy,
+- native workspace/all-target Clippy plus supported native feature combinations,
 - SSR and hydration feature matrices,
 - the `otel` feature compilation,
 - Rust formatting and Leptos view formatting,
@@ -384,9 +384,9 @@ The pipeline should cover:
 - all Dockerfile builds using a Docker daemon,
 - browser E2E with an installed Chromium binary.
 
-`--locked` protects the committed dependency graph; `cargo install --locked`
-alone does **not** pin the top-level tool version selected from crates.io. Pin
-CI tool versions when reproducibility across time matters.
+`--locked` protects the committed dependency graph. CI-installed helper tools
+must also pin their top-level versions so a crates.io release cannot silently
+change the workflow's toolchain or MSRV requirements.
 
 ## References
 
@@ -402,4 +402,4 @@ Particularly useful entry points:
 - `gateway/src/settings.rs`
 - `e2e-tests/src/common/live_search_env.rs`
 - `e2e-tests/tests/live_search_test.rs`
-- `.woodpecker.yml`
+- `.github/workflows/ci.yml`
