@@ -162,6 +162,15 @@ pub async fn login_handler(
         return Err(AppError::internal("session insert", error));
     }
 
+    // tower-sessions normally persists modified state after the handler returns.
+    // Persist once here as well so a store failure is observable while we can
+    // still compensate the refresh-token insert rather than returning a valid
+    // refresh credential for a login whose authenticated session was not saved.
+    if let Err(error) = session.save().await {
+        remove_unissued_refresh_token(pool, refresh_jti).await;
+        return Err(AppError::internal("session save", error));
+    }
+
     Ok(Json(LoginResponse {
         token,
         refresh_token: raw_refresh,
