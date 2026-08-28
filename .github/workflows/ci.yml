@@ -144,8 +144,12 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # sccache's GHA object backend currently drops writes when concurrent jobs
+    # hit GitHub's per-run cache-service rate limit. Keep a local sccache store
+    # and transfer it once through actions/cache instead.
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache/unit-tests
+      SCCACHE_CACHE_SIZE: "1G"
       RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
@@ -153,6 +157,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.17.0"
+      - name: Restore unit-test compiler cache
+        uses: actions/cache@v5
+        with:
+          path: .sccache/unit-tests
+          key: sccache-unit-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            sccache-unit-v1-${{ runner.os }}-rust-1.94.0-
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal
@@ -175,8 +186,15 @@ jobs:
           rustup toolchain install 1.94.0 --profile minimal
           rustc --version
           cargo --version
+      - name: Restore cargo-audit
+        id: cargo-audit-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ci-tool-${{ runner.os }}-cargo-audit-0.22.2
       - name: Install cargo-audit
-        run: cargo +stable install cargo-audit --locked
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        run: cargo +stable install cargo-audit --version 0.22.2 --locked
       # Audit the exact dependency graph committed to the repository. CI must
       # not mutate Cargo.lock first: both targeted patched versions are already
       # present, and `cargo update -p` can legitimately rewrite unrelated
@@ -189,7 +207,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache/leptos-build
+      SCCACHE_CACHE_SIZE: "2G"
       RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
@@ -197,6 +216,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.17.0"
+      - name: Restore production compiler cache
+        uses: actions/cache@v5
+        with:
+          path: .sccache/leptos-build
+          key: sccache-leptos-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            sccache-leptos-v1-${{ runner.os }}-rust-1.94.0-
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
@@ -247,20 +273,28 @@ jobs:
             dockerfile: gateway.Dockerfile
             tag: rwf-gateway:test
     env:
-      DOCKER_BUILDKIT: "1"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - uses: actions/checkout@v7
-      - name: Verify Docker
-        run: docker version
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.3.0
       - name: Build image
-        run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          tags: ${{ matrix.tag }}
+          load: true
+          cache-from: type=gha,scope=docker-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.image }}
 
   e2e-tests:
     name: Browser + integration E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache/e2e
+      SCCACHE_CACHE_SIZE: "2G"
       RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
@@ -268,6 +302,13 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.17.0"
+      - name: Restore E2E compiler cache
+        uses: actions/cache@v5
+        with:
+          path: .sccache/e2e
+          key: sccache-e2e-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            sccache-e2e-v1-${{ runner.os }}-rust-1.94.0-
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
