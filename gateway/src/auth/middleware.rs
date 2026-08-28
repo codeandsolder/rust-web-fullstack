@@ -75,10 +75,11 @@ pub async fn auth_middleware(
     request.extensions_mut().insert(claims);
 
     let response = next.run(request).await;
-    if is_logout && response.status().is_success() {
-        if let Err(error) = session.flush().await {
-            return AppError::internal("session logout", error).into_response();
-        }
+    if is_logout
+        && response.status().is_success()
+        && let Err(error) = session.flush().await
+    {
+        return AppError::internal("session logout", error).into_response();
     }
 
     response
