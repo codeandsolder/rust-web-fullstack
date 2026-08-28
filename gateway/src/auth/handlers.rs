@@ -139,7 +139,17 @@ pub async fn login_handler(
     .await
     .map_err(|e| AppError::internal("refresh token insert", e))?;
 
-    session
+    // A pre-authentication session ID may already be known to another party
+    // (for example after bootstrapping a CSRF token). Rotate it before attaching
+    // authenticated state so possession of the old ID cannot inherit the login.
+    if session.id().is_some()
+        && let Err(error) = session.cycle_id().await
+    {
+        remove_unissued_refresh_token(pool, refresh_jti).await;
+        return Err(AppError::internal("session id rotation", error));
+    }
+
+    if let Err(error) = session
         .insert(
             crate::session::SESSION_USER_KEY,
             crate::session::SessionUser {
@@ -147,13 +157,33 @@ pub async fn login_handler(
             },
         )
         .await
-        .map_err(|e| AppError::internal("session insert", e))?;
+    {
+        remove_unissued_refresh_token(pool, refresh_jti).await;
+        return Err(AppError::internal("session insert", error));
+    }
 
     Ok(Json(LoginResponse {
         token,
         refresh_token: raw_refresh,
         user_id,
     }))
+}
+
+/// Remove a refresh credential that was persisted for a login which could not
+/// complete its session transition. Cleanup is best-effort because the original
+/// session-store error remains the request's primary failure.
+async fn remove_unissued_refresh_token(pool: &sqlx::PgPool, refresh_jti: Uuid) {
+    if let Err(error) = sqlx::query("DELETE FROM refresh_tokens WHERE jti = $1")
+        .bind(refresh_jti)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(
+            refresh_jti = %refresh_jti,
+            error = %error,
+            "failed to remove refresh token after login session failure"
+        );
+    }
 }
 
 #[utoipa::path(
