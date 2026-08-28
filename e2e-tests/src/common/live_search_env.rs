@@ -79,9 +79,12 @@ impl LiveSearchEnv {
         let tx_for_sse = tx.clone();
         let shutdown = CancellationToken::new();
 
-        // Server functions use the same AppContext mechanism as production.
+        // Server functions use the same AppContext and raw->application pool
+        // conversion as production. The raw pool remains available below for
+        // the PgListener, which requires SQLx's concrete PgPool API.
+        let app_pool = state::app_pool_from_raw(server_pool.clone());
         let ctx = Arc::new(live_search::state::AppContext::new(
-            server_pool.clone(),
+            app_pool,
             tx.clone(),
             cache_handle.clone(),
         ));
