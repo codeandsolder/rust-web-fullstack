@@ -162,7 +162,7 @@ jobs:
         run: cargo test --locked --workspace --lib
       - name: Show sccache stats
         if: always()
-        run: "${SCCACHE_PATH}" --show-stats
+        run: ${SCCACHE_PATH} --show-stats
 
   audit:
     name: Dependency audit
@@ -227,7 +227,7 @@ jobs:
         run: cargo leptos build --release -p i18n-demo
       - name: Show sccache stats
         if: always()
-        run: "${SCCACHE_PATH}" --show-stats
+        run: ${SCCACHE_PATH} --show-stats
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -302,4 +302,4 @@ jobs:
         run: bash scripts/test-e2e.sh
       - name: Show sccache stats
         if: always()
-        run: "${SCCACHE_PATH}" --show-stats
+        run: ${SCCACHE_PATH} --show-stats
