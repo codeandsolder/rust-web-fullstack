@@ -84,7 +84,9 @@ async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
         .await
         .context("pre-logout whoami response is not valid JSON")?;
     assert_eq!(
-        whoami_before.get("user_id").and_then(serde_json::Value::as_str),
+        whoami_before
+            .get("user_id")
+            .and_then(serde_json::Value::as_str),
         Some(TEST_USER_ID)
     );
 
