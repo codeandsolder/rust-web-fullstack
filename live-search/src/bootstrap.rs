@@ -126,22 +126,29 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     };
     tracing::info!("{}", cfg.live_search.connection_budget_summary());
 
-    let pool = db::create_pool(&database_url, &pool_tunables)
+    let raw_pool = db::create_pool(&database_url, &pool_tunables)
         .await
         .context("failed to create database pool")?;
 
     // Every service sharing this database resolves the exact same SQLx
-    // migration history.
+    // migration history. Keep migrations on the raw SQLx pool because the
+    // instrumentation wrapper is for application query execution, not SQLx's
+    // migration/listener-specific APIs.
     sqlx::migrate!("../migrations")
-        .run(&pool)
+        .run(&raw_pool)
         .await
         .context("failed to run database migrations")?;
+
+    #[cfg(feature = "otel")]
+    let app_pool = sqlx_otel::PoolBuilder::from(raw_pool.clone()).build();
+    #[cfg(not(feature = "otel"))]
+    let app_pool = raw_pool.clone();
 
     let cache_handle = CacheHandle::default();
     let (tx, _rx) = broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
 
     let ctx = Arc::new(state::AppContext::new(
-        pool.clone(),
+        app_pool,
         tx.clone(),
         cache_handle.clone(),
     ));
@@ -151,7 +158,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let mut tasks = JoinSet::new();
 
     let listener_token = shutdown.child_token();
-    let pool_for_listener = pool.clone();
+    let pool_for_listener = raw_pool.clone();
     let listener_span = tracing::info_span!("pg_listener");
     let cache_for_listener = cache_handle.clone();
     tasks.spawn(
@@ -235,6 +242,6 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     Ok(ServerHandle {
         shutdown,
         tasks,
-        pool,
+        pool: raw_pool,
     })
 }

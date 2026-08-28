@@ -337,8 +337,8 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
- "opentelemetry 0.32.0",
- "opentelemetry-semantic-conventions 0.32.1",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "pin-project-lite",
  "tower",
  "tracing",
@@ -1331,7 +1331,7 @@ dependencies = [
  "rwf-domain",
  "serde",
  "serde_json",
- "sqlx 0.9.0",
+ "sqlx",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
@@ -1414,7 +1414,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1690,7 +1690,7 @@ dependencies = [
  "criterion",
  "futures",
  "jsonwebtoken",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "reqwest",
@@ -1698,7 +1698,7 @@ dependencies = [
  "rwf-domain",
  "serde",
  "serde_json",
- "sqlx 0.9.0",
+ "sqlx",
  "subtle",
  "thiserror 2.0.18",
  "tokio",
@@ -1947,8 +1947,6 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
- "allocator-api2",
- "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -1968,15 +1966,6 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-
-[[package]]
-name = "hashlink"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
-dependencies = [
- "hashbrown 0.15.5",
-]
 
 [[package]]
 name = "hashlink"
@@ -3521,14 +3510,14 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "moka",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rwf-config",
  "rwf-domain",
  "serde",
  "serde_json",
- "sqlx 0.9.0",
+ "sqlx",
  "sqlx-otel",
  "stylance",
  "thiserror 2.0.18",
@@ -3812,7 +3801,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3924,20 +3913,6 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentelemetry"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "opentelemetry"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
@@ -3959,7 +3934,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "reqwest",
 ]
 
@@ -3970,7 +3945,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
  "http",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -3985,16 +3960,10 @@ version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
 dependencies = [
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "opentelemetry_sdk",
  "prost",
 ]
-
-[[package]]
-name = "opentelemetry-semantic-conventions"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e62e29dfe041afb8ed2a6c9737ab57db4907285d999ef8ad3a59092a36bdc846"
 
 [[package]]
 name = "opentelemetry-semantic-conventions"
@@ -4011,7 +3980,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.4",
@@ -4436,7 +4405,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4862,7 +4831,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4921,7 +4890,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5510,55 +5479,15 @@ dependencies = [
 
 [[package]]
 name = "sqlx"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fefb893899429669dcdd979aff487bd78f4064e5e7907e4269081e0ef7d97dc"
-dependencies = [
- "sqlx-core 0.8.6",
-]
-
-[[package]]
-name = "sqlx"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
 dependencies = [
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "sqlx-macros",
  "sqlx-mysql",
  "sqlx-postgres",
  "sqlx-sqlite",
-]
-
-[[package]]
-name = "sqlx-core"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "crc",
- "crossbeam-queue",
- "either",
- "event-listener",
- "futures-core",
- "futures-intrusive",
- "futures-io",
- "futures-util",
- "hashbrown 0.15.5",
- "hashlink 0.10.0",
- "indexmap 2.14.0",
- "log",
- "memchr",
- "once_cell",
- "percent-encoding",
- "serde",
- "sha2 0.10.9",
- "smallvec",
- "thiserror 2.0.18",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -5580,7 +5509,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.16.1",
- "hashlink 0.11.1",
+ "hashlink",
  "indexmap 2.14.0",
  "log",
  "memchr",
@@ -5607,7 +5536,7 @@ checksum = "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
 dependencies = [
  "proc-macro2",
  "quote",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "sqlx-macros-core",
  "syn",
 ]
@@ -5628,7 +5557,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "sqlx-mysql",
  "sqlx-postgres",
  "sqlx-sqlite",
@@ -5660,7 +5589,7 @@ dependencies = [
  "serde",
  "sha1 0.11.0",
  "sha2 0.11.0",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -5668,14 +5597,17 @@ dependencies = [
 
 [[package]]
 name = "sqlx-otel"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03d5eae86367bfc6ed9e8e9c26ef1115788f9856669ea4507afcf034bde4ad4b"
+checksum = "a231242dc2b2d3e3c799e62c68fb3a01481e049811c43b788bb1f3155d2031a4"
 dependencies = [
  "futures",
- "opentelemetry 0.31.0",
- "opentelemetry-semantic-conventions 0.31.0",
- "sqlx 0.8.6",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "sqlx",
+ "sqlx-core",
+ "sqlx-postgres",
+ "tokio",
 ]
 
 [[package]]
@@ -5707,7 +5639,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "smallvec",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
  "tracing",
@@ -5734,7 +5666,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "serde",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "thiserror 2.0.18",
  "tracing",
  "url",
@@ -5957,7 +5889,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6534,7 +6466,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
 dependencies = [
  "js-sys",
- "opentelemetry 0.32.0",
+ "opentelemetry",
  "smallvec",
  "tracing",
  "tracing-core",
@@ -6550,8 +6482,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a10464b0f9cac62a3e26c08c7c9b93c5ae62f5165792b2e7e90c52940eaabef5"
 dependencies = [
  "http",
- "opentelemetry 0.32.0",
- "opentelemetry-semantic-conventions 0.32.1",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
  "tracing",
  "tracing-opentelemetry",
 ]
@@ -7239,7 +7171,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

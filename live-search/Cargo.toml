@@ -67,9 +67,6 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 axum-tracing-opentelemetry = { workspace = true, optional = true }
-# Kept optional for a future dependency refresh. sqlx-otel 0.3 is not part of
-# the active `otel` feature because it targets SQLx 0.8 while this workspace
-# uses SQLx 0.9. Upgrade it and Cargo.lock together before enabling DB spans.
 sqlx-otel = { workspace = true, optional = true }
 # Dev tools — gated behind `dev-tools` feature
 console-subscriber = { workspace = true, optional = true }
@@ -93,6 +90,7 @@ otel = [
     "dep:opentelemetry-otlp",
     "dep:tracing-opentelemetry",
     "dep:axum-tracing-opentelemetry",
+    "dep:sqlx-otel",
 ]
 dev-tools = ["dep:console-subscriber"]
 
