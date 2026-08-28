@@ -361,11 +361,12 @@ pub fn LiveFeedPage() -> impl IntoView {
 
                 match gloo_net::eventsource::futures::EventSource::new("/api/events") {
                     Ok(mut event_source) => {
+                        let connected_stream = event_source.subscribe("connected");
                         let result_stream = event_source.subscribe("search_result");
                         let lagged_stream = event_source.subscribe("stream_lagged");
 
-                        match (result_stream, lagged_stream) {
-                            (Ok(result_events), Ok(lagged_events)) => {
+                        match (connected_stream, result_stream, lagged_stream) {
+                            (Ok(connected_events), Ok(result_events), Ok(lagged_events)) => {
                                 while event_source.state() == State::Connecting && !stop.get() {
                                     sleep(Duration::from_millis(25)).await;
                                 }
@@ -375,9 +376,9 @@ pub fn LiveFeedPage() -> impl IntoView {
                                 }
 
                                 if event_source.state() == State::Open {
-                                    connected.set(true);
+                                    let data_events = stream::select(result_events, lagged_events);
                                     let mut all_events =
-                                        stream::select(result_events, lagged_events);
+                                        stream::select(connected_events, data_events);
                                     while let Some(result) = all_events.next().await {
                                         if stop.get() {
                                             return;
