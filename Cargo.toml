@@ -60,7 +60,9 @@ opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-pro
 tracing-opentelemetry = "0.33"
 axum-tracing-opentelemetry = "0.38"
 # 0.5 aligns with this workspace's SQLx 0.9, OpenTelemetry 0.32 and Rust 1.94.
-sqlx-otel = { version = "0.5", default-features = false, features = ["postgres", "runtime-tokio"] }
+# Only tracing is enabled here; sqlx-otel runtime features are for its optional
+# pool metrics task, and live-search does not currently install an OTel MeterProvider.
+sqlx-otel = { version = "0.5", default-features = false, features = ["postgres"] }
 console-subscriber = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
