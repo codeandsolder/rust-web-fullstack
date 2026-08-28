@@ -12,8 +12,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
-    cargo install sccache --locked && \
-    cargo install leptosfmt --locked
+    cargo install sccache --locked
 ENV RUSTC_WRAPPER=sccache
 COPY --from=planner /build/recipe.json recipe.json
 # Keep wasm/native dependency cooks scoped to this crate. A workspace-wide wasm

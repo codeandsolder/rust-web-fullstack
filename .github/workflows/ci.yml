@@ -16,6 +16,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   lockfile:
@@ -24,10 +26,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.94.0 --profile minimal
-
       - name: Verify lockfile is current
         run: cargo metadata --locked --format-version 1 >/dev/null
 
@@ -37,18 +37,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal \
-            --component rustfmt,clippy \
-            --target wasm32-unknown-unknown
+          rustup toolchain install 1.94.0 --profile minimal --component rustfmt
           rustc --version
           cargo --version
-
+      - name: Restore leptosfmt
+        id: leptosfmt-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/leptosfmt
+          key: ci-tool-${{ runner.os }}-leptosfmt-0.1.33
       - name: Install Leptos formatter
-        run: cargo +stable install leptosfmt --locked
-
+        if: steps.leptosfmt-cache.outputs.cache-hit != 'true'
+        run: cargo +stable install leptosfmt --version 0.1.33 --locked
       - name: Generate canonical formatting
         id: format
         run: |
@@ -67,7 +69,6 @@ jobs:
             tar -czf /tmp/formatted-rust.tar.gz -T /tmp/formatted-files.txt
             git diff --stat
           fi
-
       - name: Upload formatter output
         if: steps.format.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
@@ -75,36 +76,21 @@ jobs:
           name: formatted-rust
           path: /tmp/formatted-rust.tar.gz
           retention-days: 1
-
       - name: Verify formatting
         if: steps.format.outputs.changed == 'true'
         run: git diff --exit-code
 
-  check:
-    name: Check + Clippy
+  clippy:
+    name: Clippy (native)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal \
-            --component rustfmt,clippy \
-            --target wasm32-unknown-unknown
+          rustup toolchain install 1.94.0 --profile minimal --component clippy
           rustc --version
           cargo --version
-
-      - name: Workspace checks
-        run: |
-          cargo check --locked --workspace --all-targets
-          cargo check --locked -p live-search --features ssr --all-targets
-          cargo check --locked -p live-search --features ssr,otel --all-targets
-          cargo check --locked -p gateway-example --features otel --all-targets
-          cargo check --locked -p live-search --target wasm32-unknown-unknown --features hydrate --lib
-          cargo check --locked -p i18n-demo --features ssr --all-targets
-          cargo check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
-
       - name: Clippy
         run: |
           cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -113,21 +99,37 @@ jobs:
           cargo clippy --locked -p gateway-example --features otel --all-targets -- -D warnings
           cargo clippy --locked -p i18n-demo --features ssr --all-targets -- -D warnings
 
+  wasm-check:
+    name: WASM check (${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - live-search
+          - i18n-demo
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
+          rustc --version
+          cargo --version
+      - name: Check hydration build
+        run: cargo check --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
+
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal \
-            --component rustfmt,clippy \
-            --target wasm32-unknown-unknown
+          rustup toolchain install 1.94.0 --profile minimal
           rustc --version
           cargo --version
-
       - name: Run library tests
         run: cargo test --locked --workspace --lib
 
@@ -137,16 +139,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.0 --profile minimal
           rustc --version
           cargo --version
-
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked
-
       # Audit the exact dependency graph committed to the repository. CI must
       # not mutate Cargo.lock first: both targeted patched versions are already
       # present, and `cargo update -p` can legitimately rewrite unrelated
@@ -160,20 +159,24 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal \
-            --component rustfmt,clippy \
-            --target wasm32-unknown-unknown
+          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
           rustc --version
           cargo --version
-
+      - name: Restore Leptos build tools
+        id: leptos-tools-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/cargo-leptos
+            ~/.cargo/bin/stylance
+          key: ci-tools-${{ runner.os }}-cargo-leptos-0.3.7-stylance-0.8.4
       - name: Install build tools
+        if: steps.leptos-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo +stable install cargo-leptos --locked
-          cargo +stable install stylance-cli --locked
-
+          cargo +stable install cargo-leptos --version 0.3.7 --locked
+          cargo +stable install stylance-cli --version 0.8.4 --locked
       - name: Build live-search
         run: |
           cargo leptos build --release -p live-search
@@ -182,27 +185,34 @@ jobs:
           find target/site/pkg -maxdepth 1 -type f -name '*.js' -size +0c -print -quit | grep -q .
           find target/site/pkg -maxdepth 1 -type f -name '*.wasm' -size +0c -print -quit | grep -q .
           test -s target/site/pkg/live-search.css
-
       - name: Build i18n-demo
         run: cargo leptos build --release -p i18n-demo
 
   docker-build:
-    name: Docker images
+    name: Docker image (${{ matrix.image }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: live-search
+            dockerfile: live-search.Dockerfile
+            tag: rwf-live-search:test
+          - image: i18n-demo
+            dockerfile: i18n-demo.Dockerfile
+            tag: rwf-i18n-demo:test
+          - image: gateway
+            dockerfile: gateway.Dockerfile
+            tag: rwf-gateway:test
     env:
       DOCKER_BUILDKIT: "1"
     steps:
       - uses: actions/checkout@v7
-
       - name: Verify Docker
         run: docker version
-
-      - name: Build images
-        run: |
-          docker build -f live-search.Dockerfile -t rwf-live-search:test .
-          docker build -f i18n-demo.Dockerfile -t rwf-i18n-demo:test .
-          docker build -f gateway.Dockerfile -t rwf-gateway:test .
+      - name: Build image
+        run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
 
   e2e-tests:
     name: Browser + integration E2E
@@ -210,20 +220,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal \
-            --component rustfmt,clippy \
-            --target wasm32-unknown-unknown
+          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
           rustc --version
           cargo --version
-
+      - name: Restore E2E build tools
+        id: e2e-tools-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/wasm-bindgen
+            ~/.cargo/bin/stylance
+          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.126-stylance-0.8.4
       - name: Install E2E build tools
+        if: steps.e2e-tools-cache.outputs.cache-hit != 'true'
         run: |
           cargo +stable install wasm-bindgen-cli --version 0.2.126 --locked
-          cargo +stable install stylance-cli --locked
-
+          cargo +stable install stylance-cli --version 0.8.4 --locked
       - name: Configure Chrome
         shell: bash
         run: |
@@ -234,9 +248,7 @@ jobs:
           fi
           echo "CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
           "$CHROME_PATH" --version
-
       - name: Verify Docker
         run: docker version
-
       - name: Run E2E suite
         run: bash scripts/test-e2e.sh

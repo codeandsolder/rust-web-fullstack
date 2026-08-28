@@ -17,7 +17,6 @@ FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
     cargo install stylance-cli --locked && \
-    cargo install leptosfmt --locked && \
     cargo install sccache --locked
 ENV RUSTC_WRAPPER=sccache
 COPY --from=planner /build/recipe.json recipe.json
