@@ -236,17 +236,17 @@ skipping the coverage CI claims to provide.
 
 ## CI
 
-`.woodpecker.yml` checks workspace/feature matrices, Clippy, formatting,
-`cargo-audit`, Leptos production builds, the explicit Stylance bundle, Docker
-images, and browser E2E. The E2E job installs Chromium and Docker-backed jobs are
-wired to Docker-in-Docker.
+`.github/workflows/ci.yml` is the executable CI reference. It runs on pull
+requests and pushes to `main` and covers lockfile consistency, Rust and Leptos
+formatting, native Clippy feature combinations, WASM hydration checks, workspace
+library tests, `cargo audit`, production Leptos builds, all three Docker images,
+and real Chromium-backed E2E tests.
 
-The pipeline also checks the `live-search` `otel` feature. Keep CI feature
-coverage in sync whenever optional features are added or removed.
-
-One reproducibility caveat: `cargo install --locked` locks dependencies of the
-tool version selected at install time; it does not itself pin that top-level tool
-version. Pin CI tool versions if long-term reproducibility is important.
+The workflow pins Rust 1.94 and the helper tool versions it installs. Expensive
+Rust jobs reuse compiler state through `actions/cache`, while Docker builds use
+per-image BuildKit GitHub Actions layer caches. Keep CI feature coverage and cache
+keys in sync whenever supported features, the Rust toolchain, or build tooling
+change.
 
 ## Canonical development notes
 
@@ -261,6 +261,6 @@ important code entry points are:
 - `gateway/src/settings.rs`
 - `e2e-tests/src/common/live_search_env.rs`
 - `e2e-tests/tests/live_search_test.rs`
-- `.woodpecker.yml`
+- `.github/workflows/ci.yml`
 
 If documentation and implementation diverge, fix both in the same change.
