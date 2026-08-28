@@ -106,9 +106,7 @@ mod tests {
 
     #[test]
     fn serde_json_roundtrips_as_plain_uuid_string() -> Result<(), Box<dyn std::error::Error>> {
-        let id = UserId::try_from(Uuid::from_u128(
-            0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0,
-        ))?;
+        let id = UserId::try_from(Uuid::from_u128(0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0))?;
         let json = serde_json::to_string(&id)?;
         assert_eq!(json, "\"12345678-9abc-def0-1234-56789abcdef0\"");
 

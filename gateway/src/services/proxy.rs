@@ -55,6 +55,7 @@ impl ServiceModule for ProxyService {
 #[serde(deny_unknown_fields)]
 pub struct ProxyCheckQuery {
     /// IP to inspect. Defaults to Google's public DNS address for the demo.
+    #[param(value_type = Option<String>)]
     pub ip: Option<IpAddr>,
 }
 
@@ -98,9 +99,7 @@ async fn check_handler(
     State(state): State<GatewayState>,
     Query(params): Query<ProxyCheckQuery>,
 ) -> Result<Json<ProxyCheckResponse>, AppError> {
-    let parsed_ip = params
-        .ip
-        .unwrap_or(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+    let parsed_ip = params.ip.unwrap_or(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
 
     let base = state.proxy_upstream_url.trim_end_matches('/');
     let url = format!("{base}/{parsed_ip}/json/");

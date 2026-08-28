@@ -32,14 +32,14 @@ pub mod shutdown;
 pub mod otel;
 
 // ---------------------------------------------------------------------------
-// Hydrate entry point – called by the browser after the WASM module loads.
+// Hydrate entry point – called by Leptos HydrationScripts after WASM init.
 // ---------------------------------------------------------------------------
 
-/// Entry point for WASM hydration. Called by the browser after the module
+/// Entry point for WASM hydration. Called by Leptos after the module
 /// initialises, it hydrates the server-rendered HTML to make the page
 /// interactive (attaches event handlers, starts reactive system, etc.).
 #[cfg(feature = "hydrate")]
-#[wasm_bindgen::prelude::wasm_bindgen(start)]
+#[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
     console_error_panic_hook::set_once();
     leptos::mount::hydrate_body(app::App);

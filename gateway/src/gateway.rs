@@ -92,10 +92,6 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
 /// Returns an error if TTLs are invalid, the HTTP client cannot be built, or
 /// rate-limiter configuration fails.
 #[instrument(skip(modules, settings, db_pool))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "public compatibility constructor; a typed runtime config can replace it in a later API revision"
-)]
 pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
     mut settings: settings::Settings,
@@ -224,8 +220,7 @@ pub fn build_gateway_with_settings(
         .merge(crate::openapi::swagger_ui_router())
         .layer(general_governor);
 
-    let session_router =
-        crate::session::router::<GatewayState>().route_layer(csrf_middleware.clone());
+    let session_router = crate::session::router::<GatewayState>().route_layer(csrf_middleware);
 
     async fn csrf_token_handler(
         session: tower_sessions::Session,
@@ -262,9 +257,7 @@ pub fn build_gateway_with_settings(
         .with_state(state);
 
     #[cfg(feature = "otel")]
-    let app = app.layer(
-        axum_tracing_opentelemetry::middleware::OtelAxumLayer::default(),
-    );
+    let app = app.layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
 
     Ok(app)
 }
@@ -285,36 +278,32 @@ pub const REFRESH_BURST_SIZE: u32 = 5;
 )]
 #[instrument(skip(state))]
 pub async fn health_handler(State(state): State<GatewayState>) -> (StatusCode, Json<Value>) {
-    let services = join_all(
-        state
-            .modules
-            .iter()
-            .filter(|module| module.enabled())
-            .map(|module| async {
-                let status =
-                    match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
-                        Ok(Ok(())) => "healthy",
-                        Ok(Err(e)) => {
-                            tracing::warn!(name = module.name(), error = %e, "health check failed");
-                            "unhealthy"
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                name = module.name(),
-                                timeout_ms = HEALTH_CHECK_TIMEOUT.as_millis(),
-                                "health check timed out"
-                            );
-                            "unhealthy"
-                        }
-                    };
-                json!({
-                    "name": module.name(),
-                    "path": module.path(),
-                    "enabled": module.enabled(),
-                    "status": status,
-                })
-            }),
-    )
+    let services = join_all(state.modules.iter().filter(|module| module.enabled()).map(
+        |module| async {
+            let status =
+                match tokio::time::timeout(HEALTH_CHECK_TIMEOUT, module.health_check()).await {
+                    Ok(Ok(())) => "healthy",
+                    Ok(Err(e)) => {
+                        tracing::warn!(name = module.name(), error = %e, "health check failed");
+                        "unhealthy"
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            name = module.name(),
+                            timeout_ms = HEALTH_CHECK_TIMEOUT.as_millis(),
+                            "health check timed out"
+                        );
+                        "unhealthy"
+                    }
+                };
+            json!({
+                "name": module.name(),
+                "path": module.path(),
+                "enabled": module.enabled(),
+                "status": status,
+            })
+        },
+    ))
     .await;
 
     let database_status = match state.db_pool.as_ref() {
@@ -338,8 +327,8 @@ pub async fn health_handler(State(state): State<GatewayState>) -> (StatusCode, J
         None => "not_configured",
     };
 
-    let any_unhealthy = services.iter().any(|result| result["status"] != "healthy")
-        || database_status != "healthy";
+    let any_unhealthy =
+        services.iter().any(|result| result["status"] != "healthy") || database_status != "healthy";
     let http_status = if any_unhealthy {
         StatusCode::SERVICE_UNAVAILABLE
     } else {
@@ -398,7 +387,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_endpoint_returns_503_when_service_or_database_unhealthy() -> anyhow::Result<()> {
+    async fn health_endpoint_returns_503_when_service_or_database_unhealthy() -> anyhow::Result<()>
+    {
         let (tx, _rx) = tokio::sync::broadcast::channel(100);
         let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
         let modules: Vec<Arc<dyn crate::module::ServiceModule>> = vec![Arc::new(FailingService)];

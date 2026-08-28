@@ -4,6 +4,10 @@
 # across the whole workspace.
 FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS chef
 RUN cargo install cargo-chef --locked
+# Keep the dependency cook and final source build on the same rustup toolchain.
+# Otherwise the later COPY of rust-toolchain.toml can change Cargo's compiler
+# identity and invalidate the cooked dependency artifacts.
+ENV RUSTUP_TOOLCHAIN=1.94.0
 WORKDIR /build
 
 FROM chef AS planner
@@ -11,16 +15,13 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-RUN cargo install sccache --locked && \
-    cargo install leptosfmt --locked
-ENV RUSTC_WRAPPER=sccache
 COPY --from=planner /build/recipe.json recipe.json
-RUN --mount=type=cache,target=/var/cache/sccache \
-    cargo chef cook --recipe-path recipe.json --locked --release \
-      --bin gateway-example
+# Match the final package selection exactly so Cargo can reuse the cooked
+# library + binary dependency graph after the real sources are copied in.
+RUN cargo chef cook --recipe-path recipe.json --locked --release \
+      --package gateway-example
 COPY . .
-RUN --mount=type=cache,target=/var/cache/sccache \
-    cargo build --locked --release -p gateway-example
+RUN cargo build --locked --release -p gateway-example
 
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 RUN groupadd -r app && \

@@ -11,10 +11,12 @@
 pub mod app;
 pub mod i18n;
 pub mod styles;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ws_chat;
 
 // ---------------------------------------------------------------------------
-// Hydrate entry point – called by the browser after the WASM module loads.
+// Hydrate entry point – called by Leptos HydrationScripts after WASM init.
 // ---------------------------------------------------------------------------
 
 /// Entry point for WASM hydration.
@@ -22,7 +24,7 @@ pub mod ws_chat;
 /// Initialises the panic hook and hydrates the server-rendered HTML to make the
 /// page interactive (attaches event handlers, starts the reactive system).
 #[cfg(feature = "hydrate")]
-#[wasm_bindgen::prelude::wasm_bindgen(start)]
+#[wasm_bindgen::prelude::wasm_bindgen]
 pub fn hydrate() {
     console_error_panic_hook::set_once();
     leptos::mount::hydrate_body(app::App);

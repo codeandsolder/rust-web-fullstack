@@ -1,7 +1,7 @@
 //! OpenTelemetry initialisation for the `live-search` crate.
 //!
 //! Provides [`init_telemetry`] which builds a layered `tracing` subscriber
-//! with `EnvFilter`, `fmt`, and an OTel layer, and returns the
+//! with `EnvFilter`, `fmt`, and an `OTel` layer, and returns the
 //! [`SdkTracerProvider`] so the caller can `force_flush` / `shutdown` it
 //! gracefully.
 
@@ -32,7 +32,6 @@ pub enum TelemetryError {
 ///
 /// # Errors
 /// Returns [`TelemetryError`] when exporter/subscriber/filter setup fails.
-#[must_use]
 pub fn init_telemetry() -> Result<SdkTracerProvider, TelemetryError> {
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:4318".to_string());
@@ -58,17 +57,18 @@ pub fn init_telemetry() -> Result<SdkTracerProvider, TelemetryError> {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,live_search=debug,tower_http=debug"))
-        .add_directive("h2=warn".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?)
-        .add_directive("primp_h2=warn".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?)
-        .add_directive("http2=info".parse().map_err(
-            |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
-        )?);
+    let filter =
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,live_search=debug,tower_http=debug"))
+            .add_directive("h2=warn".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?)
+            .add_directive("primp_h2=warn".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?)
+            .add_directive("http2=info".parse().map_err(
+                |e: tracing_subscriber::filter::ParseError| TelemetryError::Filter(e.to_string()),
+            )?);
 
     let fmt_layer = tracing_subscriber::fmt::layer().with_target(true).compact();
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);

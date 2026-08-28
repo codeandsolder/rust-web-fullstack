@@ -1,7 +1,7 @@
 //! Graceful shutdown handling for the live-search server.
 //!
 //! Shutdown owns the same resources startup created: the cancellation token,
-//! background-task JoinSet, PostgreSQL pool, and optional telemetry provider.
+//! background-task `JoinSet`, `PostgreSQL` pool, and optional telemetry provider.
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use crate::db;
 /// close the database pool and telemetry provider.
 ///
 /// Order matters: background tasks are drained before the pool is closed so the
-/// PgListener can observe cancellation and release its connection cleanly.
+/// `PgListener` can observe cancellation and release its connection cleanly.
 ///
 /// # Panics
 /// Only panics if OS signal-handler installation fails.
@@ -115,9 +115,5 @@ pub async fn wait(
         }
     }
 
-    if let Some(error) = shutdown_error {
-        Err(error)
-    } else {
-        Ok(())
-    }
+    shutdown_error.map_or_else(|| Ok(()), Err)
 }

@@ -148,8 +148,8 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("failed to parse EdDSA public key PEM: {e}"))?,
         );
 
-        let admin_user_id_raw = std::env::var("ADMIN_USER_ID")
-            .unwrap_or_else(|_| DEFAULT_ADMIN_USER_ID.to_string());
+        let admin_user_id_raw =
+            std::env::var("ADMIN_USER_ID").unwrap_or_else(|_| DEFAULT_ADMIN_USER_ID.to_string());
         let admin_user_id = UserId::from_str(&admin_user_id_raw)
             .with_context(|| format!("invalid ADMIN_USER_ID {admin_user_id_raw:?}"))?;
 
@@ -233,6 +233,11 @@ impl Settings {
         })
     }
 
+    /// Load development settings using `ADMIN_PASSWORD` from the environment.
+    ///
+    /// # Errors
+    /// Returns an error if `ADMIN_PASSWORD` is missing or development key
+    /// generation/encoding fails.
     pub fn load_dev_keys_from_env() -> Result<Self, anyhow::Error> {
         let admin_password = std::env::var("ADMIN_PASSWORD")
             .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;

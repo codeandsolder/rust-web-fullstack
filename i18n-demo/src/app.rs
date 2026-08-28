@@ -46,7 +46,7 @@ fn set_document_lang(lang: &str) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn set_document_lang(_lang: &str) {}
+const fn set_document_lang(_lang: &str) {}
 
 #[expect(
     clippy::must_use_candidate,

@@ -171,7 +171,8 @@ mod server {
     }
 
     const PAYLOAD_LOG_PREVIEW_BYTES: usize = 200;
-    const RESYNC_BATCH_SIZE: i64 = 100;
+    const RESYNC_BATCH_SIZE: usize = 100;
+    const RESYNC_BATCH_SIZE_SQL: i64 = 100;
 
     fn broadcast_row(
         tx: &broadcast::Sender<SseEvent>,
@@ -183,20 +184,21 @@ mod server {
             url: Arc::from(row.url.as_str()),
             snippet: Arc::from(row.snippet.as_str()),
         };
-        match tx.send(event) {
-            Ok(receivers) => tracing::debug!(
+        if let Ok(receivers) = tx.send(event) {
+            tracing::debug!(
                 row_id = %row.id,
                 event_seq = row.event_seq,
                 receivers,
                 context,
                 "forwarded search result event"
-            ),
-            Err(_) => tracing::debug!(
+            );
+        } else {
+            tracing::debug!(
                 row_id = %row.id,
                 event_seq = row.event_seq,
                 context,
                 "search result event had no SSE receivers"
-            ),
+            );
         }
     }
 
@@ -270,7 +272,7 @@ mod server {
     ///
     /// LISTEN/NOTIFY is not durable delivery. After every successful connect,
     /// the listener pages through rows with `event_seq > last_seen_seq`, then
-    /// resumes the live stream. The monotonic sequence avoids UUIDv4 ordering
+    /// resumes the live stream. The monotonic sequence avoids `UUIDv4` ordering
     /// bugs, the pagination avoids the old 100-row truncation, and advancing
     /// the cursor avoids replaying the same rows on consecutive reconnects.
     #[tracing::instrument(skip_all)]
@@ -379,7 +381,7 @@ mod server {
                  LIMIT $2",
             )
             .bind(cursor)
-            .bind(RESYNC_BATCH_SIZE)
+            .bind(RESYNC_BATCH_SIZE_SQL)
             .fetch_all(pool)
             .await?;
 
@@ -390,7 +392,7 @@ mod server {
                 replayed_any = true;
             }
 
-            if batch_len < RESYNC_BATCH_SIZE as usize {
+            if batch_len < RESYNC_BATCH_SIZE {
                 break;
             }
         }

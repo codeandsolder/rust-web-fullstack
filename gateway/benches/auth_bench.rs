@@ -40,7 +40,9 @@ fn bench_sign_verify(c: &mut Criterion) {
     let decoding_key =
         DecodingKey::from_ed_pem(public_pem.as_bytes()).expect("valid Ed25519 public key PEM");
 
-    let bench_user_id = UserId::new(Uuid::from_u128(0xDEAD_BEEF_CAFE_BABE_0123_4567_89AB_CDEF));
+    let bench_user_id =
+        UserId::try_from(Uuid::from_u128(0xDEAD_BEEF_CAFE_BABE_0123_4567_89AB_CDEF))
+            .expect("benchmark user id is non-nil");
 
     c.bench_function("sign_verify", |b| {
         b.iter(|| {

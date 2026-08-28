@@ -13,9 +13,7 @@ use rwf_config::Config;
 async fn main() -> anyhow::Result<()> {
     let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
     if dev_keys && std::env::var("ALLOW_DEV_KEYS").ok().as_deref() != Some("1") {
-        anyhow::bail!(
-            "--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start"
-        );
+        anyhow::bail!("--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start");
     }
 
     // Non-secret runtime configuration has one canonical source: rwf-config.
