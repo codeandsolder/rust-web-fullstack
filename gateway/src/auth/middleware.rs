@@ -4,6 +4,10 @@
 //! prefix, validates the token using the configured `EdDSA` public key, and
 //! injects the parsed [`super::jwt::Claims`] into request extensions.
 //!
+//! Successful `/auth/logout` requests also flush the server-side session so
+//! the gateway's Bearer-token and cookie-session auth mechanisms cannot remain
+//! authenticated independently after the unified logout endpoint succeeds.
+//!
 //! # Usage
 //!
 //! ```ignore
@@ -13,6 +17,7 @@
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use tower_sessions::Session;
 
 use super::error::AppError;
 use super::jwt::validate_jwt;
@@ -22,8 +27,10 @@ use crate::gateway::GatewayState;
 /// header.
 ///
 /// On success the request is forwarded with [`super::jwt::Claims`] injected
-/// into the request extensions (accessible via `Extension<Claims>`).  On
-/// failure a 401 is returned.
+/// into the request extensions (accessible via `Extension<Claims>`). On a
+/// successful `/auth/logout` response, the current cookie session is flushed
+/// before returning success to the client. On authentication failure a 401 is
+/// returned; a session-store failure during logout is returned as a 500.
 ///
 /// Apply it with:
 /// ```ignore
@@ -31,9 +38,11 @@ use crate::gateway::GatewayState;
 /// ```
 pub async fn auth_middleware(
     State(state): State<GatewayState>,
+    session: Session,
     mut request: Request,
     next: Next,
 ) -> Response {
+    let is_logout = request.uri().path() == "/auth/logout";
     let auth_header = request
         .headers()
         .get("Authorization")
@@ -65,5 +74,13 @@ pub async fn auth_middleware(
     // extract them via `Extension<Claims>`.
     request.extensions_mut().insert(claims);
 
-    next.run(request).await
+    let response = next.run(request).await;
+    if is_logout
+        && response.status().is_success()
+        && let Err(error) = session.flush().await
+    {
+        return AppError::internal("session logout", error).into_response();
+    }
+
+    response
 }
