@@ -16,8 +16,10 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /build/recipe.json recipe.json
+# Match the final package selection exactly so Cargo can reuse the cooked
+# library + binary dependency graph after the real sources are copied in.
 RUN cargo chef cook --recipe-path recipe.json --locked --release \
-      --bin gateway-example
+      --package gateway-example
 COPY . .
 RUN cargo build --locked --release -p gateway-example
 
