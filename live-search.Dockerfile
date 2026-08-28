@@ -7,6 +7,9 @@
 #      then copy source and build the binary.
 FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS chef
 RUN cargo install cargo-chef --locked
+# Keep cargo-chef and the real build on one compiler identity even after the
+# repository's rust-toolchain.toml is copied into the workspace.
+ENV RUSTUP_TOOLCHAIN=1.94.0
 WORKDIR /build
 
 FROM chef AS planner
@@ -16,10 +19,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
-    cargo install stylance-cli --locked && \
-    cargo install sccache --locked
-ENV RUSTC_WRAPPER=sccache \
-    SCCACHE_DIR=/var/cache/sccache
+    cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
 # Stylance's import_style proc macro reads this file at compile time. cargo-chef
 # recipes contain Rust manifests/skeletons, not arbitrary CSS assets, so make
@@ -28,14 +28,12 @@ COPY live-search/src/styles.module.css /build/live-search/src/styles.module.css
 # Scope each dependency pre-build to live-search. Cooking the whole workspace
 # for wasm32 pulls native Tokio/Mio networking through unrelated members, and
 # Mio deliberately does not support wasm32 with its net feature enabled.
-RUN --mount=type=cache,target=/var/cache/sccache \
-    cargo chef cook --recipe-path recipe.json --locked --release \
+RUN cargo chef cook --recipe-path recipe.json --locked --release \
       --package live-search --target wasm32-unknown-unknown --no-default-features --features hydrate && \
     cargo chef cook --recipe-path recipe.json --locked --release \
       --package live-search --no-default-features --features ssr
 COPY . .
-RUN --mount=type=cache,target=/var/cache/sccache \
-    cargo build --locked --release -p live-search --lib \
+RUN cargo build --locked --release -p live-search --lib \
       --target wasm32-unknown-unknown --features hydrate && \
     mkdir -p /build/site/pkg && \
     wasm-bindgen \
@@ -45,8 +43,7 @@ RUN --mount=type=cache,target=/var/cache/sccache \
       /build/target/wasm32-unknown-unknown/release/live_search.wasm && \
     stylance live-search --output-file /build/site/pkg/live-search.css && \
     test -s /build/site/pkg/live-search.css
-RUN --mount=type=cache,target=/var/cache/sccache \
-    cargo build --locked --release -p live-search --features ssr
+RUN cargo build --locked --release -p live-search --features ssr
 
 FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
 RUN groupadd -r app && \
