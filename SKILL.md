@@ -375,7 +375,7 @@ docker compose --profile dev up --build \
 
 The maintained GitHub Actions workflow should cover:
 
-- workspace check and clippy,
+- native workspace/all-target Clippy plus supported native feature combinations,
 - SSR and hydration feature matrices,
 - the `otel` feature compilation,
 - Rust formatting and Leptos view formatting,
