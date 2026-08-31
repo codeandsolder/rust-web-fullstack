@@ -1,0 +1,193 @@
+name: Apply logout contract docs
+
+on:
+  push:
+    branches:
+      - docs/logout-session-contract
+    paths:
+      - .github/workflows/apply-logout-contract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: docs/logout-session-contract
+
+      - name: Apply exact documentation edits
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "gateway/src/auth/handlers.rs",
+              '''        (status = 200, description = "Logged out", body = LogoutResponse),
+                  (status = 401, description = "Invalid token"),
+              ),
+              tag = "auth",
+          )]
+          /// Revoke outstanding refresh tokens for the authenticated subject.
+          ///
+          /// # Errors
+          /// Returns an internal error if the refresh-token store is unavailable or the
+          /// revocation query fails.''',
+              '''        (status = 200, description = "Subject refresh tokens revoked and current cookie session flushed", body = LogoutResponse),
+                  (status = 401, description = "Invalid token"),
+              ),
+              tag = "auth",
+          )]
+          /// Revoke every outstanding refresh token for the authenticated subject.
+          ///
+          /// After this handler succeeds, auth middleware flushes the cookie session
+          /// attached to this request. Other cookie sessions for the same subject are
+          /// not enumerated or flushed, and already-issued access JWTs remain valid
+          /// until `exp` unless a separate access-token revocation mechanism is added.
+          ///
+          /// # Errors
+          /// Returns an internal error if the refresh-token store is unavailable or the
+          /// revocation query fails.'''
+          )
+
+          replace_once(
+              "gateway/src/session.rs",
+              '''//! Sessions are the secondary auth mechanism alongside JWTs — the gateway
+          //! issues an `HttpOnly`/`Secure`/`SameSite=Lax` session cookie on a successful
+          //! login, and the `/session/whoami` route reads it back. CSRF protection is
+          //! layered on top via `axum_tower_sessions_csrf`.''',
+              '''//! Sessions are the secondary auth mechanism alongside JWTs — the gateway
+          //! issues an `HttpOnly`/`Secure`/`SameSite=Lax` session cookie on a successful
+          //! login, and the `/session/whoami` route reads it back. CSRF protection is
+          //! layered on top via `axum_tower_sessions_csrf`.
+          //!
+          //! This example intentionally uses `MemoryStore`, so session records are
+          //! process-local: restarting the gateway invalidates them, and separate
+          //! gateway replicas do not share authenticated session state. A production
+          //! horizontally scaled deployment should provide a shared `SessionStore`
+          //! (or omit server-side sessions) rather than treating this demo store as
+          //! durable or cluster-wide.'''
+          )
+
+          replace_once(
+              "gateway/src/session.rs",
+              '''/// Build the session-manager layer used by the gateway router.
+          #[must_use]
+          pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStore> {''',
+              '''/// Build the process-local demo session-manager layer used by the gateway.
+          ///
+          /// `MemoryStore` is intentionally suitable for this single-process example,
+          /// not as shared session state for a horizontally scaled deployment.
+          #[must_use]
+          pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStore> {'''
+          )
+
+          replace_once(
+              "gateway/src/session.rs",
+              '''/// Flush the session, removing the cookie and all stored data. Do not report a
+          /// successful logout if the backing store failed to persist the invalidation.
+          async fn logout(session: Session) -> Result<axum::Json<serde_json::Value>, AppError> {''',
+              '''/// Flush only the current cookie session, removing its cookie and stored data.
+          ///
+          /// This route does not revoke refresh tokens or access JWTs. Use `/auth/logout`
+          /// when the caller needs the gateway's combined refresh-token/current-session
+          /// logout semantics. Do not report success if the backing store failed to
+          /// persist this session invalidation.
+          async fn logout(session: Session) -> Result<axum::Json<serde_json::Value>, AppError> {'''
+          )
+
+          replace_once(
+              "README.md",
+              '''Access JWTs are short-lived (15 minutes by default). Refresh tokens are random
+          opaque values; only their hashes are stored. Rotation is transactional, records
+          replacement lineage, and revokes the whole token family if an already-used token
+          is replayed. Logout revokes refresh state; an already-issued access JWT remains
+          valid until its `exp` unless you add a separate access-token revocation system.''',
+              '''Access JWTs are short-lived (15 minutes by default). Refresh tokens are random
+          opaque values; only their hashes are stored. Rotation is transactional, records
+          replacement lineage, and revokes the whole token family if an already-used token
+          is replayed. `/auth/logout` revokes every outstanding refresh token for the
+          authenticated subject and flushes only the cookie session attached to that
+          request; other cookie sessions for the same subject are not enumerated. An
+          already-issued access JWT remains valid until its `exp` unless you add a separate
+          access-token revocation system. `/session/logout` only flushes the current cookie
+          session and does not revoke refresh-token state.'''
+          )
+
+          replace_once(
+              "README.md",
+              '''The two auth styles are examples of different threat models, not an argument that
+          every endpoint should use both at once.''',
+              '''The session backend in this reference implementation is `tower_sessions::MemoryStore`.
+          Its state is process-local: a gateway restart invalidates sessions and multiple
+          gateway replicas do not share them. Use a shared session store for horizontally
+          scaled production deployments that need stable server-side sessions.
+
+          The two auth styles are examples of different threat models, not an argument that
+          every endpoint should use both at once.'''
+          )
+
+          replace_once(
+              "SKILL.md",
+              '''Access JWTs are short-lived. Logout/replay revokes refresh-token state; an
+          already-issued access token remains valid until its `exp` unless a separate
+          access-token revocation mechanism is added. Do not claim `jti` alone provides
+          revocation.''',
+              '''Access JWTs are short-lived. `/auth/logout` revokes every outstanding refresh
+          token for the authenticated subject and flushes only the cookie session attached
+          to that request; it does not enumerate other server-side sessions for the same
+          subject. Already-issued access tokens remain valid until their `exp` unless a
+          separate access-token revocation mechanism is added. `/session/logout` only
+          flushes the current cookie session and does not revoke refresh-token state. Do
+          not claim `jti` alone provides revocation.'''
+          )
+
+          replace_once(
+              "SKILL.md",
+              '''The development Compose profile explicitly disables the Secure cookie flag
+          because it serves plain localhost HTTP. Production defaults secure.''',
+              '''The gateway currently uses `tower_sessions::MemoryStore`. That is deliberate for
+          a compact single-process example, but its records are process-local: restarting
+          the gateway invalidates sessions, and horizontally scaled replicas do not share
+          authenticated session state. Production deployments that require stable sessions
+          across restarts or replicas need a shared `SessionStore` (or should omit this
+          secondary server-side auth mechanism).
+
+          Logout scope is intentionally explicit: `/auth/logout` performs subject-wide
+          refresh-token revocation plus a flush of the current request's cookie session.
+          It does not enumerate or flush other cookie sessions. `/session/logout` is
+          session-only. Existing access JWTs remain valid until expiry unless a separate
+          revocation mechanism is introduced.
+
+          The development Compose profile explicitly disables the Secure cookie flag
+          because it serves plain localhost HTTP. Production defaults secure.'''
+          )
+          PY
+
+      - name: Apply pinned Rust formatting
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal
+          cargo +1.94.0 fmt --all
+
+      - name: Commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md SKILL.md gateway/src/auth/handlers.rs gateway/src/session.rs e2e-tests/tests/gateway_logout_test.rs
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Document gateway logout and session scope"
+          git push
