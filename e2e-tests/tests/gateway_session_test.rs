@@ -41,6 +41,29 @@ fn response_cookie(response: &reqwest::Response, name: &str) -> anyhow::Result<S
     anyhow::bail!("response did not set the {name} cookie")
 }
 
+async fn rotate_refresh(
+    client: &reqwest::Client,
+    base: &str,
+    refresh_token: &str,
+) -> anyhow::Result<String> {
+    let rotation: serde_json::Value = client
+        .post(format!("{base}/auth/refresh"))
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .send()
+        .await
+        .context("failed to rotate refresh token")?
+        .error_for_status()
+        .context("refresh-token rotation failed")?
+        .json()
+        .await
+        .context("refresh-token rotation returned invalid JSON")?;
+
+    rotation["refresh_token"]
+        .as_str()
+        .context("refresh-token rotation did not return a replacement")
+        .map(str::to_owned)
+}
+
 #[tokio::test]
 async fn login_rotates_pre_auth_session_id_and_invalidates_the_old_cookie() -> anyhow::Result<()> {
     let gateway = get_gateway().await?;
@@ -116,7 +139,7 @@ async fn login_rotates_pre_auth_session_id_and_invalidates_the_old_cookie() -> a
 }
 
 #[tokio::test]
-async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> anyhow::Result<()> {
+async fn replaying_rotated_refresh_token_revokes_the_active_family() -> anyhow::Result<()> {
     let gateway = get_gateway().await?;
     let base = gateway.base_url();
     let client = test_client()?;
@@ -135,32 +158,23 @@ async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> any
         .json()
         .await
         .context("login response returned invalid JSON")?;
-    let old_refresh = login["refresh_token"]
+    let original_refresh = login["refresh_token"]
         .as_str()
         .context("login response did not contain a refresh token")?
         .to_owned();
 
-    let rotation: serde_json::Value = client
-        .post(format!("{base}/auth/refresh"))
-        .json(&serde_json::json!({ "refresh_token": old_refresh }))
-        .send()
-        .await
-        .context("failed to rotate refresh token")?
-        .error_for_status()
-        .context("refresh-token rotation failed")?
-        .json()
-        .await
-        .context("refresh-token rotation returned invalid JSON")?;
-    let new_refresh = rotation["refresh_token"]
-        .as_str()
-        .context("refresh-token rotation did not return a replacement")?
-        .to_owned();
+    // Rotate twice before replaying anything. The second successful rotation is
+    // an observable proof that the first replacement was genuinely usable; this
+    // prevents the final 401 assertion from false-greening on an already-dead
+    // replacement token.
+    let first_replacement = rotate_refresh(&client, &base, &original_refresh).await?;
+    let active_descendant = rotate_refresh(&client, &base, &first_replacement).await?;
 
-    // Reusing the exact old capability is the replay signal. It must fail and
-    // revoke every still-active credential in that token family.
+    // Reusing the exact original capability is the replay signal. It must fail
+    // and revoke every still-active descendant in that token family.
     let replay = client
         .post(format!("{base}/auth/refresh"))
-        .json(&serde_json::json!({ "refresh_token": old_refresh }))
+        .json(&serde_json::json!({ "refresh_token": original_refresh }))
         .send()
         .await
         .context("failed to replay rotated refresh token")?;
@@ -170,16 +184,16 @@ async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> any
         replay.status()
     );
 
-    let replacement_after_replay = client
+    let descendant_after_replay = client
         .post(format!("{base}/auth/refresh"))
-        .json(&serde_json::json!({ "refresh_token": new_refresh }))
+        .json(&serde_json::json!({ "refresh_token": active_descendant }))
         .send()
         .await
-        .context("failed to probe replacement after replay")?;
+        .context("failed to probe active descendant after replay")?;
     ensure!(
-        replacement_after_replay.status() == reqwest::StatusCode::UNAUTHORIZED,
-        "refresh-token replay did not revoke the replacement family: {}",
-        replacement_after_replay.status()
+        descendant_after_replay.status() == reqwest::StatusCode::UNAUTHORIZED,
+        "refresh-token replay did not revoke the active family: {}",
+        descendant_after_replay.status()
     );
 
     Ok(())
