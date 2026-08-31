@@ -3,12 +3,18 @@
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use e2e_tests::common::GatewayEnv;
+use e2e_tests::common::{GatewayEnv, SharedServer};
 use reqwest::header::{COOKIE, SET_COOKIE};
 
 const TEST_PASSWORD: &str = "synthetic-gateway-test-password";
 const TEST_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 const SESSION_COOKIE: &str = "rwf_session";
+
+static GATEWAY: SharedServer<GatewayEnv> = SharedServer::new();
+
+async fn get_gateway() -> anyhow::Result<&'static GatewayEnv> {
+    GATEWAY.get(|| async { GatewayEnv::start().await }).await
+}
 
 fn test_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -37,7 +43,7 @@ fn response_cookie(response: &reqwest::Response, name: &str) -> anyhow::Result<S
 
 #[tokio::test]
 async fn login_rotates_pre_auth_session_id_and_invalidates_the_old_cookie() -> anyhow::Result<()> {
-    let gateway = GatewayEnv::start().await?;
+    let gateway = get_gateway().await?;
     let base = gateway.base_url();
     let client = test_client()?;
 
@@ -106,13 +112,12 @@ async fn login_rotates_pre_auth_session_id_and_invalidates_the_old_cookie() -> a
         "rotated session did not retain authenticated state: {active_whoami}"
     );
 
-    gateway.shutdown().await;
     Ok(())
 }
 
 #[tokio::test]
 async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> anyhow::Result<()> {
-    let gateway = GatewayEnv::start().await?;
+    let gateway = get_gateway().await?;
     let base = gateway.base_url();
     let client = test_client()?;
 
@@ -177,6 +182,5 @@ async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> any
         replacement_after_replay.status()
     );
 
-    gateway.shutdown().await;
     Ok(())
 }
