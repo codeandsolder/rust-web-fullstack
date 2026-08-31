@@ -109,3 +109,74 @@ async fn login_rotates_pre_auth_session_id_and_invalidates_the_old_cookie() -> a
     gateway.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn replaying_rotated_refresh_token_revokes_the_replacement_family() -> anyhow::Result<()> {
+    let gateway = GatewayEnv::start().await?;
+    let base = gateway.base_url();
+    let client = test_client()?;
+
+    let login: serde_json::Value = client
+        .post(format!("{base}/auth/login"))
+        .json(&serde_json::json!({
+            "user_id": TEST_USER_ID,
+            "password": TEST_PASSWORD,
+        }))
+        .send()
+        .await
+        .context("failed to login before refresh rotation")?
+        .error_for_status()
+        .context("login before refresh rotation failed")?
+        .json()
+        .await
+        .context("login response returned invalid JSON")?;
+    let old_refresh = login["refresh_token"]
+        .as_str()
+        .context("login response did not contain a refresh token")?
+        .to_owned();
+
+    let rotation: serde_json::Value = client
+        .post(format!("{base}/auth/refresh"))
+        .json(&serde_json::json!({ "refresh_token": old_refresh }))
+        .send()
+        .await
+        .context("failed to rotate refresh token")?
+        .error_for_status()
+        .context("refresh-token rotation failed")?
+        .json()
+        .await
+        .context("refresh-token rotation returned invalid JSON")?;
+    let new_refresh = rotation["refresh_token"]
+        .as_str()
+        .context("refresh-token rotation did not return a replacement")?
+        .to_owned();
+
+    // Reusing the exact old capability is the replay signal. It must fail and
+    // revoke every still-active credential in that token family.
+    let replay = client
+        .post(format!("{base}/auth/refresh"))
+        .json(&serde_json::json!({ "refresh_token": old_refresh }))
+        .send()
+        .await
+        .context("failed to replay rotated refresh token")?;
+    ensure!(
+        replay.status() == reqwest::StatusCode::UNAUTHORIZED,
+        "replayed refresh token was accepted: {}",
+        replay.status()
+    );
+
+    let replacement_after_replay = client
+        .post(format!("{base}/auth/refresh"))
+        .json(&serde_json::json!({ "refresh_token": new_refresh }))
+        .send()
+        .await
+        .context("failed to probe replacement after replay")?;
+    ensure!(
+        replacement_after_replay.status() == reqwest::StatusCode::UNAUTHORIZED,
+        "refresh-token replay did not revoke the replacement family: {}",
+        replacement_after_replay.status()
+    );
+
+    gateway.shutdown().await;
+    Ok(())
+}
