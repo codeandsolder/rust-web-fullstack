@@ -177,7 +177,7 @@ jobs:
 
       - name: Apply pinned Rust formatting
         run: |
-          rustup toolchain install 1.94.0 --profile minimal
+          rustup toolchain install 1.94.0 --profile minimal --component rustfmt
           cargo +1.94.0 fmt --all
 
       - name: Commit result
