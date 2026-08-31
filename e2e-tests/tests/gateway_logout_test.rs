@@ -38,14 +38,11 @@ fn session_cookie(response: &reqwest::Response) -> Result<String> {
         .context("login response did not set the gateway session cookie")
 }
 
-/// Login establishes both auth mechanisms, so `/auth/logout` must tear down
-/// both the refresh-token family and the server-side cookie session.
-#[tokio::test]
-async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
-    let gateway = get_gateway().await?;
-    let client = test_client()?;
-
-    let login_response = client
+async fn login(
+    client: &reqwest::Client,
+    gateway: &GatewayEnv,
+) -> Result<(String, String, String)> {
+    let response = client
         .post(format!("{}/auth/login", gateway.base_url()))
         .json(&serde_json::json!({
             "user_id": TEST_USER_ID,
@@ -54,10 +51,10 @@ async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
         .send()
         .await
         .context("failed to log in")?;
-    assert_eq!(login_response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
 
-    let cookie = session_cookie(&login_response)?;
-    let login: serde_json::Value = login_response
+    let cookie = session_cookie(&response)?;
+    let login: serde_json::Value = response
         .json()
         .await
         .context("login response is not valid JSON")?;
@@ -72,19 +69,60 @@ async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
         .context("login response is missing refresh token")?
         .to_owned();
 
-    let whoami_before = client
+    Ok((cookie, access_token, refresh_token))
+}
+
+async fn whoami(client: &reqwest::Client, gateway: &GatewayEnv, cookie: &str) -> Result<serde_json::Value> {
+    client
         .get(format!("{}/session/whoami", gateway.base_url()))
-        .header(COOKIE, &cookie)
+        .header(COOKIE, cookie)
         .send()
         .await
-        .context("failed to read session before logout")?;
-    assert_eq!(whoami_before.status(), reqwest::StatusCode::OK);
-    let whoami_before: serde_json::Value = whoami_before
+        .context("failed to read session")?
+        .error_for_status()
+        .context("session whoami failed")?
         .json()
         .await
-        .context("pre-logout whoami response is not valid JSON")?;
+        .context("whoami response is not valid JSON")
+}
+
+async fn assert_refresh_revoked(
+    client: &reqwest::Client,
+    gateway: &GatewayEnv,
+    refresh_token: &str,
+) -> Result<()> {
+    let response = client
+        .post(format!("{}/auth/refresh", gateway.base_url()))
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .send()
+        .await
+        .context("failed to probe revoked refresh token")?;
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+/// `/auth/logout` revokes every outstanding refresh token for the authenticated
+/// subject, but it can only flush the cookie session attached to this request.
+#[tokio::test]
+async fn auth_logout_revokes_subject_refresh_state_and_flushes_only_current_session() -> Result<()> {
+    let gateway = get_gateway().await?;
+    let client = test_client()?;
+
+    // Establish two independent browser-like sessions for the same subject.
+    let (cookie_a, access_a, refresh_a) = login(&client, gateway).await?;
+    let (cookie_b, _access_b, refresh_b) = login(&client, gateway).await?;
+    assert_ne!(cookie_a, cookie_b, "independent logins reused a session ID");
+
+    let whoami_a_before = whoami(&client, gateway, &cookie_a).await?;
+    let whoami_b_before = whoami(&client, gateway, &cookie_b).await?;
     assert_eq!(
-        whoami_before
+        whoami_a_before
+            .get("user_id")
+            .and_then(serde_json::Value::as_str),
+        Some(TEST_USER_ID)
+    );
+    assert_eq!(
+        whoami_b_before
             .get("user_id")
             .and_then(serde_json::Value::as_str),
         Some(TEST_USER_ID)
@@ -92,7 +130,7 @@ async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
 
     let csrf_response = client
         .get(format!("{}/auth/csrf", gateway.base_url()))
-        .header(COOKIE, &cookie)
+        .header(COOKIE, &cookie_a)
         .send()
         .await
         .context("failed to bootstrap CSRF token")?;
@@ -112,42 +150,39 @@ async fn auth_logout_revokes_refresh_state_and_flushes_session() -> Result<()> {
 
     let logout_response = client
         .post(format!("{}/auth/logout", gateway.base_url()))
-        .header(COOKIE, &cookie)
-        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .header(COOKIE, &cookie_a)
+        .header(AUTHORIZATION, format!("Bearer {access_a}"))
         .header(csrf_header, csrf_token)
         .send()
         .await
         .context("failed to call unified logout")?;
     assert_eq!(logout_response.status(), reqwest::StatusCode::OK);
 
-    // Sending the old cookie explicitly must no longer recover session state;
-    // this verifies server-side invalidation rather than relying on a browser
-    // honoring the deletion Set-Cookie response.
-    let whoami_after = client
-        .get(format!("{}/session/whoami", gateway.base_url()))
-        .header(COOKIE, &cookie)
-        .send()
-        .await
-        .context("failed to read session after logout")?;
-    assert_eq!(whoami_after.status(), reqwest::StatusCode::OK);
-    let whoami_after: serde_json::Value = whoami_after
-        .json()
-        .await
-        .context("post-logout whoami response is not valid JSON")?;
+    // The exact cookie used for logout must be dead server-side, not merely
+    // deleted by Set-Cookie on a cooperative browser.
+    let whoami_a_after = whoami(&client, gateway, &cookie_a).await?;
     assert!(
-        whoami_after
+        whoami_a_after
             .get("user_id")
             .is_some_and(serde_json::Value::is_null),
-        "session remained authenticated after /auth/logout: {whoami_after}"
+        "logout session remained authenticated: {whoami_a_after}"
     );
 
-    let refresh_response = client
-        .post(format!("{}/auth/refresh", gateway.base_url()))
-        .json(&serde_json::json!({ "refresh_token": refresh_token }))
-        .send()
-        .await
-        .context("failed to probe revoked refresh token")?;
-    assert_eq!(refresh_response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    // The handler cannot enumerate other MemoryStore sessions for the subject,
+    // so a different cookie session remains authenticated. This is deliberate
+    // current behavior and is distinct from refresh-token revocation scope.
+    let whoami_b_after = whoami(&client, gateway, &cookie_b).await?;
+    assert_eq!(
+        whoami_b_after
+            .get("user_id")
+            .and_then(serde_json::Value::as_str),
+        Some(TEST_USER_ID),
+        "logout unexpectedly flushed another cookie session"
+    );
+
+    // Refresh revocation is subject-wide, so credentials from both logins die.
+    assert_refresh_revoked(&client, gateway, &refresh_a).await?;
+    assert_refresh_revoked(&client, gateway, &refresh_b).await?;
 
     Ok(())
 }
