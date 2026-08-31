@@ -38,10 +38,7 @@ fn session_cookie(response: &reqwest::Response) -> Result<String> {
         .context("login response did not set the gateway session cookie")
 }
 
-async fn login(
-    client: &reqwest::Client,
-    gateway: &GatewayEnv,
-) -> Result<(String, String, String)> {
+async fn login(client: &reqwest::Client, gateway: &GatewayEnv) -> Result<(String, String, String)> {
     let response = client
         .post(format!("{}/auth/login", gateway.base_url()))
         .json(&serde_json::json!({
@@ -72,7 +69,11 @@ async fn login(
     Ok((cookie, access_token, refresh_token))
 }
 
-async fn whoami(client: &reqwest::Client, gateway: &GatewayEnv, cookie: &str) -> Result<serde_json::Value> {
+async fn whoami(
+    client: &reqwest::Client,
+    gateway: &GatewayEnv,
+    cookie: &str,
+) -> Result<serde_json::Value> {
     client
         .get(format!("{}/session/whoami", gateway.base_url()))
         .header(COOKIE, cookie)
@@ -104,7 +105,8 @@ async fn assert_refresh_revoked(
 /// `/auth/logout` revokes every outstanding refresh token for the authenticated
 /// subject, but it can only flush the cookie session attached to this request.
 #[tokio::test]
-async fn auth_logout_revokes_subject_refresh_state_and_flushes_only_current_session() -> Result<()> {
+async fn auth_logout_revokes_subject_refresh_state_and_flushes_only_current_session() -> Result<()>
+{
     let gateway = get_gateway().await?;
     let client = test_client()?;
 

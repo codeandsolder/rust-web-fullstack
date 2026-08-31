@@ -203,10 +203,13 @@ A production application should replace this demo pair with a real user store
 and password hashing (for example Argon2id), not expand the shared-password
 pattern.
 
-Access JWTs are short-lived. Logout/replay revokes refresh-token state; an
-already-issued access token remains valid until its `exp` unless a separate
-access-token revocation mechanism is added. Do not claim `jti` alone provides
-revocation.
+Access JWTs are short-lived. `/auth/logout` revokes every outstanding refresh
+token for the authenticated subject and flushes only the cookie session attached
+to that request; it does not enumerate other server-side sessions for the same
+subject. Already-issued access tokens remain valid until their `exp` unless a
+separate access-token revocation mechanism is added. `/session/logout` only
+flushes the current cookie session and does not revoke refresh-token state. Do
+not claim `jti` alone provides revocation.
 
 ### 13. Refresh-token rotation is transactional
 
@@ -295,6 +298,19 @@ threat models distinct:
 - login/refresh bootstrap routes are intentionally not synchronizer-token
   protected because they establish/use other credentials,
 - CSP is set without overwriting an existing policy.
+
+The gateway currently uses `tower_sessions::MemoryStore`. That is deliberate for
+a compact single-process example, but its records are process-local: restarting
+the gateway invalidates sessions, and horizontally scaled replicas do not share
+authenticated session state. Production deployments that require stable sessions
+across restarts or replicas need a shared `SessionStore` (or should omit this
+secondary server-side auth mechanism).
+
+Logout scope is intentionally explicit: `/auth/logout` performs subject-wide
+refresh-token revocation plus a flush of the current request's cookie session.
+It does not enumerate or flush other cookie sessions. `/session/logout` is
+session-only. Existing access JWTs remain valid until expiry unless a separate
+revocation mechanism is introduced.
 
 The development Compose profile explicitly disables the Secure cookie flag
 because it serves plain localhost HTTP. Production defaults secure.
