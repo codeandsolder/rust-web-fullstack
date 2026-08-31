@@ -167,6 +167,11 @@ pub async fn login_handler(
     // still compensate the refresh-token insert rather than returning a valid
     // refresh credential for a login whose authenticated session was not saved.
     if let Err(error) = session.save().await {
+        // The outer SessionManagerLayer will still inspect this Session after the
+        // handler returns. Remove authenticated in-memory state first so a
+        // transient retry by that middleware cannot turn this 500 response into
+        // a successfully persisted authenticated session/cookie.
+        session.clear().await;
         remove_unissued_refresh_token(pool, refresh_jti).await;
         return Err(AppError::internal("session save", error));
     }
