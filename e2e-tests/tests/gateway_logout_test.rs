@@ -115,16 +115,16 @@ async fn auth_logout_revokes_subject_refresh_state_and_flushes_only_current_sess
     let (cookie_b, _access_b, refresh_b) = login(&client, gateway).await?;
     assert_ne!(cookie_a, cookie_b, "independent logins reused a session ID");
 
-    let whoami_a_before = whoami(&client, gateway, &cookie_a).await?;
-    let whoami_b_before = whoami(&client, gateway, &cookie_b).await?;
+    let current_session_before = whoami(&client, gateway, &cookie_a).await?;
+    let other_session_before = whoami(&client, gateway, &cookie_b).await?;
     assert_eq!(
-        whoami_a_before
+        current_session_before
             .get("user_id")
             .and_then(serde_json::Value::as_str),
         Some(TEST_USER_ID)
     );
     assert_eq!(
-        whoami_b_before
+        other_session_before
             .get("user_id")
             .and_then(serde_json::Value::as_str),
         Some(TEST_USER_ID)
@@ -162,20 +162,20 @@ async fn auth_logout_revokes_subject_refresh_state_and_flushes_only_current_sess
 
     // The exact cookie used for logout must be dead server-side, not merely
     // deleted by Set-Cookie on a cooperative browser.
-    let whoami_a_after = whoami(&client, gateway, &cookie_a).await?;
+    let current_session_after = whoami(&client, gateway, &cookie_a).await?;
     assert!(
-        whoami_a_after
+        current_session_after
             .get("user_id")
             .is_some_and(serde_json::Value::is_null),
-        "logout session remained authenticated: {whoami_a_after}"
+        "logout session remained authenticated: {current_session_after}"
     );
 
     // The handler cannot enumerate other MemoryStore sessions for the subject,
     // so a different cookie session remains authenticated. This is deliberate
     // current behavior and is distinct from refresh-token revocation scope.
-    let whoami_b_after = whoami(&client, gateway, &cookie_b).await?;
+    let other_session_after = whoami(&client, gateway, &cookie_b).await?;
     assert_eq!(
-        whoami_b_after
+        other_session_after
             .get("user_id")
             .and_then(serde_json::Value::as_str),
         Some(TEST_USER_ID),
