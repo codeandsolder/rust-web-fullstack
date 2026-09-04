@@ -4,6 +4,13 @@
 //! issues an `HttpOnly`/`Secure`/`SameSite=Lax` session cookie on a successful
 //! login, and the `/session/whoami` route reads it back. CSRF protection is
 //! layered on top via `axum_tower_sessions_csrf`.
+//!
+//! This example intentionally uses `MemoryStore`, so session records are
+//! process-local: restarting the gateway invalidates them, and separate
+//! gateway replicas do not share authenticated session state. A production
+//! horizontally scaled deployment should provide a shared `SessionStore`
+//! (or omit server-side sessions) rather than treating this demo store as
+//! durable or cluster-wide.
 
 use axum::Router;
 use serde::{Deserialize, Serialize};
@@ -25,7 +32,10 @@ pub struct SessionUser {
     pub user_id: String,
 }
 
-/// Build the session-manager layer used by the gateway router.
+/// Build the process-local demo session-manager layer used by the gateway.
+///
+/// `MemoryStore` is intentionally suitable for this single-process example,
+/// not as shared session state for a horizontally scaled deployment.
 #[must_use]
 pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStore> {
     SessionManagerLayer::new(MemoryStore::default())
@@ -60,8 +70,12 @@ async fn whoami(session: Session) -> Result<axum::Json<serde_json::Value>, AppEr
     })
 }
 
-/// Flush the session, removing the cookie and all stored data. Do not report a
-/// successful logout if the backing store failed to persist the invalidation.
+/// Flush only the current cookie session, removing its cookie and stored data.
+///
+/// This route does not revoke refresh tokens or access JWTs. Use `/auth/logout`
+/// when the caller needs the gateway's combined refresh-token/current-session
+/// logout semantics. Do not report success if the backing store failed to
+/// persist this session invalidation.
 async fn logout(session: Session) -> Result<axum::Json<serde_json::Value>, AppError> {
     session
         .flush()

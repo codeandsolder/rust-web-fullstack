@@ -252,12 +252,17 @@ pub async fn refresh_handler(
     post,
     path = "/auth/logout",
     responses(
-        (status = 200, description = "Logged out", body = LogoutResponse),
+        (status = 200, description = "Subject refresh tokens revoked and current cookie session flushed", body = LogoutResponse),
         (status = 401, description = "Invalid token"),
     ),
     tag = "auth",
 )]
-/// Revoke outstanding refresh tokens for the authenticated subject.
+/// Revoke every outstanding refresh token for the authenticated subject.
+///
+/// After this handler succeeds, auth middleware flushes the cookie session
+/// attached to this request. Other cookie sessions for the same subject are
+/// not enumerated or flushed, and already-issued access JWTs remain valid
+/// until `exp` unless a separate access-token revocation mechanism is added.
 ///
 /// # Errors
 /// Returns an internal error if the refresh-token store is unavailable or the

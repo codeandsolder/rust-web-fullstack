@@ -64,8 +64,12 @@ store and password hashing.
 Access JWTs are short-lived (15 minutes by default). Refresh tokens are random
 opaque values; only their hashes are stored. Rotation is transactional, records
 replacement lineage, and revokes the whole token family if an already-used token
-is replayed. Logout revokes refresh state; an already-issued access JWT remains
-valid until its `exp` unless you add a separate access-token revocation system.
+is replayed. `/auth/logout` revokes every outstanding refresh token for the
+authenticated subject and flushes only the cookie session attached to that
+request; other cookie sessions for the same subject are not enumerated. An
+already-issued access JWT remains valid until its `exp` unless you add a separate
+access-token revocation system. `/session/logout` only flushes the current cookie
+session and does not revoke refresh-token state.
 
 ## Configuration
 
@@ -149,6 +153,11 @@ The gateway demonstrates a cookie session alongside Bearer JWTs:
 - mutating session routes are CSRF protected,
 - session-store failures return 5xx instead of HTTP 200 error payloads,
 - CSP is added without overwriting an existing policy.
+
+The session backend in this reference implementation is `tower_sessions::MemoryStore`.
+Its state is process-local: a gateway restart invalidates sessions and multiple
+gateway replicas do not share them. Use a shared session store for horizontally
+scaled production deployments that need stable server-side sessions.
 
 The two auth styles are examples of different threat models, not an argument that
 every endpoint should use both at once.
