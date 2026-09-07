@@ -5,6 +5,15 @@
 //! - WASM hydration client
 //! - `PostgreSQL` full-text search with LISTEN/NOTIFY SSE streaming
 
+// `TableRow` 0.19/derive 0.15 generates async trait methods whose bodies are
+// immediately ready. Clippy 1.98's `unused_async_trait_impl` fires in that
+// generated code. Keep this scoped to the module that invokes the derive, and
+// make it an expectation so a future macro upgrade that fixes the expansion
+// turns this suppression stale and CI asks us to remove it.
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "leptos-struct-table TableRow derive generates immediately-ready async trait methods"
+)]
 pub mod app;
 pub mod db;
 pub mod events;
