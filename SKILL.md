@@ -22,8 +22,12 @@ fix this document in the same change.
 | `migrations/` | the single SQLx migration history for the shared database |
 | `.github/workflows/ci.yml` | format/check/clippy/build/Docker/browser CI |
 
-The workspace pins Rust 1.94 as its supported toolchain/MSRV. Newer stable Rust
-versions do not by themselves justify raising that floor.
+The workspace uses Edition 2024 with resolver 3. Rust **1.94** remains the
+compatibility floor/MSRV and is tested on patched **1.94.1**. Normal development,
+current-stable CI, and production builds use patched **Rust 1.98.1**. Newer
+stable Rust versions do not by themselves justify raising the MSRV; the oldest
+supported compiler and the preferred compiler for shipping builds are separate
+policies.
 
 ## Build and test
 
@@ -408,15 +412,23 @@ docker compose --profile dev up --build \
 
 The maintained GitHub Actions workflow should cover:
 
-- native workspace/all-target Clippy plus supported native feature combinations,
+- a dedicated patched-MS​​RV lane for Rust 1.94.1, separate from current-stable validation,
+- native workspace/all-target Clippy plus supported native feature combinations on Rust 1.98.1,
 - SSR and hydration feature matrices,
+- a real `wasm32-unknown-unknown` link on current stable, not only `cargo check`,
 - the `otel` feature compilation,
 - Rust formatting and Leptos view formatting,
 - dependency audit,
 - Leptos production builds,
-- all Dockerfile builds using a Docker daemon,
+- all Dockerfile builds using a Docker daemon and the patched current-stable compiler,
 - browser E2E with an installed Chromium binary,
 - a runtime SQLx OTel span-parenting check against real PostgreSQL.
+
+Cargo 1.97+'s `CARGO_BUILD_WARNINGS=deny` is preferred over injecting
+`RUSTFLAGS=-Dwarnings` when the goal is to make local-package lint warnings fail
+CI without changing compiler cache identities. Keep in mind that linker output is
+platform-dependent; investigate newly exposed linker messages rather than
+blindly suppressing them.
 
 `--locked` protects the committed dependency graph. CI-installed helper tools
 must also pin their top-level versions so a crates.io release cannot silently
