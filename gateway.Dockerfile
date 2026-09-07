@@ -2,12 +2,12 @@
 #
 # Multi-stage build with cargo-chef for reproducible dependency caching
 # across the whole workspace.
-FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS chef
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS chef
+# The official 1.98 image carries 1.98.0; install the patched stable compiler
+# explicitly so production builds do not stay on a known superseded point release.
+RUN rustup toolchain install 1.98.1 --profile minimal
+ENV RUSTUP_TOOLCHAIN=1.98.1
 RUN cargo install cargo-chef --locked
-# Keep the dependency cook and final source build on the same rustup toolchain.
-# Otherwise the later COPY of rust-toolchain.toml can change Cargo's compiler
-# identity and invalidate the cooked dependency artifacts.
-ENV RUSTUP_TOOLCHAIN=1.94.0
 WORKDIR /build
 
 FROM chef AS planner
