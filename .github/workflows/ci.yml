@@ -18,6 +18,9 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # Cargo 1.97+ can make build-script/linker warnings fatal without changing
+  # RUSTFLAGS and invalidating otherwise reusable compiler artifacts.
+  CARGO_BUILD_WARNINGS: deny
 
 jobs:
   lockfile:
@@ -26,10 +29,31 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Install current Rust toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal
       - name: Verify lockfile is current
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        run: cargo +1.98.1 metadata --locked --format-version 1 >/dev/null
+
+  msrv:
+    name: MSRV (Rust 1.94.1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Rust 1.94 remains the compatibility contract. Keep this lane separate
+    # from the current-stable lane so new language/library features cannot
+    # silently raise the floor.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install patched MSRV toolchain
+        run: |
+          rustup toolchain install 1.94.1 --profile minimal --target wasm32-unknown-unknown
+          rustc +1.94.1 --version
+          cargo +1.94.1 --version
+      - name: Check native workspace at MSRV
+        run: cargo +1.94.1 check --locked --workspace --all-targets
+      - name: Check hydration crates at MSRV
+        run: |
+          cargo +1.94.1 check --locked -p live-search --target wasm32-unknown-unknown --features hydrate --lib
+          cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
 
   format:
     name: Format
@@ -37,29 +61,29 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - name: Install pinned Rust toolchain
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --component rustfmt
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Restore leptosfmt
         id: leptosfmt-cache
         uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/leptosfmt
-          key: ci-tool-${{ runner.os }}-leptosfmt-0.1.33
+          key: ci-tool-${{ runner.os }}-leptosfmt-0.1.33-rust-1.98.1
       - name: Install Leptos formatter
         if: steps.leptosfmt-cache.outputs.cache-hit != 'true'
-        run: cargo +stable install leptosfmt --version 0.1.33 --locked
+        run: cargo +1.98.1 install leptosfmt --version 0.1.33 --locked
       - name: Generate canonical formatting
         id: format
         run: |
-          cargo fmt --all
+          cargo +1.98.1 fmt --all
           while IFS= read -r -d '' f; do
             leptosfmt --rustfmt --stdin --quiet < "$f" > "$f.tmp"
             mv "$f.tmp" "$f"
           done < <(find live-search i18n-demo -name '*.rs' -print0)
-          cargo fmt --all
+          cargo +1.98.1 fmt --all
 
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -84,18 +108,15 @@ jobs:
     name: Clippy (native)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # Unlike sccache, Cargo's target directory can preserve Clippy metadata and
-    # rustc incremental state. The repository pins rustc, so this is safe to
-    # reuse across successive commits to the same PR.
     env:
       CARGO_INCREMENTAL: "1"
     steps:
       - uses: actions/checkout@v7
-      - name: Install pinned Rust toolchain
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --component clippy
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal --component clippy
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Restore Clippy build cache
         uses: actions/cache@v5
         with:
@@ -105,25 +126,25 @@ jobs:
             target/debug/deps
             target/debug/examples
             target/debug/incremental
-          key: clippy-target-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          key: clippy-target-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
-            clippy-target-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock') }}-
-            clippy-target-v1-${{ runner.os }}-rust-1.94.0-
+            clippy-target-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-
+            clippy-target-v2-${{ runner.os }}-rust-1.98.1-
       - name: Clippy
         run: |
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo clippy --locked -p live-search --features ssr --all-targets -- -D warnings
-          cargo clippy --locked -p live-search --features ssr,otel --all-targets -- -D warnings
-          cargo clippy --locked -p gateway-example --features otel --all-targets -- -D warnings
-          cargo clippy --locked -p i18n-demo --features ssr --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked --workspace --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked -p live-search --features ssr --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked -p live-search --features ssr,otel --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked -p gateway-example --features otel --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked -p i18n-demo --features ssr --all-targets -- -D warnings
       - name: Report Clippy cache footprint
         if: always()
         run: du -sh target/debug 2>/dev/null || true
 
   wasm-check:
-    name: WASM check (${{ matrix.package }})
+    name: WASM link (${{ matrix.package }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -132,21 +153,20 @@ jobs:
           - i18n-demo
     steps:
       - uses: actions/checkout@v7
-      - name: Install pinned Rust toolchain
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
-          rustc --version
-          cargo --version
-      - name: Check hydration build
-        run: cargo check --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
+          rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
+      # Use `build`, not `check`: Rust 1.96 stopped passing wasm-ld's
+      # --allow-undefined implicitly, so only a real link exercises that policy.
+      - name: Link hydration build
+        run: cargo +1.98.1 build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
 
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # sccache's GHA object backend currently drops writes when concurrent jobs
-    # hit GitHub's per-run cache-service rate limit. Keep a local sccache store
-    # and transfer it once through actions/cache instead.
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.sccache/unit-tests
       SCCACHE_CACHE_SIZE: "1G"
@@ -161,16 +181,16 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .sccache/unit-tests
-          key: sccache-unit-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          key: sccache-unit-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            sccache-unit-v1-${{ runner.os }}-rust-1.94.0-
-      - name: Install pinned Rust toolchain
+            sccache-unit-v2-${{ runner.os }}-rust-1.98.1-
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Run library tests
-        run: cargo test --locked --workspace --lib
+        run: cargo +1.98.1 test --locked --workspace --lib
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
@@ -181,24 +201,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - name: Install pinned Rust toolchain
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Restore cargo-audit
         id: cargo-audit-cache
         uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ci-tool-${{ runner.os }}-cargo-audit-0.22.2
+          key: ci-tool-${{ runner.os }}-cargo-audit-0.22.2-rust-1.98.1
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
-        run: cargo +stable install cargo-audit --version 0.22.2 --locked
-      # Audit the exact dependency graph committed to the repository. CI must
-      # not mutate Cargo.lock first: both targeted patched versions are already
-      # present, and `cargo update -p` can legitimately rewrite unrelated
-      # transitive edges even when the requested package version is unchanged.
+        run: cargo +1.98.1 install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
 
@@ -220,14 +236,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .sccache/leptos-build
-          key: sccache-leptos-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          key: sccache-leptos-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            sccache-leptos-v1-${{ runner.os }}-rust-1.94.0-
-      - name: Install pinned Rust toolchain
+            sccache-leptos-v2-${{ runner.os }}-rust-1.98.1-
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Restore Leptos build tools
         id: leptos-tools-cache
         uses: actions/cache@v5
@@ -235,22 +251,22 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-leptos
             ~/.cargo/bin/stylance
-          key: ci-tools-${{ runner.os }}-cargo-leptos-0.3.7-stylance-0.8.4
+          key: ci-tools-${{ runner.os }}-cargo-leptos-0.3.7-stylance-0.8.4-rust-1.98.1
       - name: Install build tools
         if: steps.leptos-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo +stable install cargo-leptos --version 0.3.7 --locked
-          cargo +stable install stylance-cli --version 0.8.4 --locked
+          cargo +1.98.1 install cargo-leptos --version 0.3.7 --locked
+          cargo +1.98.1 install stylance-cli --version 0.8.4 --locked
       - name: Build live-search
         run: |
-          cargo leptos build --release -p live-search
+          cargo +1.98.1 leptos build --release -p live-search
           mkdir -p target/site/pkg
           stylance live-search --output-file target/site/pkg/live-search.css
           find target/site/pkg -maxdepth 1 -type f -name '*.js' -size +0c -print -quit | grep -q .
           find target/site/pkg -maxdepth 1 -type f -name '*.wasm' -size +0c -print -quit | grep -q .
           test -s target/site/pkg/live-search.css
       - name: Build i18n-demo
-        run: cargo leptos build --release -p i18n-demo
+        run: cargo +1.98.1 leptos build --release -p i18n-demo
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
@@ -306,14 +322,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .sccache/e2e
-          key: sccache-e2e-v1-${{ runner.os }}-rust-1.94.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          key: sccache-e2e-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            sccache-e2e-v1-${{ runner.os }}-rust-1.94.0-
-      - name: Install pinned Rust toolchain
+            sccache-e2e-v2-${{ runner.os }}-rust-1.98.1-
+      - name: Install current Rust toolchain
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --target wasm32-unknown-unknown
-          rustc --version
-          cargo --version
+          rustup toolchain install 1.98.1 --profile minimal --target wasm32-unknown-unknown
+          rustc +1.98.1 --version
+          cargo +1.98.1 --version
       - name: Restore E2E build tools
         id: e2e-tools-cache
         uses: actions/cache@v5
@@ -321,12 +337,12 @@ jobs:
           path: |
             ~/.cargo/bin/wasm-bindgen
             ~/.cargo/bin/stylance
-          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.126-stylance-0.8.4
+          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.126-stylance-0.8.4-rust-1.98.1
       - name: Install E2E build tools
         if: steps.e2e-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo +stable install wasm-bindgen-cli --version 0.2.126 --locked
-          cargo +stable install stylance-cli --version 0.8.4 --locked
+          cargo +1.98.1 install wasm-bindgen-cli --version 0.2.126 --locked
+          cargo +1.98.1 install stylance-cli --version 0.8.4 --locked
       - name: Configure Chrome
         shell: bash
         run: |
@@ -343,7 +359,7 @@ jobs:
         run: bash scripts/test-e2e.sh
       - name: Verify SQLx OpenTelemetry span parenting
         run: >-
-          cargo test --release --locked -p e2e-tests --test otel_db_test
+          cargo +1.98.1 test --release --locked -p e2e-tests --test otel_db_test
           --features otel-tests -- --test-threads=1 --nocapture
       - name: Show sccache stats
         if: always()
