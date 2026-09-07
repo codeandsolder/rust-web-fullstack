@@ -1,14 +1,15 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/config", "crates/domain", "crates/leptos-utils", "gateway", "live-search", "i18n-demo", "e2e-tests"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-# Both Edition 2024 and the current dep matrix require Rust 1.94+. We pin to
-# 1.94 in `rust-toolchain.toml` so all contributors build with the same
-# toolchain (and wasm32 target).
+# Rust 1.94 remains the compatibility floor. Development and production builds
+# use the current patched stable toolchain from `rust-toolchain.toml`, while CI
+# includes an explicit 1.94.1 MSRV lane. Resolver 3 keeps dependency selection
+# aware of member `rust-version` constraints.
 rust-version = "1.94"
 
 [workspace.dependencies]

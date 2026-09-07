@@ -18,7 +18,11 @@ Docker builds, and real browser E2E tests.
 | `crates/domain/` | framework-free domain types and invariants |
 | `migrations/` | the **single** SQLx migration history used by every service sharing the database |
 
-The workspace uses Edition 2024 and pins Rust **1.94** as its supported toolchain/MSRV.
+The workspace uses Edition 2024 with Cargo resolver 3. Rust **1.94** remains the
+supported compatibility floor/MSRV, tested on the patched **1.94.1** toolchain.
+Normal development, CI, and production builds use patched current stable
+**Rust 1.98.1** through `rust-toolchain.toml`. This keeps the compatibility
+contract separate from the compiler version used to develop and ship the examples.
 
 ## Quick start
 
@@ -205,7 +209,7 @@ shutdown wiring for active connections.
 
 ## Build and validation
 
-Basic static/test pass:
+Basic static/test pass on the default Rust 1.98.1 toolchain:
 
 ```bash
 cargo check --workspace --all-targets
@@ -256,15 +260,22 @@ skipping the coverage CI claims to provide.
 
 `.github/workflows/ci.yml` is the executable CI reference. It runs on pull
 requests and pushes to `main` and covers lockfile consistency, Rust and Leptos
-formatting, native Clippy feature combinations, WASM hydration checks, workspace
-library tests, `cargo audit`, production Leptos builds, all three Docker images,
-and real Chromium-backed E2E tests.
+formatting, native Clippy feature combinations, real WASM hydration linking,
+workspace library tests, `cargo audit`, production Leptos builds, all three
+Docker images, and real Chromium-backed E2E tests.
 
-The workflow pins Rust 1.94 and the helper tool versions it installs. Expensive
-Rust jobs reuse compiler state through `actions/cache`, while Docker builds use
-per-image BuildKit GitHub Actions layer caches. Keep CI feature coverage and cache
-keys in sync whenever supported features, the Rust toolchain, or build tooling
-change.
+Current-stable jobs use Rust **1.98.1**. A separate **1.94.1 MSRV** lane checks
+both the native workspace and hydration crates, so adopting new stable APIs does
+not silently raise the advertised compatibility floor. Cargo resolver 3 makes
+new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s
+`CARGO_BUILD_WARNINGS=deny` rather than changing `RUSTFLAGS`, and WASM validation
+performs an actual link so Rust 1.96+'s stricter undefined-symbol behavior is
+covered.
+
+Expensive Rust jobs reuse compiler state through `actions/cache`, while Docker
+builds use per-image BuildKit GitHub Actions layer caches. Keep CI feature
+coverage and cache keys in sync whenever supported features, the Rust toolchain,
+or build tooling change.
 
 ## Canonical development notes
 
