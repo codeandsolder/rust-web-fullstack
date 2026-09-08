@@ -1,0 +1,79 @@
+name: rust-skills2 stable Rust queue
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  queue-rust-skills-review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Detect current stable Rust and queue rust-skills2 review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="$({
+            curl -fsSL https://static.rust-lang.org/dist/channel-rust-stable.toml
+          } | python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["pkg"]["rust"]["version"].split()[0])')"
+
+          test -n "$VERSION"
+          echo "Current stable Rust: $VERSION"
+
+          gh label create "automation:rust-release" \
+            --repo "$REPO" \
+            --color "8250df" \
+            --description "Queued automatically when stable Rust changes" \
+            --force
+
+          marker="rust-skills2-stable-${VERSION}"
+          existing="$(gh issue list \
+            --repo "$REPO" \
+            --state all \
+            --limit 200 \
+            --search "${marker} in:body" \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [[ -n "$existing" ]]; then
+            echo "rust-skills2 Rust $VERSION review already exists as issue #$existing"
+            exit 0
+          fi
+
+          body="$(cat <<EOF
+          <!-- ${marker} -->
+          <!-- automation-queue:rust-release -->
+          <!-- automation-target:codeandsolder/rust-skills2 -->
+
+          Target repository: **codeandsolder/rust-skills2**
+
+          Rust **${VERSION}** is now the stable toolchain.
+
+          Do a complete review of `codeandsolder/rust-skills2` against the new stable release rather than only changing a version string:
+
+          - Read the official Rust ${VERSION} release announcement and detailed release notes/changelog.
+          - Review relevant rustc, Cargo, Clippy, rustfmt, standard-library, language, and tooling changes.
+          - Re-read `SKILL.md`, rules, checks, README, examples, and CI for guidance that is now stale, unnecessarily conservative, or missing a newly preferred idiom/tool.
+          - Update recommendations and examples to current best practice where the new stable release changes what we should teach or generate.
+          - Update CI/tooling assumptions where appropriate.
+          - Run the repository checks and fix fallout.
+          - If the release genuinely requires no repository changes, document what was reviewed and close this issue as a no-op.
+
+          `rust-skills2` currently has GitHub Issues disabled, so this control issue intentionally lives in `rust-web-fullstack`. A ChatGPT maintenance automation should make the code changes in the target repository and close this issue when the work is complete.
+          EOF
+          )"
+
+          gh issue create \
+            --repo "$REPO" \
+            --title "rust-skills2: Rust ${VERSION} full best-practices refresh" \
+            --label "automation:rust-release" \
+            --body "$body"
