@@ -15,7 +15,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.126 --locked
+    cargo install wasm-bindgen-cli --version 0.2.128 --locked
 COPY --from=planner /build/recipe.json recipe.json
 # Keep wasm/native dependency cooks scoped to this crate. A workspace-wide wasm
 # cook enables native networking dependencies from unrelated members.
