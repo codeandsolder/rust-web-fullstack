@@ -7,7 +7,7 @@
 //! * Rate limiting is applied at the router level via `tower_governor`.
 //! * JWT errors are mapped to distinct error variants.
 //! * Secrets (passwords, tokens) are never included in log output.
-//! * Public auth request payloads are typed and validated with `axum-valid`.
+//! * Public auth request payloads are typed and validated with `validator`.
 
 use std::str::FromStr;
 
@@ -88,10 +88,12 @@ pub struct ProtectedResponse {
 pub async fn login_handler(
     State(state): State<GatewayState>,
     session: tower_sessions::Session,
-    axum_valid::Valid(axum::Json(LoginRequest { user_id, password })): axum_valid::Valid<
-        axum::Json<LoginRequest>,
-    >,
+    axum::Json(request): axum::Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
+    request
+        .validate()
+        .map_err(|_| AppError::BadRequest("invalid request payload".to_string()))?;
+    let LoginRequest { user_id, password } = request;
     let s = &state.settings;
     let parsed_user_id = UserId::from_str(&user_id)?;
 
@@ -219,10 +221,12 @@ async fn remove_unissued_refresh_token(pool: &sqlx::PgPool, refresh_jti: Uuid) {
 /// access, or JWT creation fails.
 pub async fn refresh_handler(
     State(state): State<GatewayState>,
-    axum_valid::Valid(axum::Json(RefreshRequest { refresh_token })): axum_valid::Valid<
-        axum::Json<RefreshRequest>,
-    >,
+    axum::Json(request): axum::Json<RefreshRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
+    request
+        .validate()
+        .map_err(|_| AppError::BadRequest("invalid request payload".to_string()))?;
+    let RefreshRequest { refresh_token } = request;
     let pool = state.db_pool.as_ref().ok_or_else(|| {
         AppError::internal(
             "refresh-token store unavailable",

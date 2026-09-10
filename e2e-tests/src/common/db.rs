@@ -6,16 +6,16 @@
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
+use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
-use testcontainers_modules::postgres::Postgres;
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// RAII guard for a test-scoped Postgres database.
 pub struct TestEnv {
     pool: PgPool,
     connection_string: String,
     #[allow(dead_code, reason = "Kept alive for Drop side-effect on TestEnv")]
-    container: Box<ContainerAsync<Postgres>>,
+    container: Box<ContainerAsync<GenericImage>>,
 }
 
 impl std::fmt::Debug for TestEnv {
@@ -40,8 +40,18 @@ impl TestEnv {
     /// Returns an error if the container cannot start, its host/port cannot be
     /// resolved, the pool cannot connect, migrations fail, or seeding fails.
     pub async fn postgres() -> Result<Self> {
-        let container = Postgres::default()
-            .with_tag("17-alpine")
+        let container = GenericImage::new("postgres", "17-alpine")
+            .with_exposed_port(5432.tcp())
+            .with_wait_for(WaitFor::message_on_stderr(
+                "database system is ready to accept connections",
+            ))
+            .with_wait_for(WaitFor::message_on_stdout(
+                "database system is ready to accept connections",
+            ))
+            .with_env_var("POSTGRES_DB", "postgres")
+            .with_env_var("POSTGRES_USER", "postgres")
+            .with_env_var("POSTGRES_PASSWORD", "postgres")
+            .with_cmd(["-c", "fsync=off"])
             .start()
             .await
             .context("Failed to start Postgres testcontainer")?;
