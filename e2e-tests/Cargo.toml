@@ -77,7 +77,6 @@ opentelemetry_sdk = { workspace = true, optional = true, features = ["testing"] 
 
 # Test infrastructure
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
 
 # Snapshot testing & property-based testing
 insta = { workspace = true, features = ["json"] }
