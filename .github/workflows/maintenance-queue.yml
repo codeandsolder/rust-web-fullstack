@@ -135,11 +135,11 @@ jobs:
           <!-- ${marker} -->
           <!-- automation-queue:dependency -->
 
-          `cargo upgrade` reports a newer manifest dependency requirement for **${dep}**.
+          \`cargo upgrade\` reports a newer manifest dependency requirement for **${dep}**.
 
           ${details}
 
-          Update this dependency everywhere appropriate, including incompatible/major changes. Read the crate's changelog/release notes where useful, adapt code to current APIs and best practices, refresh `Cargo.lock`, and run the full relevant CI/test suite. Do not skip an update merely because it is transitive, low-risk, or already SemVer-compatible.
+          Update this dependency everywhere appropriate, including incompatible/major changes. Read the crate's changelog/release notes where useful, adapt code to current APIs and best practices, refresh \`Cargo.lock\`, and run the full relevant CI/test suite. Do not skip an update merely because it is transitive, low-risk, or already SemVer-compatible.
 
           This issue is generated and refreshed automatically. A ChatGPT maintenance automation is expected to implement it.
           EOF
@@ -179,7 +179,7 @@ jobs:
           log="$(tail -n 200 /tmp/cargo-upgrade.log)"
           body="$(cat <<EOF
           <!-- ${marker} -->
-          The passive dependency detector failed while running `cargo upgrade`.
+          The passive dependency detector failed while running \`cargo upgrade\`.
 
           \`\`\`text
           ${log}
@@ -233,7 +233,7 @@ jobs:
           <!-- ${marker} -->
           <!-- automation-queue:lockfile -->
 
-          A plain `cargo update` changes `Cargo.lock`, so there are compatible and/or transitive dependency updates available even if no manifest requirement needs changing.
+          A plain \`cargo update\` changes \`Cargo.lock\`, so there are compatible and/or transitive dependency updates available even if no manifest requirement needs changing.
 
           \`\`\`text
           ${stat}
@@ -252,7 +252,7 @@ jobs:
               gh issue create --repo "$REPO" --title "deps: refresh Cargo.lock" --label "automation:lockfile" --body "$body"
             fi
           elif [[ -n "$existing" ]]; then
-            gh issue close "$existing" --repo "$REPO" --reason completed --comment "Closed automatically: `cargo update` no longer changes Cargo.lock."
+            gh issue close "$existing" --repo "$REPO" --reason completed --comment "Closed automatically: \`cargo update\` no longer changes Cargo.lock."
           fi
 
       - name: Report cargo-update detector failure
@@ -268,7 +268,7 @@ jobs:
           log="$(tail -n 200 /tmp/cargo-update.log)"
           body="$(cat <<EOF
           <!-- ${marker} -->
-          The passive dependency detector failed while running `cargo update`.
+          The passive dependency detector failed while running \`cargo update\`.
 
           \`\`\`text
           ${log}
@@ -321,7 +321,7 @@ jobs:
 
           - Read the official Rust ${VERSION} announcement and detailed release notes/changelog.
           - Review relevant language, standard-library, rustc, Cargo, Clippy, rustfmt, target/platform, and tooling changes.
-          - Review all Rust code, `Cargo.toml`/`Cargo.lock`, CI, Docker/build tooling, `SKILL.md`, README/docs, examples, lints, and project conventions for newly preferable patterns or obsolete workarounds.
+          - Review all Rust code, \`Cargo.toml\`/\`Cargo.lock\`, CI, Docker/build tooling, \`SKILL.md\`, README/docs, examples, lints, and project conventions for newly preferable patterns or obsolete workarounds.
           - Adopt useful newly-stable features and current best practices where they improve the project; remove workarounds that the new stable release makes unnecessary.
           - Update the current-stable CI/toolchain references while preserving the intentional MSRV contract unless there is a separately justified reason to raise it.
           - Run the full CI-equivalent test matrix and fix fallout.
