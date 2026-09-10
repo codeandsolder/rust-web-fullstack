@@ -14,13 +14,13 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0"
-base64 = "0.22"
+base64 = "0.23"
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 console_error_panic_hook = "0.1"
 futures = "0.3"
 gloo-net = { version = "0.7", features = ["eventsource"] }
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 leptos = "0.8"
 leptos_axum = "0.8"
 leptos_i18n = "0.6"
@@ -32,19 +32,19 @@ serde_json = "1.0"
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "json", "macros", "migrate", "chrono", "uuid"] }
 subtle = "2.6"
 thiserror = "2.0.18"
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "cors", "fs", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-uuid = { version = "1.23", features = ["serde"] }
+uuid = { version = "1.26", features = ["serde"] }
 wasm-bindgen = "0.2"
 axum-prometheus = "0.10"
 tower_governor = { version = "0.8", features = ["axum"] }
 axum-valid = "0.25"
-validator = { version = "0.20", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 aws-lc-rs = "1"
 moka = { version = "0.12", features = ["future"] }
 stylance = "0.8"
@@ -68,7 +68,7 @@ console-subscriber = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
 proptest = "1"
-testcontainers = "0.27"
+testcontainers = "0.28"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 # Layered config: TOML file + RWF_* environment variable overrides.
 # The `config` crate gives us typed deserialization + per-source priority
