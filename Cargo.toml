@@ -44,7 +44,7 @@ wasm-bindgen = "0.2"
 axum-prometheus = "0.10"
 tower_governor = { version = "0.8", features = ["axum"] }
 axum-valid = "0.25"
-validator = { version = "0.21", features = ["derive"] }
+validator = { version = "0.20", features = ["derive"] }
 aws-lc-rs = "1"
 moka = { version = "0.12", features = ["future"] }
 stylance = "0.8"
