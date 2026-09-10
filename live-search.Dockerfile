@@ -19,7 +19,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.126 --locked && \
+    cargo install wasm-bindgen-cli --version 0.2.128 --locked && \
     cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
 # Stylance's import_style proc macro reads this file at compile time. cargo-chef
