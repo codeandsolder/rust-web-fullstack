@@ -32,8 +32,8 @@ echo "  CHROME_PATH=$CHROME_PATH"
 rustup target add wasm32-unknown-unknown
 
 if ! command -v wasm-bindgen >/dev/null 2>&1; then
-  echo "ERROR: wasm-bindgen CLI 0.2.126 is required."
-  echo "Install it with: cargo install wasm-bindgen-cli --version 0.2.126 --locked"
+  echo "ERROR: wasm-bindgen CLI 0.2.128 is required."
+  echo "Install it with: cargo install wasm-bindgen-cli --version 0.2.128 --locked"
   exit 1
 fi
 if ! command -v stylance >/dev/null 2>&1; then
