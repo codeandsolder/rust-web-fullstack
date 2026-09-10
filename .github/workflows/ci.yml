@@ -337,11 +337,11 @@ jobs:
           path: |
             ~/.cargo/bin/wasm-bindgen
             ~/.cargo/bin/stylance
-          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.126-stylance-0.8.4-rust-1.98.1
+          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.128-stylance-0.8.4-rust-1.98.1
       - name: Install E2E build tools
         if: steps.e2e-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo +1.98.1 install wasm-bindgen-cli --version 0.2.126 --locked
+          cargo +1.98.1 install wasm-bindgen-cli --version 0.2.128 --locked
           cargo +1.98.1 install stylance-cli --version 0.8.4 --locked
       - name: Configure Chrome
         shell: bash
