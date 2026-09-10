@@ -79,10 +79,8 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};''',
 )
 replace(
     "e2e-tests/src/common/db.rs",
-    "container: Box<ContainerAsync<Postgres>>,
-",
-    "container: Box<ContainerAsync<GenericImage>>,
-",
+    '''container: Box<ContainerAsync<Postgres>>,''',
+    '''container: Box<ContainerAsync<GenericImage>>,''',
 )
 replace(
     "e2e-tests/src/common/db.rs",
@@ -100,5 +98,6 @@ replace(
             .with_env_var("POSTGRES_DB", "postgres")
             .with_env_var("POSTGRES_USER", "postgres")
             .with_env_var("POSTGRES_PASSWORD", "postgres")
+            .with_cmd(["-c", "fsync=off"])
             .start()''',
 )
