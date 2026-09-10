@@ -1,0 +1,38 @@
+name: Temporary dependency refresh
+
+on:
+  push:
+    branches:
+      - automation/deps-otel-thiserror-2026-09-10
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: automation/deps-otel-thiserror-2026-09-10
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Refresh lockfile and compile-check workspace
+        run: |
+          set -euo pipefail
+          cargo +1.98.1 update
+          cargo +1.98.1 check --locked --workspace
+      - name: Commit lockfile
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock unchanged"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m "chore: refresh Cargo.lock"
+          git push origin HEAD:automation/deps-otel-thiserror-2026-09-10
