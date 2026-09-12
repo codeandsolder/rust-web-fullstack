@@ -1,15 +1,17 @@
 name: Temporary lockfile refresh
 
 on:
-  push:
+  pull_request:
     branches:
-      - automation/lockfile-2026-09-12
+      - main
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
 
 jobs:
   refresh:
+    if: github.head_ref == 'automation/lockfile-2026-09-12'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
