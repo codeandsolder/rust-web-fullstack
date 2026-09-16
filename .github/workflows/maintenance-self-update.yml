@@ -1,0 +1,31 @@
+name: Maintenance self-update
+
+on:
+  pull_request:
+    branches: [main]
+    paths: [.github/workflows/maintenance-self-update.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.head_ref == 'automation/lockfile-2026-09-16'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Refresh lockfile and remove bootstrap workflow
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.94.1 --profile minimal
+          rustup default 1.94.1
+          cargo update
+          git rm .github/workflows/maintenance-self-update.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m 'chore: refresh Cargo.lock'
+          git push origin HEAD:${{ github.head_ref }}
