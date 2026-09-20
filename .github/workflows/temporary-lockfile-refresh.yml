@@ -1,0 +1,35 @@
+name: Temporary lockfile refresh
+
+on:
+  push:
+    branches:
+      - automation/maintenance-2026-09-20
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: automation/maintenance-2026-09-20
+          fetch-depth: 0
+      - name: Install Rust 1.94.1
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
+      - name: Refresh complete lockfile
+        run: cargo +1.94.1 update
+      - name: Commit canonical maintenance diff and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/temporary-lockfile-refresh.yml
+          git add Cargo.lock
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'chore: refresh Cargo.lock'
+          git push origin HEAD:automation/maintenance-2026-09-20
