@@ -68,7 +68,7 @@ jobs:
           cargo +1.98.1 --version
       - name: Restore leptosfmt
         id: leptosfmt-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/leptosfmt
           key: ci-tool-${{ runner.os }}-leptosfmt-0.1.33-rust-1.98.1
@@ -118,7 +118,7 @@ jobs:
           rustc +1.98.1 --version
           cargo +1.98.1 --version
       - name: Restore Clippy build cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -178,7 +178,7 @@ jobs:
         with:
           version: "v0.18.0"
       - name: Restore unit-test compiler cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .sccache/unit-tests
           key: sccache-unit-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
@@ -208,7 +208,7 @@ jobs:
           cargo +1.98.1 --version
       - name: Restore cargo-audit
         id: cargo-audit-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-audit
           key: ci-tool-${{ runner.os }}-cargo-audit-0.22.2-rust-1.98.1
@@ -233,7 +233,7 @@ jobs:
         with:
           version: "v0.18.0"
       - name: Restore production compiler cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .sccache/leptos-build
           key: sccache-leptos-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
@@ -246,7 +246,7 @@ jobs:
           cargo +1.98.1 --version
       - name: Restore Leptos build tools
         id: leptos-tools-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/cargo-leptos
@@ -319,7 +319,7 @@ jobs:
         with:
           version: "v0.18.0"
       - name: Restore E2E compiler cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .sccache/e2e
           key: sccache-e2e-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
@@ -332,7 +332,7 @@ jobs:
           cargo +1.98.1 --version
       - name: Restore E2E build tools
         id: e2e-tools-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/wasm-bindgen
