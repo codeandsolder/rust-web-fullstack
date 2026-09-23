@@ -1,7 +1,7 @@
 # Pinned by digest for reproducible builds.
 #
 # Multi-stage build for the i18n-demo Leptos crate.
-FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS chef
+FROM rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS chef
 # The official 1.98 image carries 1.98.0; install the patched stable compiler
 # explicitly so production builds do not stay on a known superseded point release.
 RUN rustup toolchain install 1.98.1 --profile minimal
