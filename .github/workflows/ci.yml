@@ -176,7 +176,7 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          version: "v0.17.0"
+          version: "v0.18.0"
       - name: Restore unit-test compiler cache
         uses: actions/cache@v5
         with:
@@ -231,7 +231,7 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          version: "v0.17.0"
+          version: "v0.18.0"
       - name: Restore production compiler cache
         uses: actions/cache@v5
         with:
@@ -317,7 +317,7 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          version: "v0.17.0"
+          version: "v0.18.0"
       - name: Restore E2E compiler cache
         uses: actions/cache@v5
         with:
