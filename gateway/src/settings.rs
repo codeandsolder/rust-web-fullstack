@@ -15,6 +15,7 @@ use crate::pem::{ed25519_spki_der, pem_encode};
 pub const JWT_ISS: &str = "gateway-example";
 pub const JWT_AUD: &str = "gateway-example-api";
 pub const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
+
 #[must_use]
 fn short_fingerprint(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -143,7 +144,9 @@ impl Settings {
             access_token_ttl_secs: 15 * 60,
             admin_user_id,
             default_admin_password: Arc::from(default_admin_password.as_str()),
-            allowed_origins: Arc::from("http://localhost:3000,http://localhost:3001,http://localhost:3002"),
+            allowed_origins: Arc::from(
+                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
+            ),
             sse_broadcast_buffer: 256,
             session,
         })
@@ -195,7 +198,9 @@ impl Settings {
             access_token_ttl_secs: 15 * 60,
             admin_user_id,
             default_admin_password: Arc::from(admin_password),
-            allowed_origins: Arc::from("http://localhost:3000,http://localhost:3001,http://localhost:3002"),
+            allowed_origins: Arc::from(
+                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
+            ),
             sse_broadcast_buffer: 256,
             session: SessionSettings {
                 cookie_secure: false,
