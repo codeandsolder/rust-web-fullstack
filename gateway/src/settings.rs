@@ -1,8 +1,7 @@
 //! Shared gateway settings.
 //!
-//! Secret/auth material still comes from deployment environment variables.
-//! Non-secret runtime settings are overwritten from `rwf_config::Config` by
-//! production `main`, keeping the typed config tree authoritative.
+//! Secret/auth material comes from deployment environment variables. Non-secret
+//! runtime settings are applied explicitly from `rwf_config::GatewayConfig`.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,8 +15,6 @@ use crate::pem::{ed25519_spki_der, pem_encode};
 pub const JWT_ISS: &str = "gateway-example";
 pub const JWT_AUD: &str = "gateway-example-api";
 pub const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
-pub const DEFAULT_ALLOWED_ORIGINS: &str =
-    "http://localhost:3000,http://localhost:3001,http://localhost:3002";
 
 #[must_use]
 fn short_fingerprint(bytes: &[u8]) -> String {
@@ -27,44 +24,6 @@ fn short_fingerprint(bytes: &[u8]) -> String {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     format!("{h:016x}")
-}
-
-fn bool_env(name: &str, default: bool) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
-        Ok(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
-        Ok(value) => anyhow::bail!("{name} must be true/false or 1/0, got {value:?}"),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(e) => Err(e).with_context(|| format!("failed to read {name}")),
-    }
-}
-
-fn positive_i64_env(name: &str, default: i64) -> anyhow::Result<i64> {
-    let value = match std::env::var(name) {
-        Ok(raw) => raw
-            .parse::<i64>()
-            .with_context(|| format!("{name} must be an integer, got {raw:?}"))?,
-        Err(std::env::VarError::NotPresent) => default,
-        Err(e) => return Err(e).with_context(|| format!("failed to read {name}")),
-    };
-    if value <= 0 {
-        anyhow::bail!("{name} must be positive, got {value}");
-    }
-    Ok(value)
-}
-
-fn positive_usize_env(name: &str, default: usize) -> anyhow::Result<usize> {
-    let value = match std::env::var(name) {
-        Ok(raw) => raw
-            .parse::<usize>()
-            .with_context(|| format!("{name} must be a positive integer, got {raw:?}"))?,
-        Err(std::env::VarError::NotPresent) => default,
-        Err(e) => return Err(e).with_context(|| format!("failed to read {name}")),
-    };
-    if value == 0 {
-        anyhow::bail!("{name} must be greater than zero");
-    }
-    Ok(value)
 }
 
 #[derive(Debug, Clone)]
@@ -116,8 +75,24 @@ impl std::fmt::Debug for Settings {
 }
 
 impl Settings {
-    /// Load secrets plus legacy environment fallbacks. Production `main`
-    /// replaces non-secret values with the already-validated typed config.
+    /// Apply the canonical typed runtime configuration.
+    ///
+    /// # Errors
+    /// Returns an error if a validated integer cannot be represented by the
+    /// gateway's signed duration fields.
+    pub fn apply_runtime_config(
+        mut self,
+        config: &rwf_config::GatewayConfig,
+    ) -> Result<Self, anyhow::Error> {
+        self.access_token_ttl_secs = i64::try_from(config.access_token_ttl_secs)
+            .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
+        self.allowed_origins = Arc::from(config.cors.allowed_origins.as_str());
+        self.sse_broadcast_buffer = config.sse_broadcast_buffer;
+        self.session.cookie_secure = config.session.cookie_secure;
+        Ok(self)
+    }
+
+    /// Load secret/auth deployment settings.
     ///
     /// # Errors
     /// Returns an error for missing/invalid keys, credentials, IDs or values.
@@ -154,11 +129,11 @@ impl Settings {
             .with_context(|| format!("invalid ADMIN_USER_ID {admin_user_id_raw:?}"))?;
 
         let session = SessionSettings {
-            cookie_secure: bool_env("SESSION_COOKIE_SECURE", true)?,
             cookie_name: std::env::var("SESSION_COOKIE_NAME")
                 .unwrap_or_else(|_| "rwf_session".to_string()),
             csrf_cookie_name: std::env::var("CSRF_COOKIE_NAME")
                 .unwrap_or_else(|_| "rwf_csrf".to_string()),
+            ..SessionSettings::default()
         };
 
         Ok(Self {
@@ -166,14 +141,13 @@ impl Settings {
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
             encoding_key,
             decoding_key,
-            access_token_ttl_secs: positive_i64_env("ACCESS_TOKEN_TTL_SECS", 15 * 60)?,
+            access_token_ttl_secs: 15 * 60,
             admin_user_id,
             default_admin_password: Arc::from(default_admin_password.as_str()),
             allowed_origins: Arc::from(
-                std::env::var("ALLOWED_ORIGINS")
-                    .unwrap_or_else(|_| DEFAULT_ALLOWED_ORIGINS.to_string()),
+                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
             ),
-            sse_broadcast_buffer: positive_usize_env("SSE_BROADCAST_BUFFER", 256)?,
+            sse_broadcast_buffer: 256,
             session,
         })
     }
@@ -224,7 +198,9 @@ impl Settings {
             access_token_ttl_secs: 15 * 60,
             admin_user_id,
             default_admin_password: Arc::from(admin_password),
-            allowed_origins: Arc::from(DEFAULT_ALLOWED_ORIGINS),
+            allowed_origins: Arc::from(
+                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
+            ),
             sse_broadcast_buffer: 256,
             session: SessionSettings {
                 cookie_secure: false,

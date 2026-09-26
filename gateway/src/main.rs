@@ -24,8 +24,6 @@ async fn main() -> anyhow::Result<()> {
     let proxy_upstream_url = cfg.gateway.proxy_upstream_url.clone();
     let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
         .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
-    let access_token_ttl_secs = i64::try_from(cfg.gateway.access_token_ttl_secs)
-        .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
 
     #[cfg(feature = "otel")]
     let provider =
@@ -40,15 +38,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let mut settings = if dev_keys {
+    let settings = if dev_keys {
         gateway_example::settings::Settings::load_dev_keys_from_env()?
     } else {
         gateway_example::settings::Settings::load()?
-    };
-    settings.access_token_ttl_secs = access_token_ttl_secs;
-    settings.allowed_origins = Arc::from(cfg.gateway.cors.allowed_origins.as_str());
-    settings.sse_broadcast_buffer = cfg.gateway.sse_broadcast_buffer;
-    settings.session.cookie_secure = cfg.gateway.session.cookie_secure;
+    }
+    .apply_runtime_config(&cfg.gateway)?;
+    let access_token_ttl_secs = settings.access_token_ttl_secs;
 
     let db_pool = create_db_pool().await?;
     run_migrations(&db_pool)
