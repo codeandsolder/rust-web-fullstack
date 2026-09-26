@@ -54,9 +54,9 @@ utoipa = "5"
 utoipa-axum = "0.2"
 # `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
 tracing-opentelemetry = "0.33"
 axum-tracing-opentelemetry = "0.39"
 # 0.5 aligns with this workspace's SQLx 0.9, OpenTelemetry 0.32 and Rust 1.94.
