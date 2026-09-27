@@ -51,7 +51,7 @@ leptos-use = "0.19"
 leptos-struct-table = "0.19"
 lepticons = "0.13"
 utoipa = "5"
-utoipa-axum = "0.2"
+utoipa-axum = "0.3"
 # `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 opentelemetry = "0.32"
