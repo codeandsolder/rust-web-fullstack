@@ -17,7 +17,7 @@
 //!   [`crate::module::ServiceHealthError`]
 //! * [`services`] — concrete [`crate::module::ServiceModule`] implementations
 //!   with typed DTOs
-//! * [`settings`] — environment-based configuration with redacted [`Debug`]
+//! * [`settings`] — secret/auth environment loading plus typed runtime configuration with redacted [`Debug`]
 //!   and `--dev-keys` ephemeral keypair generation
 //! * [`sse`] — Server-Sent Events via [`tokio::sync::broadcast::Sender`]
 //! * [`openapi`] — `OpenAPI` schema generation via `utoipa`
