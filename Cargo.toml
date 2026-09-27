@@ -57,7 +57,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
-tracing-opentelemetry = "0.33"
+tracing-opentelemetry = "0.34"
 axum-tracing-opentelemetry = "0.39"
 # 0.5 aligns with this workspace's SQLx 0.9, OpenTelemetry 0.32 and Rust 1.94.
 # Only tracing is enabled here; sqlx-otel runtime features are for its optional
