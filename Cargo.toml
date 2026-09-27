@@ -53,7 +53,7 @@ lepticons = "0.13"
 utoipa = "5"
 utoipa-axum = "0.2"
 # `axum` enables the SwaggerUi router builder; `vendored` bundles Swagger UI assets so Docker builds don't need network.
-utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["reqwest-client", "http-proto", "reqwest-rustls"] }
