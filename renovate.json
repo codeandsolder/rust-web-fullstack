@@ -17,6 +17,18 @@
   },
   "packageRules": [
     {
+      "description": "Keep OpenTelemetry on 0.32 until sqlx-otel supports 0.33",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"],
+      "allowedVersions": "<0.33"
+    },
+    {
+      "description": "Keep tracing-opentelemetry paired with OpenTelemetry 0.32",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tracing-opentelemetry"],
+      "allowedVersions": "<0.34"
+    },
+    {
       "description": "Automerge ordinary compatible updates after CI",
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
       "matchCurrentVersion": "!/^0/",
