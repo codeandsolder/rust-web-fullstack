@@ -1,0 +1,32 @@
+name: Resolve coordinated lockfile
+
+on:
+  push:
+    branches:
+      - maintenance/telemetry-openapi-20260927
+    paths:
+      - Cargo.toml
+      - .github/workflows/resolve-coordinated-lock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust 1.98.1
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Resolve only the manifest-required lockfile changes
+        run: |
+          cargo +1.98.1 metadata --format-version 1 >/dev/null
+          git diff -- Cargo.lock
+      - name: Upload resolved lockfile
+        uses: actions/upload-artifact@v7
+        with:
+          name: coordinated-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
