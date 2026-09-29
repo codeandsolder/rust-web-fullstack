@@ -4,11 +4,6 @@
 //! - `/` — [`SearchPage`] with full-text + trigram search.
 //! - `/live` — [`LiveFeedPage`] with named Server-Sent Events.
 
-#![expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] typed-builder macro generates empty state enums in this module"
-)]
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 
