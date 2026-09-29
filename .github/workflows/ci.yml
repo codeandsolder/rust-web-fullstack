@@ -109,10 +109,9 @@ jobs:
   clippy:
     name: Clippy (native)
     runs-on: ubuntu-24.04
-    env:
-      RUSTFLAGS: "-C target-cpu=x86-64-v2"
     timeout-minutes: 30
     env:
+      RUSTFLAGS: "-C target-cpu=x86-64-v2"
       CARGO_INCREMENTAL: "1"
     steps:
       - uses: actions/checkout@v7
@@ -171,10 +170,9 @@ jobs:
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-24.04
-    env:
-      RUSTFLAGS: "-C target-cpu=x86-64-v2"
     timeout-minutes: 30
     env:
+      RUSTFLAGS: "-C target-cpu=x86-64-v2"
       SCCACHE_DIR: ${{ github.workspace }}/.sccache/unit-tests
       SCCACHE_CACHE_SIZE: "1G"
       RUSTC_WRAPPER: "sccache"
