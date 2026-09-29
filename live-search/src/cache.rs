@@ -238,10 +238,6 @@ mod tests {
     /// only the version check makes `get` reject it. A subsequent `insert`
     /// at the same key, before the TTL expires, returns the *new* payload
     /// (verified via pointer inequality).
-    #[expect(
-        clippy::expect_used,
-        reason = "test assertion must hard-fail with a clear message if the preconditions are not met"
-    )]
     #[tokio::test]
     async fn cache_invalidate_then_reinsert_returns_fresh_payload() {
         let handle = CacheHandle::new(1000, Duration::from_secs(60));
@@ -249,11 +245,13 @@ mod tests {
 
         let first = Arc::new(sample_results());
         handle.insert(key.clone(), first.clone()).await;
-        let pre_bump_first = handle
-            .get(&key)
-            .await
-            .expect("first insert must be visible");
-        assert!(Arc::ptr_eq(&first, &pre_bump_first));
+        let pre_bump_first = handle.get(&key).await;
+        assert!(
+            pre_bump_first
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(&first, cached)),
+            "first insert must be visible and share the inserted Arc"
+        );
 
         handle.invalidate_all();
         assert!(
@@ -263,13 +261,17 @@ mod tests {
 
         let second = Arc::new(sample_results());
         handle.insert(key.clone(), second.clone()).await;
-        let post_bump_second = handle.get(&key).await.expect("reinsert must be visible");
+        let post_bump_second = handle.get(&key).await;
         assert!(
-            Arc::ptr_eq(&second, &post_bump_second),
-            "reinsert should share the new Arc"
+            post_bump_second
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(&second, cached)),
+            "reinsert must be visible and share the new Arc"
         );
         assert!(
-            !Arc::ptr_eq(&first, &post_bump_second),
+            post_bump_second
+                .as_ref()
+                .is_some_and(|cached| !Arc::ptr_eq(&first, cached)),
             "must NOT return the stale payload after a reinsert"
         );
     }

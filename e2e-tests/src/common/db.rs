@@ -14,8 +14,7 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 pub struct TestEnv {
     pool: PgPool,
     connection_string: String,
-    #[allow(dead_code, reason = "Kept alive for Drop side-effect on TestEnv")]
-    container: Box<ContainerAsync<GenericImage>>,
+    _container: Box<ContainerAsync<GenericImage>>,
 }
 
 impl std::fmt::Debug for TestEnv {
@@ -90,7 +89,7 @@ impl TestEnv {
         Ok(Self {
             pool,
             connection_string,
-            container: Box::new(container),
+            _container: Box::new(container),
         })
     }
 

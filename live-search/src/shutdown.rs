@@ -17,46 +17,60 @@ use crate::db;
 /// Order matters: background tasks are drained before the pool is closed so the
 /// `PgListener` can observe cancellation and release its connection cleanly.
 ///
-/// # Panics
-/// Only panics if OS signal-handler installation fails.
-///
 /// # Errors
-/// Returns the first background-task error/panic observed while draining, or an
-/// error if tasks exceed the shutdown grace period. Cleanup still runs before
-/// the error is returned.
-#[expect(
-    clippy::expect_used,
-    reason = "signal handler installation failure is an unrecoverable runtime state"
-)]
+/// Returns an error if an OS signal handler cannot be installed, if a background
+/// task fails or panics while draining, or if tasks exceed the shutdown grace
+/// period. Cleanup still runs before any of these errors is returned.
 pub async fn wait(
     shutdown: CancellationToken,
     tasks: &mut JoinSet<anyhow::Result<()>>,
     pool: &sqlx::PgPool,
 ) -> anyhow::Result<()> {
-    let signal_token = shutdown.clone();
-    tokio::spawn(async move {
-        let ctrl_c = async {
-            signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
-        };
-        #[cfg(unix)]
-        let terminate = async {
-            let mut sig = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-            sig.recv().await;
-        };
-        #[cfg(not(unix))]
-        let terminate = std::future::pending::<()>();
+    let mut signal_error: Option<anyhow::Error> = None;
 
-        tokio::select! {
-            () = ctrl_c => tracing::info!("Ctrl+C received, initiating shutdown"),
-            () = terminate => tracing::info!("SIGTERM received, initiating shutdown"),
+    #[cfg(unix)]
+    match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    tracing::info!("shutdown requested by application");
+                }
+                result = signal::ctrl_c() => {
+                    match result {
+                        Ok(()) => tracing::info!("Ctrl+C received, initiating shutdown"),
+                        Err(error) => {
+                            tracing::error!(%error, "failed to install or await Ctrl+C handler");
+                            signal_error = Some(error.into());
+                        }
+                    }
+                }
+                _ = terminate.recv() => {
+                    tracing::info!("SIGTERM received, initiating shutdown");
+                }
+            }
         }
-        signal_token.cancel();
-    });
+        Err(error) => {
+            tracing::error!(%error, "failed to install SIGTERM handler");
+            signal_error = Some(error.into());
+        }
+    }
 
-    shutdown.cancelled().await;
+    #[cfg(not(unix))]
+    tokio::select! {
+        () = shutdown.cancelled() => {
+            tracing::info!("shutdown requested by application");
+        }
+        result = signal::ctrl_c() => {
+            match result {
+                Ok(()) => tracing::info!("Ctrl+C received, initiating shutdown"),
+                Err(error) => {
+                    tracing::error!(%error, "failed to install or await Ctrl+C handler");
+                    signal_error = Some(error.into());
+                }
+            }
+        }
+    }
+
     shutdown.cancel();
 
     let drain = tokio::time::timeout(Duration::from_secs(10), async {
@@ -86,7 +100,7 @@ pub async fn wait(
     })
     .await;
 
-    let shutdown_error = match drain {
+    let drain_error = match drain {
         Ok(error) => error,
         Err(_elapsed) => {
             tracing::warn!("background tasks did not drain within 10s; aborting");
@@ -115,5 +129,5 @@ pub async fn wait(
         }
     }
 
-    shutdown_error.map_or_else(|| Ok(()), Err)
+    signal_error.or(drain_error).map_or_else(|| Ok(()), Err)
 }

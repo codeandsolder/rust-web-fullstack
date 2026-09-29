@@ -49,10 +49,6 @@ pub fn cors_layer(allowed_origins: &str) -> CorsLayer {
 }
 
 /// Add a baseline CSP if the response has not already supplied one.
-#[allow(
-    clippy::unused_async,
-    reason = "axum middleware handlers await next.run(request)"
-)]
 pub async fn csp_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -99,67 +95,55 @@ mod tests {
          frame-ancestors 'none'; \
          form-action 'self'";
 
-    #[expect(
-        clippy::expect_used,
-        clippy::unwrap_used,
-        reason = "synthetic test response/request construction"
-    )]
     #[tokio::test]
     async fn csp_middleware_inserts_default_header() {
         async fn handler() -> Response<Body> {
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::empty())
-                .expect("static response build")
+            Response::new(Body::empty())
         }
 
         let app = Router::new()
             .route("/", get(handler))
             .layer(from_fn(csp_middleware));
-        let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response = match app.oneshot(Request::new(Body::empty())).await {
+            Ok(response) => response,
+            Err(error) => match error {},
+        };
 
         assert_eq!(response.status(), StatusCode::OK);
-        let header = response
-            .headers()
-            .get("content-security-policy")
-            .expect("CSP header missing");
-        assert_eq!(header.to_str().unwrap(), POLICY);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-security-policy")
+                .and_then(|header| header.to_str().ok()),
+            Some(POLICY),
+        );
     }
 
-    #[expect(
-        clippy::expect_used,
-        clippy::unwrap_used,
-        reason = "synthetic test response/request construction"
-    )]
     #[tokio::test]
     async fn csp_middleware_does_not_override_existing_header() {
         async fn handler() -> Response<Body> {
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-security-policy", "default-src 'none'")
-                .body(Body::empty())
-                .expect("static response build")
+            let mut response = Response::new(Body::empty());
+            response.headers_mut().insert(
+                HeaderName::from_static("content-security-policy"),
+                HeaderValue::from_static("default-src 'none'"),
+            );
+            response
         }
 
         let app = Router::new()
             .route("/", get(handler))
             .layer(from_fn(csp_middleware));
-        let response = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response = match app.oneshot(Request::new(Body::empty())).await {
+            Ok(response) => response,
+            Err(error) => match error {},
+        };
 
         assert_eq!(
             response
                 .headers()
                 .get("content-security-policy")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "default-src 'none'",
+                .and_then(|header| header.to_str().ok()),
+            Some("default-src 'none'"),
         );
     }
 }

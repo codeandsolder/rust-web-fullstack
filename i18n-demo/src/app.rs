@@ -48,10 +48,7 @@ fn set_document_lang(lang: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 const fn set_document_lang(_lang: &str) {}
 
-#[expect(
-    clippy::must_use_candidate,
-    reason = "Leptos component returns impl IntoView; must_use is implicit"
-)]
+#[must_use]
 #[component]
 pub fn App() -> impl IntoView {
     provide_meta_context();
@@ -72,10 +69,7 @@ pub fn App() -> impl IntoView {
     }
 }
 
-#[expect(
-    clippy::must_use_candidate,
-    reason = "Leptos component returns impl IntoView; must_use is implicit"
-)]
+#[must_use]
 #[component]
 pub fn Home() -> impl IntoView {
     let i18n = use_i18n();

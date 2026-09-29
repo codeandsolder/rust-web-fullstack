@@ -64,7 +64,7 @@ fn origin_matches_host(origin: &str, host: &str) -> bool {
 /// Browser-originated upgrades must be same-origin. The protocol layer rejects
 /// oversized frames/messages before application code receives them; the
 /// in-loop length check remains as defense in depth.
-#[allow(
+#[expect(
     clippy::unused_async,
     reason = "Axum handler entry point is intentionally async"
 )]
@@ -185,22 +185,13 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::panic,
-        reason = "serde failure would make this test fixture invalid"
-    )]
-    fn event_round_trips_through_serde_json() {
+    fn event_round_trips_through_serde_json() -> serde_json::Result<()> {
         let event = ChatEvent::new(Uuid::new_v4(), "hello, room".to_string());
-        let json = match serde_json::to_string(&event) {
-            Ok(value) => value,
-            Err(e) => panic!("serialize failed: {e}"),
-        };
-        let back: ChatEvent = match serde_json::from_str(&json) {
-            Ok(value) => value,
-            Err(e) => panic!("deserialize failed: {e}"),
-        };
+        let json = serde_json::to_string(&event)?;
+        let back: ChatEvent = serde_json::from_str(&json)?;
         assert_eq!(back.id, event.id);
         assert_eq!(back.from, event.from);
         assert_eq!(back.text, event.text);
+        Ok(())
     }
 }

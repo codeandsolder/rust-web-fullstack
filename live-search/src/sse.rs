@@ -29,7 +29,7 @@ use crate::events::SseEvent;
 ///
 /// The caller must provide the broadcast sender (typically captured by a
 /// closure in the router setup).
-#[allow(
+#[expect(
     clippy::unused_async,
     reason = "Axum 0.8 requires async fn for Handler trait"
 )]
@@ -91,16 +91,11 @@ mod tests {
     /// data string) and the public contract is "client subscribes via
     /// `addEventListener('event-name', …)` and parses the data as JSON".
     /// Verifying the JSON shape is the meaningful unit.
-    #[expect(
-        clippy::expect_used,
-        reason = "test fixtures: chrono::from_timestamp(0,0) is infallible on a sound system clock, and serde_json of the canonical enum cannot fail"
-    )]
     #[test]
-    fn sse_event_json_shape_per_variant() {
-        let epoch =
-            chrono::DateTime::from_timestamp(0, 0).expect("unix epoch is always representable");
+    fn sse_event_json_shape_per_variant() -> serde_json::Result<()> {
+        let epoch = chrono::DateTime::<chrono::Utc>::UNIX_EPOCH;
         let connected = SseEvent::Connected { server_time: epoch };
-        let json = serde_json::to_string(&connected).expect("Connected serializes");
+        let json = serde_json::to_string(&connected)?;
         assert!(
             json.contains("\"type\":\"Connected\""),
             "Connected must carry the `type` tag; got {json}"
@@ -115,16 +110,17 @@ mod tests {
             url: "u".into(),
             snippet: "s".into(),
         };
-        let json = serde_json::to_string(&result).expect("SearchResult serializes");
+        let json = serde_json::to_string(&result)?;
         assert!(json.contains("\"type\":\"SearchResult\""));
         assert!(json.contains("\"title\":\"t\""));
         assert!(json.contains("\"url\":\"u\""));
         assert!(json.contains("\"snippet\":\"s\""));
 
         let lagged = SseEvent::StreamLagged { skipped: 42 };
-        let json = serde_json::to_string(&lagged).expect("StreamLagged serializes");
+        let json = serde_json::to_string(&lagged)?;
         assert!(json.contains("\"type\":\"StreamLagged\""));
         assert!(json.contains("\"skipped\":42"));
+        Ok(())
     }
 
     // (sse_event_variants_are_all_reachable removed in round 5: the
