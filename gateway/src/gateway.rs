@@ -172,7 +172,7 @@ fn gateway_state(
 #[instrument(skip(modules, settings, db_pool))]
 pub fn build_gateway_with_settings(
     modules: Vec<Arc<dyn ServiceModule>>,
-    mut settings: settings::Settings,
+    settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
     refresh_token_ttl_secs: i64,
