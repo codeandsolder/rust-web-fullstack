@@ -126,6 +126,20 @@ fn listener_addr(default_port: u16) -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], port))
 }
 
+fn database_settings(config: &rwf_config::Config) -> (String, db::PoolTunables) {
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .unwrap_or_else(|| config.live_search.database_url.clone());
+    let pool_tunables = db::PoolTunables {
+        max_connections: config.live_search.pool_max_connections,
+        min_connections: config.live_search.pool_min_connections,
+        acquire_timeout_secs: config.live_search.pool_acquire_timeout_secs,
+        idle_timeout_secs: config.live_search.pool_idle_timeout_secs,
+        max_lifetime_secs: config.live_search.pool_max_lifetime_secs,
+    };
+    (database_url, pool_tunables)
+}
+
 /// Bootstraps all subsystems and starts the HTTP server.
 ///
 /// # Errors
@@ -135,17 +149,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     init_tracing();
 
     let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .unwrap_or_else(|| cfg.live_search.database_url.clone());
-
-    let pool_tunables = db::PoolTunables {
-        max_connections: cfg.live_search.pool_max_connections,
-        min_connections: cfg.live_search.pool_min_connections,
-        acquire_timeout_secs: cfg.live_search.pool_acquire_timeout_secs,
-        idle_timeout_secs: cfg.live_search.pool_idle_timeout_secs,
-        max_lifetime_secs: cfg.live_search.pool_max_lifetime_secs,
-    };
+    let (database_url, pool_tunables) = database_settings(&cfg);
     tracing::info!("{}", cfg.live_search.connection_budget_summary());
 
     let raw_pool = db::create_pool(&database_url, &pool_tunables)

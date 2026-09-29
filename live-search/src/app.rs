@@ -27,11 +27,6 @@ use crate::db::SearchResult;
 use crate::events::SseEvent;
 use crate::styles;
 
-#[expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] typed-builder macro generates empty state enums in this module"
-)]
-
 /// Search `search_results` using PostgreSQL FTS with a trigram fallback.
 ///
 /// The `title % $1` branch is backed by the `pg_trgm` GIN index created by
