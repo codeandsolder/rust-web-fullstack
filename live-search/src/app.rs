@@ -184,8 +184,9 @@ fn TitleLinkCellRenderer(
     class: String,
     value: Signal<String>,
     row: RwSignal<SearchResultRow>,
-    _index: usize,
+    index: usize,
 ) -> impl IntoView {
+    let _ = index;
     let url = move || row.read().url.clone();
     view! {
         <td class=class>
