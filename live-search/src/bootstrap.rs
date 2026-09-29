@@ -100,6 +100,32 @@ async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
 }
 
+fn spawn_pg_listener(
+    tasks: &mut JoinSet<anyhow::Result<()>>,
+    pool: sqlx::PgPool,
+    tx: broadcast::Sender<SseEvent>,
+    cache: CacheHandle,
+    shutdown: CancellationToken,
+) {
+    let listener_span = tracing::info_span!("pg_listener");
+    tasks.spawn(
+        async move {
+            db::run_pg_listener(pool, tx, cache, shutdown).await;
+            Ok(())
+        }
+        .instrument(listener_span),
+    );
+}
+
+fn listener_addr(default_port: u16) -> SocketAddr {
+    let port = std::env::var("PORT")
+        .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default_port);
+    SocketAddr::from(([0, 0, 0, 0], port))
+}
+
 /// Bootstraps all subsystems and starts the HTTP server.
 ///
 /// # Errors
@@ -150,16 +176,12 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
 
-    let listener_token = shutdown.child_token();
-    let pool_for_listener = raw_pool.clone();
-    let listener_span = tracing::info_span!("pg_listener");
-    let cache_for_listener = cache_handle.clone();
-    tasks.spawn(
-        async move {
-            db::run_pg_listener(pool_for_listener, tx, cache_for_listener, listener_token).await;
-            Ok(())
-        }
-        .instrument(listener_span),
+    spawn_pg_listener(
+        &mut tasks,
+        raw_pool.clone(),
+        tx,
+        cache_handle.clone(),
+        shutdown.child_token(),
     );
 
     let conf = get_configuration(None).context("failed to read Leptos configuration")?;
@@ -217,12 +239,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     let router: Router<()> = router.with_state(leptos_options);
 
-    let port: u16 = std::env::var("PORT")
-        .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(cfg.live_search.port);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = listener_addr(cfg.live_search.port);
     tracing::info!("Live search server listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)
