@@ -4,11 +4,6 @@
 //! - `/` — [`SearchPage`] with full-text + trigram search.
 //! - `/live` — [`LiveFeedPage`] with named Server-Sent Events.
 
-#![expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] typed-builder macro generates empty state enums in this module"
-)]
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -26,11 +21,6 @@ use crate::db::SearchResult;
 #[cfg(target_arch = "wasm32")]
 use crate::events::SseEvent;
 use crate::styles;
-
-#[expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] typed-builder macro generates empty state enums in this module"
-)]
 
 /// Search `search_results` using PostgreSQL FTS with a trigram fallback.
 ///
@@ -161,6 +151,10 @@ pub fn App() -> impl IntoView {
 }
 
 #[component]
+#[expect(
+    clippy::empty_enums,
+    reason = "Leptos #[component] generates an empty typed-builder state enum"
+)]
 fn SearchErrorBoundary(children: Children) -> impl IntoView {
     view! {
         <ErrorBoundary fallback=move |_errors| {
@@ -186,6 +180,10 @@ pub struct SearchResultRow {
 }
 
 #[component]
+#[expect(
+    clippy::empty_enums,
+    reason = "Leptos #[component] generates an empty typed-builder state enum"
+)]
 fn TitleLinkCellRenderer(
     class: String,
     value: Signal<String>,
