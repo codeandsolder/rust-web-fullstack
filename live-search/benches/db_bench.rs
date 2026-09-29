@@ -14,11 +14,6 @@
 //! in the workspace `[workspace.dependencies]`).
 
 #![cfg(feature = "ssr")]
-// Benchmarks intentionally use `expect`/`unwrap_or_default`/`unwrap` because:
-// 1. They run against a real Postgres with a known seed dataset.
-// 2. Failure should abort the bench loudly, not produce noise measurements.
-// This is a documented exception to the workspace `unwrap_used`/`expect_used`/`panic` deny policy.
-#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::sync::Arc;
 use std::time::Duration;

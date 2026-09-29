@@ -20,7 +20,6 @@ pub const TEST_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 pub struct GatewayEnv {
     addr: SocketAddr,
     shutdown: CancellationToken,
-    #[allow(dead_code, reason = "Kept alive for Drop side-effect on GatewayEnv")]
     db: super::db::TestEnv,
 }
 

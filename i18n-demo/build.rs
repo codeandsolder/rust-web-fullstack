@@ -26,19 +26,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     translations_infos.rerun_if_locales_changed();
 
-    // Suppress clippy lints in the generated module. The workspace denies both
-    // `clippy::pedantic` (group-level, priority -1) and individual lints such
-    // as `expect_used` (item-level, default priority). Our `#![allow]` must
-    // cover both levels.
+    // Suppress style-only Clippy noise in third-party generated source. The
+    // strict gate still forbids unwrap/expect/panic/unsafe-policy lints, so
+    // generated code cannot waive those non-negotiable categories.
     let top_level_attrs: proc_macro2::TokenStream = concat!(
         "#![allow(",
+        "clippy::allow_attributes, ",
         "clippy::pedantic, ",
         "clippy::module_inception, ",
         "clippy::use_self, ",
-        "clippy::expect_used, ",
         "clippy::missing_const_for_fn, ",
         "clippy::must_use_candidate, ",
-        "clippy::default_trait_access",
+        "clippy::default_trait_access, ",
+        "reason = \"third-party leptos_i18n generated source is not maintained in this crate\"",
         ")]"
     )
     .parse()

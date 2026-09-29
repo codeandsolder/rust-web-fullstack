@@ -30,15 +30,6 @@ pub enum RefreshError {
     InvalidTtl,
 }
 
-#[derive(Debug, Clone)]
-pub struct RefreshTokenRecord {
-    pub jti: Uuid,
-    pub subject: UserId,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub revoked_at: Option<DateTime<Utc>>,
-}
-
 /// Generate a fresh 256-bit opaque refresh token and its database JTI.
 ///
 /// # Errors
@@ -159,47 +150,6 @@ pub async fn rotate(
     }))
 }
 
-/// Lookup helper used by tests and admin tooling.
-///
-/// # Errors
-/// Returns a database error or an invalid stored user-id error.
-#[allow(dead_code)]
-pub async fn find_by_jti(
-    pool: &PgPool,
-    jti: Uuid,
-) -> Result<Option<RefreshTokenRecord>, RefreshError> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            Uuid,
-            DateTime<Utc>,
-            DateTime<Utc>,
-            Option<DateTime<Utc>>,
-        ),
-    >(
-        "SELECT jti, subject, created_at, expires_at, revoked_at \
-         FROM refresh_tokens WHERE jti = $1",
-    )
-    .bind(jti)
-    .fetch_optional(pool)
-    .await?;
-
-    match row {
-        Some((jti, subject, created_at, expires_at, revoked_at)) => {
-            let subject = UserId::try_from(subject)?;
-            Ok(Some(RefreshTokenRecord {
-                jti,
-                subject,
-                created_at,
-                expires_at,
-                revoked_at,
-            }))
-        }
-        None => Ok(None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,23 +161,14 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::panic,
-        reason = "RNG failure on a test host indicates a broken environment"
-    )]
-    fn generator_returns_unique_tokens_and_valid_jtis() {
-        let (a, ja) = match generate_raw_refresh_token() {
-            Ok(v) => v,
-            Err(e) => panic!("OS RNG unavailable on test host: {e}"),
-        };
-        let (b, jb) = match generate_raw_refresh_token() {
-            Ok(v) => v,
-            Err(e) => panic!("OS RNG unavailable on test host: {e}"),
-        };
+    fn generator_returns_unique_tokens_and_valid_jtis() -> Result<(), RefreshError> {
+        let (a, ja) = generate_raw_refresh_token()?;
+        let (b, jb) = generate_raw_refresh_token()?;
         assert_ne!(a, b);
         assert_ne!(ja, jb);
         assert_eq!(a.len(), 43);
         assert_eq!(ja.get_version_num(), 4);
         assert_eq!(jb.get_version_num(), 4);
+        Ok(())
     }
 }

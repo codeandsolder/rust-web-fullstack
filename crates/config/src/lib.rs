@@ -157,6 +157,14 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+fn i64_default<T>(value: T, name: &str) -> Result<i64, ConfigError>
+where
+    i64: TryFrom<T>,
+{
+    i64::try_from(value)
+        .map_err(|_| ConfigError::Invalid(format!("{name} default does not fit in i64")))
+}
+
 impl Config {
     /// Load defaults, an optional TOML file, then `RWF_*` environment
     /// overrides (`__` separates nested keys), and validate cross-field
@@ -167,18 +175,26 @@ impl Config {
     /// # Errors
     /// Returns [`ConfigError`] for missing explicit files, parse/deserialization
     /// failures, or invalid values/invariants.
-    #[expect(
-        clippy::cast_possible_wrap,
-        clippy::cast_lossless,
-        reason = "documented defaults are small fixed values"
-    )]
     pub fn load() -> Result<Self, ConfigError> {
         let config_path = std::env::var("RWF_CONFIG").ok();
-        if let Some(path) = config_path.as_deref()
+        Self::load_from(config_path.as_deref(), None)
+    }
+
+    fn load_from(
+        config_path: Option<&str>,
+        environment_source: Option<config::Map<String, String>>,
+    ) -> Result<Self, ConfigError> {
+        if let Some(path) = config_path
             && !Path::new(path).exists()
         {
             return Err(ConfigError::ConfigPathNotFound(path.to_string()));
         }
+
+        let environment = config::Environment::with_prefix("RWF")
+            .prefix_separator("_")
+            .separator("__")
+            .try_parsing(true)
+            .source(environment_source);
 
         let builder = config::Config::builder()
             .set_default("gateway.port", 3001_i64)?
@@ -190,15 +206,24 @@ impl Config {
             .set_default("gateway.session.cookie_secure", true)?
             .set_default(
                 "gateway.sse_broadcast_buffer",
-                default_gateway_sse_broadcast_buffer() as i64,
+                i64_default(
+                    default_gateway_sse_broadcast_buffer(),
+                    "gateway.sse_broadcast_buffer",
+                )?,
             )?
             .set_default(
                 "gateway.refresh_token_ttl_secs",
-                default_gateway_refresh_token_ttl_secs() as i64,
+                i64_default(
+                    default_gateway_refresh_token_ttl_secs(),
+                    "gateway.refresh_token_ttl_secs",
+                )?,
             )?
             .set_default(
                 "gateway.access_token_ttl_secs",
-                default_gateway_access_token_ttl_secs() as i64,
+                i64_default(
+                    default_gateway_access_token_ttl_secs(),
+                    "gateway.access_token_ttl_secs",
+                )?,
             )?
             .set_default("live_search.port", 3000_i64)?
             .set_default(
@@ -207,41 +232,48 @@ impl Config {
             )?
             .set_default(
                 "live_search.pool_max_connections",
-                default_pool_max_connections() as i64,
+                i64::from(default_pool_max_connections()),
             )?
             .set_default(
                 "live_search.pool_min_connections",
-                default_pool_min_connections() as i64,
+                i64::from(default_pool_min_connections()),
             )?
             .set_default(
                 "live_search.pool_acquire_timeout_secs",
-                default_pool_acquire_timeout_secs() as i64,
+                i64_default(
+                    default_pool_acquire_timeout_secs(),
+                    "live_search.pool_acquire_timeout_secs",
+                )?,
             )?
             .set_default(
                 "live_search.pool_idle_timeout_secs",
-                default_pool_idle_timeout_secs() as i64,
+                i64_default(
+                    default_pool_idle_timeout_secs(),
+                    "live_search.pool_idle_timeout_secs",
+                )?,
             )?
             .set_default(
                 "live_search.pool_max_lifetime_secs",
-                default_pool_max_lifetime_secs() as i64,
+                i64_default(
+                    default_pool_max_lifetime_secs(),
+                    "live_search.pool_max_lifetime_secs",
+                )?,
             )?
             .set_default(
                 "live_search.sse_broadcast_buffer",
-                default_live_search_sse_broadcast_buffer() as i64,
+                i64_default(
+                    default_live_search_sse_broadcast_buffer(),
+                    "live_search.sse_broadcast_buffer",
+                )?,
             )?
             .add_source(
                 config::File::new(
-                    config_path.as_deref().unwrap_or("config.toml"),
+                    config_path.unwrap_or("config.toml"),
                     config::FileFormat::Toml,
                 )
                 .required(false),
             )
-            .add_source(
-                config::Environment::with_prefix("RWF")
-                    .prefix_separator("_")
-                    .separator("__")
-                    .try_parsing(true),
-            );
+            .add_source(environment);
 
         let cfg: Self = builder.build()?.try_deserialize()?;
         cfg.validate()?;
@@ -298,62 +330,22 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
-
     use super::*;
 
-    fn env_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn empty_environment() -> config::Map<String, String> {
+        config::Map::new()
     }
 
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        #[expect(
-            unsafe_code,
-            reason = "process environment mutation is serialized by env_test_lock"
-        )]
-        fn set(key: &str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            unsafe { std::env::set_var(key, value) };
-            Self {
-                key: key.to_string(),
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        #[expect(
-            unsafe_code,
-            reason = "process environment mutation is serialized by env_test_lock"
-        )]
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => unsafe { std::env::set_var(&self.key, value) },
-                None => unsafe { std::env::remove_var(&self.key) },
-            }
-        }
-    }
-
-    fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let _guard = EnvVarGuard::set(key, value);
-        f()
+    fn environment(entries: &[(&str, &str)]) -> config::Map<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
     }
 
     #[test]
     fn defaults_match_documented_values() -> Result<(), ConfigError> {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cfg = Config::load()?;
+        let cfg = Config::load_from(None, Some(empty_environment()))?;
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);
         assert_eq!(cfg.live_search.pool_max_connections, 20);
@@ -367,19 +359,22 @@ mod tests {
 
     #[test]
     fn rwf_config_missing_path_errors() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let result = with_env_var("RWF_CONFIG", "/this/path/does/not/exist.toml", Config::load);
+        let result = Config::load_from(
+            Some("/this/path/does/not/exist.toml"),
+            Some(empty_environment()),
+        );
         assert!(matches!(result, Err(ConfigError::ConfigPathNotFound(_))));
     }
 
     #[test]
     fn invalid_zero_sse_buffer_is_rejected() {
-        let _guard = env_test_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let result = with_env_var("RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER", "0", Config::load);
+        let result = Config::load_from(
+            None,
+            Some(environment(&[(
+                "RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER",
+                "0",
+            )])),
+        );
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 

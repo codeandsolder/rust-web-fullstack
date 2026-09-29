@@ -44,15 +44,17 @@ pub struct SharedServer<T: Send + Sync + 'static> {
     bg_init_once: Once,
 }
 
+impl<T: Send + Sync + 'static> Default for SharedServer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Send + Sync + 'static> SharedServer<T> {
     /// Create a new uninitialised server holder.
     ///
     /// This is `const`-callable so it can be used in a `static` initialiser.
     #[must_use]
-    #[expect(
-        clippy::new_without_default,
-        reason = "Default is not meaningful for a once-only initialiser; callers should explicitly opt in via `static SERVER: SharedServer<T> = SharedServer::new()`"
-    )]
     pub const fn new() -> Self {
         Self {
             cell: OnceCell::const_new(),
