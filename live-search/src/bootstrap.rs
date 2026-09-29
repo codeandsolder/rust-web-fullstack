@@ -126,15 +126,7 @@ fn listener_addr(default_port: u16) -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], port))
 }
 
-/// Bootstraps all subsystems and starts the HTTP server.
-///
-/// # Errors
-/// Returns an error if configuration, database setup/migrations, or listener
-/// binding fails.
-pub async fn run() -> anyhow::Result<ServerHandle> {
-    init_tracing();
-
-    let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
+async fn create_database_pool(cfg: &rwf_config::Config) -> anyhow::Result<sqlx::PgPool> {
     let database_url = std::env::var("DATABASE_URL")
         .ok()
         .unwrap_or_else(|| cfg.live_search.database_url.clone());
@@ -152,14 +144,24 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
         .await
         .context("failed to create database pool")?;
 
-    // Every service sharing this database resolves the exact same SQLx
-    // migration history. Keep migrations on the raw SQLx pool because the
-    // instrumentation wrapper is for application query execution, not SQLx's
-    // migration/listener-specific APIs.
     sqlx::migrate!("../migrations")
         .run(&raw_pool)
         .await
         .context("failed to run database migrations")?;
+
+    Ok(raw_pool)
+}
+
+/// Bootstraps all subsystems and starts the HTTP server.
+///
+/// # Errors
+/// Returns an error if configuration, database setup/migrations, or listener
+/// binding fails.
+pub async fn run() -> anyhow::Result<ServerHandle> {
+    init_tracing();
+
+    let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
+    let raw_pool = create_database_pool(&cfg).await?;
 
     let app_pool = state::app_pool_from_raw(raw_pool.clone());
 
