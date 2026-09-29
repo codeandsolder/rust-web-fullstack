@@ -150,28 +150,10 @@ pub fn App() -> impl IntoView {
     }
 }
 
-#[component]
-#[expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] generates an empty typed-builder state enum"
-)]
-fn SearchErrorBoundary(children: Children) -> impl IntoView {
-    view! {
-        <ErrorBoundary fallback=move |_errors| {
-            view! {
-                <div class="error-boundary" data-testid="error-boundary">
-                    <h3>"Something went wrong."</h3>
-                    <p>"Try reloading the page to recover."</p>
-                </div>
-            }
-        }>{children()}</ErrorBoundary>
-    }
-}
-
 #[derive(Debug, TableRow, Clone)]
 #[table(impl_vec_data_provider)]
 pub struct SearchResultRow {
-    #[table(title = "Title", renderer = "TitleLinkCellRenderer")]
+    #[table(title = "Title")]
     pub title: String,
     #[table(title = "Snippet")]
     pub snippet: String,
@@ -179,37 +161,24 @@ pub struct SearchResultRow {
     pub url: String,
 }
 
-#[component]
-#[expect(
-    clippy::empty_enums,
-    reason = "Leptos #[component] generates an empty typed-builder state enum"
-)]
-fn TitleLinkCellRenderer(
-    class: String,
-    value: Signal<String>,
-    row: RwSignal<SearchResultRow>,
-    index: usize,
-) -> impl IntoView {
-    let _ = index;
-    let url = move || row.read().url.clone();
-    view! {
-        <td class=class>
-            <a href=url>{value}</a>
-        </td>
-    }
-}
-
 fn result_row_renderer(
     class: Signal<String>,
     row: RwSignal<SearchResultRow>,
-    index: usize,
+    _index: usize,
     _selected: Signal<bool>,
     on_select: EventHandler<leptos::web_sys::MouseEvent>,
-    columns: RwSignal<Vec<usize>>,
+    _columns: RwSignal<Vec<usize>>,
 ) -> impl IntoView {
+    let row = row.get_untracked();
+    let title = row.title;
+    let snippet = row.snippet;
+    let url = row.url;
+
     view! {
         <tr class=class data-testid="result-item" on:click=move |ev| on_select.run(ev)>
-            {SearchResultRow::render_row(row, index, columns)}
+            <td><a href=url.clone()>{title}</a></td>
+            <td>{snippet}</td>
+            <td>{url}</td>
         </tr>
     }
 }
@@ -272,7 +241,14 @@ pub fn SearchPage() -> impl IntoView {
             </button>
         </form>
 
-        <SearchErrorBoundary>
+        <ErrorBoundary fallback=move |_errors| {
+            view! {
+                <div class="error-boundary" data-testid="error-boundary">
+                    <h3>"Something went wrong."</h3>
+                    <p>"Try reloading the page to recover."</p>
+                </div>
+            }
+        }>
             <div id="results">
                 <Show when=move || !has_query() fallback=|| ()>
                     <p>"Enter a query above to search."</p>
@@ -322,7 +298,7 @@ pub fn SearchPage() -> impl IntoView {
                         })
                 }}
             </div>
-        </SearchErrorBoundary>
+        </ErrorBoundary>
     }
 }
 
