@@ -25,7 +25,7 @@ env:
 jobs:
   rust-skills2-strict:
     name: rust-skills2 strict nightly gate
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@ci/strict-rust-gate
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@692143127e05e36af9e91b4befa2f75c446a01f2
 
   lockfile:
     name: Lockfile consistency
