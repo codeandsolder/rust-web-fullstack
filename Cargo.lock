@@ -1389,7 +1389,6 @@ dependencies = [
  "gateway-example",
  "insta",
  "leptos",
- "leptos-utils",
  "leptos_axum",
  "live-search",
  "opentelemetry",
