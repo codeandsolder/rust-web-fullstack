@@ -23,6 +23,10 @@ env:
   CARGO_BUILD_WARNINGS: deny
 
 jobs:
+  rust-skills2-strict:
+    name: rust-skills2 strict nightly gate
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@ci/strict-rust-gate
+
   lockfile:
     name: Lockfile consistency
     runs-on: ubuntu-24.04
