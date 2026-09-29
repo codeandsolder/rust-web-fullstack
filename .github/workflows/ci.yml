@@ -216,9 +216,6 @@ jobs:
       command: cargo +1.98.1 test --locked --workspace --lib
       rust-toolchain: "1.98.1"
       rustflags: "-C target-cpu=x86-64-v2"
-    secrets:
-      SCCACHE_S3_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
-      SCCACHE_S3_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
 
   audit:
     name: Dependency audit
