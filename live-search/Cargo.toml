@@ -56,11 +56,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tower-http = { workspace = true, features = ["trace", "fs"] }
 thiserror = { workspace = true }
-axum-prometheus = { workspace = true }
+axum-prometheus = { workspace = true, optional = true }
 moka = { workspace = true }
 base64 = { workspace = true }
 rwf-config = { path = "../crates/config" }
-leptos-utils = { workspace = true }
 # OTel stack — gated behind `otel` feature.
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -81,7 +80,7 @@ rwf-domain = { workspace = true }
 
 [features]
 default = []
-ssr = ["dep:leptos_axum", "leptos/ssr", "leptos-use/ssr"]
+ssr = ["dep:leptos_axum", "dep:axum-prometheus", "leptos/ssr", "leptos-use/ssr"]
 hydrate = ["leptos/hydrate"]
 test-seams = []
 otel = [

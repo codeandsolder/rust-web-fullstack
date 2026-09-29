@@ -176,7 +176,9 @@ fn result_row_renderer(
 
     view! {
         <tr class=class data-testid="result-item" on:click=move |ev| on_select.run(ev)>
-            <td><a href=url.clone()>{title}</a></td>
+            <td>
+                <a href=url.clone()>{title}</a>
+            </td>
             <td>{snippet}</td>
             <td>{url}</td>
         </tr>
