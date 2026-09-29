@@ -1786,7 +1786,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "utoipa",
- "utoipa-axum",
  "utoipa-swagger-ui",
  "uuid",
  "validator",
@@ -2301,7 +2300,6 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "leptos",
- "leptos-utils",
  "leptos_axum",
  "leptos_i18n",
  "leptos_i18n_build",
@@ -3625,7 +3623,6 @@ dependencies = [
  "leptos",
  "leptos-struct-table",
  "leptos-use 0.19.2",
- "leptos-utils",
  "leptos_axum",
  "leptos_meta",
  "leptos_router",
@@ -4218,12 +4215,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pathdiff"
@@ -6878,19 +6869,6 @@ dependencies = [
  "serde",
  "serde_json",
  "utoipa-gen",
-]
-
-[[package]]
-name = "utoipa-axum"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "865319162dc3d0032e1e40ed11bd49d5b78e8ef576740589fd6823e2e9977423"
-dependencies = [
- "axum",
- "pastey",
- "tower-layer",
- "tower-service",
- "utoipa",
 ]
 
 [[package]]
