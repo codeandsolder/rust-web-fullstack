@@ -173,6 +173,7 @@ jobs:
 
   unit-tests:
     name: Unit tests
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -203,6 +204,21 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
+
+  unit-tests-shared-cache:
+    name: Unit tests (shared sccache)
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@main
+    with:
+      command: cargo +1.98.1 test --locked --workspace --lib
+      rust-toolchain: "1.98.1"
+      rustflags: "-C target-cpu=x86-64-v2"
+    secrets:
+      SCCACHE_S3_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+      SCCACHE_S3_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
 
   audit:
     name: Dependency audit
