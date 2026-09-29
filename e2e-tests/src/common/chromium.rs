@@ -171,9 +171,11 @@ pub async fn setup() -> Result<TestContext> {
 }
 
 /// Tear down a [`TestContext`] by closing the page and browser in reverse
-/// creation order. Cleanup errors are logged via `eprintln!` (stderr,
-/// captured by the test harness per-test and displayed only on failure)
-/// but never mask the test assertion that already ran.
+/// creation order.
+///
+/// Cleanup errors are logged via `eprintln!` (stderr, captured by the test
+/// harness per-test and displayed only on failure), but never mask the test
+/// assertion that already ran.
 pub async fn teardown(ctx: TestContext) {
     let TestContext {
         mut browser,
