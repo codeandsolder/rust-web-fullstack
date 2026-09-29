@@ -150,11 +150,11 @@ pub fn App() -> impl IntoView {
     }
 }
 
+#[component]
 #[expect(
     clippy::empty_enums,
     reason = "Leptos #[component] generates an empty typed-builder state enum"
 )]
-#[component]
 fn SearchErrorBoundary(children: Children) -> impl IntoView {
     view! {
         <ErrorBoundary fallback=move |_errors| {
@@ -179,11 +179,11 @@ pub struct SearchResultRow {
     pub url: String,
 }
 
+#[component]
 #[expect(
     clippy::empty_enums,
     reason = "Leptos #[component] generates an empty typed-builder state enum"
 )]
-#[component]
 fn TitleLinkCellRenderer(
     class: String,
     value: Signal<String>,
