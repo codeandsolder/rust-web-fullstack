@@ -86,20 +86,52 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
     )
 }
 
-/// Compose every `ServiceModule` with pre-loaded settings and runtime state.
-///
-/// # Errors
-/// Returns an error if TTLs are invalid, the HTTP client cannot be built, or
-/// rate-limiter configuration fails.
-#[instrument(skip(modules, settings, db_pool))]
-pub fn build_gateway_with_settings(
+fn service_infos(modules: &[Arc<dyn ServiceModule>]) -> Vec<ServiceInfo> {
+    modules
+        .iter()
+        .map(|module| ServiceInfo {
+            name: module.name(),
+            path: module.path(),
+            description: module.description(),
+            enabled: module.enabled(),
+        })
+        .collect()
+}
+
+fn enabled_service_router(modules: &[Arc<dyn ServiceModule>]) -> Router<GatewayState> {
+    modules
+        .iter()
+        .filter(|module| module.enabled())
+        .fold(Router::new(), |router, module| {
+            router.nest(&format!("/{}", module.path()), module.router())
+        })
+}
+
+async fn csrf_token_handler(
+    session: tower_sessions::Session,
+) -> Result<Json<serde_json::Value>, crate::auth::error::AppError> {
+    let token = crate::csrf::get_or_create_token(&session)
+        .await
+        .map_err(|error| {
+            crate::auth::error::AppError::internal(
+                "csrf token bootstrap",
+                std::io::Error::other(error),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "csrf_token": token.as_str(),
+        "header": crate::csrf::TOKEN_HEADER,
+    })))
+}
+
+fn gateway_state(
     modules: Vec<Arc<dyn ServiceModule>>,
     mut settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
     refresh_token_ttl_secs: i64,
     access_token_ttl_secs: i64,
-) -> Result<Router, anyhow::Error> {
+) -> Result<(GatewayState, Router<GatewayState>), anyhow::Error> {
     if refresh_token_ttl_secs <= 0 || access_token_ttl_secs <= 0 {
         anyhow::bail!("gateway token TTLs must be positive");
     }
@@ -109,40 +141,51 @@ pub fn build_gateway_with_settings(
     settings.access_token_ttl_secs = access_token_ttl_secs;
 
     let (tx, _rx) = broadcast::channel(settings.sse_broadcast_buffer);
-
-    let service_infos: Vec<ServiceInfo> = modules
-        .iter()
-        .map(|module| ServiceInfo {
-            name: module.name(),
-            path: module.path(),
-            description: module.description(),
-            enabled: module.enabled(),
-        })
-        .collect();
-
-    let mut service_router: Router<GatewayState> = Router::new();
-    for module in &modules {
-        if module.enabled() {
-            service_router = service_router.nest(&format!("/{}", module.path()), module.router());
-        }
-    }
-
+    let services = service_infos(&modules);
+    let service_router = enabled_service_router(&modules);
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .context("failed to build reqwest client")?;
 
-    let state = GatewayState {
-        tx,
-        services: service_infos,
+    Ok((
+        GatewayState {
+            tx,
+            services,
+            modules,
+            settings,
+            proxy_upstream_url: proxy_upstream_url.into(),
+            db_pool,
+            refresh_token_ttl_secs,
+            access_token_ttl_secs,
+            http_client,
+        },
+        service_router,
+    ))
+}
+
+/// Compose every `ServiceModule` with pre-loaded settings and runtime state.
+///
+/// # Errors
+/// Returns an error if TTLs are invalid, the HTTP client cannot be built, or
+/// rate-limiter configuration fails.
+#[instrument(skip(modules, settings, db_pool))]
+pub fn build_gateway_with_settings(
+    modules: Vec<Arc<dyn ServiceModule>>,
+    settings: settings::Settings,
+    proxy_upstream_url: String,
+    db_pool: Option<sqlx::PgPool>,
+    refresh_token_ttl_secs: i64,
+    access_token_ttl_secs: i64,
+) -> Result<Router, anyhow::Error> {
+    let (state, service_router) = gateway_state(
         modules,
         settings,
-        proxy_upstream_url: proxy_upstream_url.into(),
+        proxy_upstream_url,
         db_pool,
         refresh_token_ttl_secs,
         access_token_ttl_secs,
-        http_client,
-    };
+    )?;
 
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
@@ -221,23 +264,6 @@ pub fn build_gateway_with_settings(
         .layer(general_governor);
 
     let session_router = crate::session::router::<GatewayState>().route_layer(csrf_middleware);
-
-    async fn csrf_token_handler(
-        session: tower_sessions::Session,
-    ) -> Result<Json<serde_json::Value>, crate::auth::error::AppError> {
-        let token = crate::csrf::get_or_create_token(&session)
-            .await
-            .map_err(|e| {
-                crate::auth::error::AppError::internal(
-                    "csrf token bootstrap",
-                    std::io::Error::other(e),
-                )
-            })?;
-        Ok(Json(serde_json::json!({
-            "csrf_token": token.as_str(),
-            "header": crate::csrf::TOKEN_HEADER,
-        })))
-    }
 
     let app = Router::new()
         .route("/auth/csrf", get(csrf_token_handler))

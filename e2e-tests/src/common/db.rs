@@ -22,7 +22,7 @@ impl std::fmt::Debug for TestEnv {
         f.debug_struct("TestEnv")
             .field("pool", &self.pool)
             .field("connection_string", &self.connection_string)
-            .field("container", &"<container>")
+            .field("_container", &"<container>")
             .finish()
     }
 }

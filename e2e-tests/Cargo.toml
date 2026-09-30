@@ -78,8 +78,7 @@ opentelemetry_sdk = { workspace = true, optional = true, features = ["testing"] 
 # Test infrastructure
 testcontainers = { workspace = true }
 
-# Snapshot testing & property-based testing
-insta = { workspace = true, features = ["json"] }
+# Property-based test helpers are used by the shared test-support library.
 proptest = { workspace = true }
 
 # Shared domain types (SearchResult, etc.)
@@ -87,10 +86,6 @@ rwf-domain = { workspace = true }
 
 # Import the real SearchResult type and SSR modules for in-process server
 live-search = { path = "../live-search", features = ["ssr", "test-seams"] }
-# Shared Leptos axum helpers (doubled-prefix server-fn probe) for in-process
-# test launchers
-leptos-utils = { workspace = true }
-
 # Gateway example for in-process HTTP tests
 gateway-example = { path = "../gateway" }
 
@@ -99,6 +94,5 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-# Anything extra that only the integration tests need (not the lib helpers).
-# Currently empty — every dep that test binaries need is already a regular
-# dependency, reachable through the library crate.
+# Snapshot assertions are used only by integration-test binaries.
+insta = { workspace = true, features = ["json"] }

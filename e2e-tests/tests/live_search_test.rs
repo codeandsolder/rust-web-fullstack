@@ -323,7 +323,7 @@ async fn server_fn_search_returns_results_via_http() -> anyhow::Result<()> {
     let results = json
         .as_array()
         .context("server fn response should be a JSON array")?;
-    assert!(!results.is_empty());
+    assert_ne!(results.len(), 0, "search should return at least one result");
     assert!(results.iter().any(|row| {
         row.get("title")
             .and_then(serde_json::Value::as_str)
