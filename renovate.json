@@ -5,10 +5,11 @@
   "minimumReleaseAge": "3 days",
   "minimumReleaseAgeBehaviour": "timestamp-required",
   "internalChecksFilter": "strict",
-  "separateMultipleMajor": true,
-  "prConcurrentLimit": 0,
-  "prHourlyLimit": 0,
-  "rebaseWhen": "behind-base-branch",
+  "separateMajorMinor": false,
+  "separateMultipleMajor": false,
+  "prConcurrentLimit": 6,
+  "prHourlyLimit": 3,
+  "rebaseWhen": "conflicted",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 3am"],
@@ -29,31 +30,37 @@
       "allowedVersions": "<0.34"
     },
     {
-      "description": "Automerge ordinary compatible updates after CI",
+      "description": "Group ordinary compatible stable updates after CI",
+      "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
       "matchCurrentVersion": "!/^0/",
+      "groupName": "routine stable Rust dependencies",
       "automerge": true,
       "automergeType": "pr"
     },
     {
       "description": "Cargo lockfile maintenance is age-gated by repository CI",
+      "matchManagers": ["cargo"],
       "matchUpdateTypes": ["lockFileMaintenance"],
       "minimumReleaseAge": null,
       "automerge": true,
       "automergeType": "pr"
     },
     {
-      "description": "Potentially breaking pre-1.0 updates stay open for the maintenance agent",
+      "description": "Potentially breaking pre-1.0 updates are reviewed individually",
+      "matchManagers": ["cargo"],
       "matchCurrentVersion": "/^0\\./",
       "automerge": false
     },
     {
-      "description": "Major updates are always attempted but stay open for the maintenance agent",
+      "description": "Latest major Rust dependency updates are attempted individually",
+      "matchManagers": ["cargo"],
       "matchUpdateTypes": ["major"],
       "automerge": false
     },
     {
-      "description": "Package replacements stay open for the maintenance agent",
+      "description": "Package replacements stay open for review",
+      "matchManagers": ["cargo"],
       "matchUpdateTypes": ["replacement"],
       "minimumReleaseAge": null,
       "automerge": false
