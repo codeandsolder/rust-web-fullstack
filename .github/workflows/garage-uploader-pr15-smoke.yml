@@ -1,0 +1,42 @@
+name: Garage uploader PR15 smoke
+
+on:
+  push:
+    branches: [ci/test-trusted-garage-uploader]
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+
+cache-mode: write
+
+jobs:
+  merge:
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-sccache-l0.yml@7a5c01590f91177870bcaf600d9eff2550eb1ff2
+    with:
+      source-run-id: "36735580654"
+      source-event: push
+
+  garage-upload:
+    needs: merge
+    if: needs.merge.outputs.garage-upload-cache-key != ''
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@7a5c01590f91177870bcaf600d9eff2550eb1ff2
+    with:
+      garage-upload-only: true
+      garage-upload-cache-key: ${{ needs.merge.outputs.garage-upload-cache-key }}
+
+  cleanup:
+    needs: [merge, garage-upload]
+    if: always() && needs.garage-upload.result == 'success' && needs.merge.outputs.garage-upload-cache-key != ''
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete transient upload queue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ needs.merge.outputs.garage-upload-cache-key }}
+        run: gh cache delete "$CACHE_KEY" --repo "$GITHUB_REPOSITORY" --confirm
