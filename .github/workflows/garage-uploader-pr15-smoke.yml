@@ -1,4 +1,4 @@
-name: Garage uploader PR15 smoke
+name: Nested Garage uploader PR16 smoke
 
 on:
   push:
@@ -13,30 +13,7 @@ cache-mode: write
 
 jobs:
   merge:
-    uses: codeandsolder/ci-workflows/.github/workflows/merge-sccache-l0.yml@main
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-sccache-l0.yml@8bc6c6241f60c6cd612742be337df788ed99415d
     with:
       source-run-id: "36735580654"
       source-event: push
-
-  garage-upload:
-    needs: merge
-    if: needs.merge.outputs.garage-upload-cache-key != ''
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@main
-    with:
-      garage-upload-only: true
-      garage-upload-cache-key: ${{ needs.merge.outputs.garage-upload-cache-key }}
-
-  cleanup:
-    needs: [merge, garage-upload]
-    if: always() && needs.garage-upload.result == 'success' && needs.merge.outputs.garage-upload-cache-key != ''
-    runs-on: ubuntu-22.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Delete transient upload queue
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ needs.merge.outputs.garage-upload-cache-key }}
-        run: gh cache delete "$CACHE_KEY" --repo "$GITHUB_REPOSITORY" --confirm
