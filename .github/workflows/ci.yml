@@ -219,7 +219,7 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
 
   unit-tests-shared-cache:
-    name: Unit tests (shared sccache)
+    name: Unit tests (persistent L0 sccache)
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
