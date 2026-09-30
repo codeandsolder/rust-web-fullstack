@@ -9,6 +9,7 @@ on:
 permissions:
   actions: write
   contents: read
+  id-token: write
 
 # workflow_run is cache-read-only by default. This workflow writes only after
 # trusted push/workflow_dispatch source runs, never pull_request runs.
