@@ -132,11 +132,7 @@ jobs:
             target/debug/build
             target/debug/deps
             target/debug/examples
-            target/debug/incremental
-          key: clippy-target-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            clippy-target-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}-
-            clippy-target-v2-${{ runner.os }}-rust-1.98.1-
+          key: clippy-target-v3-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}
       - name: Clippy
         run: |
           lint_args=(-D warnings -D clippy::pedantic -D clippy::nursery)
