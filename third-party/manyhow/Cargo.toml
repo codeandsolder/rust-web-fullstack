@@ -62,7 +62,7 @@ name = "manyhow"
 path = "src/lib.rs"
 
 [dependencies.darling_core]
-version = "0.20.1"
+version = "0.24.0"
 optional = true
 
 [dependencies.macros]
