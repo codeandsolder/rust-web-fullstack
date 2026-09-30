@@ -125,7 +125,8 @@ jobs:
           rustc +1.98.1 --version
           cargo +1.98.1 --version
       - name: Restore Clippy build cache
-        uses: actions/cache@v6
+        id: clippy-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             target/debug/.fingerprint
@@ -133,6 +134,8 @@ jobs:
             target/debug/deps
             target/debug/examples
           key: clippy-target-v3-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            clippy-target-v3-${{ runner.os }}-rust-1.98.1-
       - name: Clippy
         run: |
           lint_args=(-D warnings -D clippy::pedantic -D clippy::nursery)
@@ -141,6 +144,19 @@ jobs:
           cargo +1.98.1 clippy --locked -p live-search --features ssr,otel --all-targets -- "${lint_args[@]}"
           cargo +1.98.1 clippy --locked -p gateway-example --features otel --all-targets -- "${lint_args[@]}"
           cargo +1.98.1 clippy --locked -p i18n-demo --features ssr --all-targets -- "${lint_args[@]}"
+      - name: Save Clippy build cache
+        if: >-
+          success() &&
+          github.event_name != 'pull_request' &&
+          steps.clippy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target/debug/.fingerprint
+            target/debug/build
+            target/debug/deps
+            target/debug/examples
+          key: ${{ steps.clippy-cache.outputs.cache-primary-key }}
       - name: Report Clippy cache footprint
         if: always()
         run: du -sh target/debug 2>/dev/null || true
