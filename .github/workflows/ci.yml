@@ -176,7 +176,7 @@ jobs:
     env:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
       SCCACHE_DIR: ${{ github.workspace }}/.sccache/unit-tests
-      SCCACHE_CACHE_SIZE: "1G"
+      SCCACHE_CACHE_SIZE: "256M"
       RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
@@ -188,9 +188,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .sccache/unit-tests
-          key: sccache-unit-v2-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          key: sccache-unit-v3-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
-            sccache-unit-v2-${{ runner.os }}-rust-1.98.1-
+            sccache-unit-v3-${{ runner.os }}-rust-1.98.1-
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.98.1 --profile minimal
