@@ -60,12 +60,12 @@ version = "1"
 version = "1"
 
 [dependencies.syn]
-version = "2"
+version = "3"
 optional = true
 default-features = false
 
 [dev-dependencies.syn]
-version = "2"
+version = "3"
 features = ["full"]
 
 [dev-dependencies.trybuild]
