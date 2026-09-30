@@ -3,6 +3,7 @@
 //! This crate contains pure data types with no framework dependencies
 //! (no `sqlx`, `leptos`, `axum`, etc.). It is the single source of truth
 //! for domain model definitions consumed across workspace crates.
+// cache-merge probe B
 
 use std::fmt;
 use std::str::FromStr;
