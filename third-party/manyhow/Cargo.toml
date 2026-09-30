@@ -66,7 +66,7 @@ version = "0.20.1"
 optional = true
 
 [dependencies.macros]
-version = "0.11.4"
+version = "0.14.0"
 optional = true
 package = "manyhow-macros"
 
