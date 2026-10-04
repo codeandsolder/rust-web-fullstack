@@ -209,7 +209,7 @@ shutdown wiring for active connections.
 
 ## Build and validation
 
-Basic static/test pass on the default Rust 1.98.1 toolchain:
+Basic static/test pass on the default Rust 1.99.0 toolchain:
 
 ```bash
 cargo check --workspace --all-targets
@@ -264,7 +264,7 @@ formatting, native Clippy feature combinations, real WASM hydration linking,
 workspace library tests, `cargo audit`, production Leptos builds, all three
 Docker images, and real Chromium-backed E2E tests.
 
-Current-stable jobs use Rust **1.98.1**. A separate **1.94.1 MSRV** lane checks
+Current-stable jobs use Rust **1.99.0**. A separate **1.94.1 MSRV** lane checks
 both the native workspace and hydration crates, so adopting new stable APIs does
 not silently raise the advertised compatibility floor. Cargo resolver 3 makes
 new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s
