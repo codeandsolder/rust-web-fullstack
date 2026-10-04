@@ -41,7 +41,7 @@ jobs:
 
   msrv:
     name: MSRV (Rust 1.94.1)
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Rust 1.94 remains the compatibility contract. Keep this lane separate
@@ -163,7 +163,7 @@ jobs:
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -232,7 +232,7 @@ jobs:
 
   audit:
     name: Dependency audit
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -256,7 +256,7 @@ jobs:
 
   leptos-build:
     name: Leptos production builds
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -310,7 +310,7 @@ jobs:
 
   docker-build:
     name: Docker image (${{ matrix.image }})
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -344,7 +344,7 @@ jobs:
 
   e2e-tests:
     name: Browser + integration E2E
-    if: startsWith(github.ref, 'refs/tags/') || github.head_ref == 'migration/rust-1.99'
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
