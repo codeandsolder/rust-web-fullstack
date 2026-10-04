@@ -24,7 +24,7 @@ fix this document in the same change.
 
 The workspace uses Edition 2024 with resolver 3. Rust **1.94** remains the
 compatibility floor/MSRV and is tested on patched **1.94.1**. Normal development,
-current-stable CI, and production builds use patched **Rust 1.98.1**. Newer
+current-stable CI, and production builds use **Rust 1.99.0**. Newer
 stable Rust versions do not by themselves justify raising the MSRV; the oldest
 supported compiler and the preferred compiler for shipping builds are separate
 policies.
@@ -413,7 +413,7 @@ docker compose --profile dev up --build \
 The maintained GitHub Actions workflow should cover:
 
 - a dedicated patched-MS​​RV lane for Rust 1.94.1, separate from current-stable validation,
-- native workspace/all-target Clippy plus supported native feature combinations on Rust 1.98.1,
+- native workspace/all-target Clippy plus supported native feature combinations on Rust 1.99.0,
 - SSR and hydration feature matrices,
 - a real `wasm32-unknown-unknown` link on current stable, not only `cargo check`,
 - the `otel` feature compilation,
