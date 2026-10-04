@@ -23,6 +23,9 @@ RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.128 --locked && \
     cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
+# The workspace patches crates.io dependencies to local sources. Those path
+# dependencies must exist while cargo-chef cooks the dependency layer.
+COPY third-party /build/third-party
 # Stylance's import_style proc macro reads this file at compile time. cargo-chef
 # recipes contain Rust manifests/skeletons, not arbitrary CSS assets, so make
 # the stylesheet available before the dependency cook as well as the real build.
