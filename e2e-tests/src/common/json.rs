@@ -28,7 +28,7 @@ mod proptests {
     }
 
     proptest! {
-        /// SearchResult round-trips through serde_json losslessly.
+        /// `SearchResult` round-trips through `serde_json` losslessly.
         #[test]
         fn search_result_json_roundtrip(result in arb_search_result()) {
             let json = serde_json::to_value(&result)

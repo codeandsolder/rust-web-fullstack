@@ -6,10 +6,11 @@
 #   3. builder: cargo chef cook the recipe (cached dependency build),
 #      then copy source and build the binary.
 FROM rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS chef
-# The official 1.98 image carries 1.98.0; install the patched stable compiler
-# explicitly so production builds do not stay on a known superseded point release.
-RUN rustup toolchain install 1.98.1 --profile minimal
-ENV RUSTUP_TOOLCHAIN=1.98.1
+# Keep the reproducible Bookworm base pinned by digest, then install the
+# repository's current stable compiler explicitly so Docker image publication
+# lag cannot leave production builds on an older Rust release.
+RUN rustup toolchain install 1.99.0 --profile minimal
+ENV RUSTUP_TOOLCHAIN=1.99.0
 RUN cargo install cargo-chef --locked
 WORKDIR /build
 
@@ -22,6 +23,9 @@ RUN rustup target add wasm32-unknown-unknown && \
     cargo install wasm-bindgen-cli --version 0.2.128 --locked && \
     cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
+# The workspace patches crates.io dependencies to local sources. Those path
+# dependencies must exist while cargo-chef cooks the dependency layer.
+COPY third-party /build/third-party
 # Stylance's import_style proc macro reads this file at compile time. cargo-chef
 # recipes contain Rust manifests/skeletons, not arbitrary CSS assets, so make
 # the stylesheet available before the dependency cook as well as the real build.
