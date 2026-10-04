@@ -17,6 +17,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /build/recipe.json recipe.json
+# The workspace patches crates.io dependencies to local sources. Those path
+# dependencies must exist while cargo-chef cooks the dependency layer.
+COPY third-party /build/third-party
 # Match the final package selection exactly so Cargo can reuse the cooked
 # library + binary dependency graph after the real sources are copied in.
 RUN cargo chef cook --recipe-path recipe.json --locked --release \
