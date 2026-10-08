@@ -5,7 +5,7 @@
 #   2. planner: produce a recipe.json over the whole workspace.
 #   3. builder: cargo chef cook the recipe (cached dependency build),
 #      then copy source and build the binary.
-FROM rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS chef
+FROM rust:1.99.0-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 AS chef
 # Keep the reproducible Bookworm base pinned by digest, then install the
 # repository's current stable compiler explicitly so Docker image publication
 # lag cannot leave production builds on an older Rust release.
