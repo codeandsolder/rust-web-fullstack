@@ -5,12 +5,12 @@
 # Update: bump the pin hash and re-push.
 #
 # Uses the same Rust digest as the other CI steps for reproducibility.
-FROM rust:1.99-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 AS build
+FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
 
 # Install leptosfmt into a global cargo bin dir so the runtime layer can COPY it.
 RUN rustup toolchain install 1.99.0 --profile minimal && \
     RUSTUP_TOOLCHAIN=1.99.0 cargo install leptosfmt --locked
 
 # Slim runtime: same digest, only the cargo bin dir copied.
-FROM rust:1.99-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0
+FROM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 COPY --from=build /usr/local/cargo/bin/leptosfmt /usr/local/bin/leptosfmt
