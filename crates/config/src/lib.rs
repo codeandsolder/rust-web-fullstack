@@ -68,7 +68,7 @@ impl Default for CorsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub struct SessionConfig {
     pub cookie_secure: bool,
 }
