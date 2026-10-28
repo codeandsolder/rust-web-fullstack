@@ -10,7 +10,7 @@ use futures::future::BoxFuture;
 use crate::gateway::GatewayState;
 
 /// Describes a registered service for API discovery / nav rendering.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct ServiceInfo {
     pub name: &'static str,
     pub path: &'static str,
