@@ -51,7 +51,7 @@ def crate_versions(name: str) -> dict[str, dict]:
 def publication_time(pkg: dict) -> dt.datetime | None:
     info = crate_versions(pkg["name"]).get(pkg["version"])
     value = info.get("created_at") if info else None
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+    return dt.datetime.fromisoformat(value) if value else None
 
 
 def main() -> int:
@@ -67,7 +67,7 @@ def main() -> int:
 
     after = load_lock(Path("Cargo.lock").read_bytes())
     changed = [pkg for pkg in after if key(pkg) not in before and is_crates_io(pkg)]
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=args.hours)
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=args.hours)
 
     blocked: list[str] = []
     for pkg in changed:
