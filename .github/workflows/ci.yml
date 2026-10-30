@@ -26,7 +26,7 @@ env:
 jobs:
   rust-skills2-strict:
     name: rust-skills2 strict nightly gate
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@ca8e5368b41e5699095dd0458a3849ecb8db7712
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@ca8e5368b41e5699095dd0458a3849ecb8db7712 # main
 
   lockfile:
     name: Lockfile consistency
@@ -223,7 +223,7 @@ jobs:
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@b2414c5358d1061e9b442656298506e98c9d13e7 # main
     with:
       command: cargo +1.99.0 test --locked --workspace --lib
       rust-toolchain: "1.99.0"
