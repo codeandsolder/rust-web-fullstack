@@ -2,7 +2,7 @@
 #
 # Multi-stage build with cargo-chef for reproducible dependency caching
 # across the whole workspace.
-FROM rust:1.99.0-bookworm@sha256:59037199c44290f2befcdd58dcc540164763fc296950255aaefeef096a1866b0 AS chef
+FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS chef
 # Keep the reproducible Bookworm base pinned by digest, then install the
 # repository's current stable compiler explicitly so Docker image publication
 # lag cannot leave production builds on an older Rust release.
