@@ -37,7 +37,7 @@ uuid = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 # Shared (wasm32 + native) UI / utility dependencies
-leptos-use = { workspace = true }
+leptos-use-watch-debounce-throttle = { workspace = true }
 leptos-struct-table = { workspace = true }
 lepticons = { workspace = true }
 stylance = { workspace = true }
@@ -80,7 +80,7 @@ rwf-domain = { workspace = true }
 
 [features]
 default = []
-ssr = ["dep:leptos_axum", "leptos/ssr", "leptos-use/ssr"]
+ssr = ["dep:leptos_axum", "leptos/ssr", "leptos-use-watch-debounce-throttle/ssr"]
 hydrate = ["leptos/hydrate"]
 test-seams = []
 otel = [

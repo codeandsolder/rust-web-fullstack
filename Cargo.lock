@@ -3297,22 +3297,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f46f177638302858755e7f10b36f440ab4f49101fdf0c53d37e79582ca090840"
 dependencies = [
  "cfg-if",
- "chrono",
- "codee",
- "cookie",
  "default-struct-builder",
- "futures-util",
- "gloo-timers",
  "js-sys",
  "lazy_static",
  "leptos",
  "paste",
  "send_wrapper",
  "thiserror 2.0.21",
- "unic-langid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "leptos-use-filters"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2fb5470c66f998fa192193cc113e785ea15e2883b7402cddd2f1548cc77beb4"
+dependencies = [
+ "cfg-if",
+ "default-struct-builder",
+ "leptos",
+ "leptos-use-now",
+ "send_wrapper",
+ "sendwrap-fn",
+]
+
+[[package]]
+name = "leptos-use-now"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62000a58720fa5b434a0927673f1fc3611393fc0c5ccec220b62a9d52bb3c2bb"
+dependencies = [
+ "cfg-if",
+ "js-sys",
+ "leptos",
+]
+
+[[package]]
+name = "leptos-use-watch-debounce-throttle"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d5e81836cf2636386fd215c8290bb51044d7c47e703b7669db42fdf386d4d1"
+dependencies = [
+ "default-struct-builder",
+ "leptos",
+ "leptos-use-filters",
+ "leptos-use-watch-with-options",
+]
+
+[[package]]
+name = "leptos-use-watch-with-options"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "972c4e8abb142523c8ebb671843c8e2ca11aa7fbe73ea0e4d0e87ba05fdddadb"
+dependencies = [
+ "leptos",
+ "leptos-use-filters",
 ]
 
 [[package]]
@@ -3655,7 +3696,7 @@ dependencies = [
  "lepticons",
  "leptos",
  "leptos-struct-table",
- "leptos-use 0.19.3",
+ "leptos-use-watch-debounce-throttle",
  "leptos_axum",
  "leptos_meta",
  "leptos_router",
@@ -5194,6 +5235,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 dependencies = [
  "futures-core",
+]
+
+[[package]]
+name = "sendwrap-fn"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e0e45ec8b11fc952166efb888fd52b3ab69647667d436f3af91984f53431910"
+dependencies = [
+ "send_wrapper",
 ]
 
 [[package]]
@@ -6759,24 +6809,6 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
-name = "unic-langid"
-version = "0.9.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a28ba52c9b05311f4f6e62d5d9d46f094bd6e84cb8df7b3ef952748d752a7d05"
-dependencies = [
- "unic-langid-impl",
-]
-
-[[package]]
-name = "unic-langid-impl"
-version = "0.9.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce1bf08044d4b7a94028c93786f8566047edc11110595914de93362559bc658"
-dependencies = [
- "tinystr",
-]
 
 [[package]]
 name = "unicase"
