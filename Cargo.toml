@@ -54,7 +54,7 @@ validator = { version = "0.21", features = ["derive"] }
 aws-lc-rs = "1"
 moka = { version = "0.12", features = ["future"] }
 stylance = "0.8"
-leptos-use = "0.19"
+leptos-use = "0.20"
 leptos-struct-table = "0.19"
 lepticons = "0.13"
 utoipa = "6"
