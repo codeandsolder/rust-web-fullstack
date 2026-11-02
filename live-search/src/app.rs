@@ -15,7 +15,7 @@ use leptos_router::path;
 
 use lepticons::{Icon, LucideGlyph};
 use leptos_struct_table::{EventHandler, TableContent, TableDataProvider, TableRow};
-use leptos_use::watch_debounced;
+use leptos_use_watch_debounce_throttle::watch_debounced;
 
 use crate::db::SearchResult;
 #[cfg(target_arch = "wasm32")]
