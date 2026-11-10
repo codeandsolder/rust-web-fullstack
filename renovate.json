@@ -1,69 +1,53 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "github>codeandsolder/ci-workflows:renovate-ci-trust-root"],
-  "dependencyDashboard": true,
-  "minimumReleaseAge": "3 days",
-  "minimumReleaseAgeBehaviour": "timestamp-required",
-  "internalChecksFilter": "strict",
+  "extends": [
+    "github>codeandsolder/ci-workflows:renovate-fleet"
+  ],
   "separateMajorMinor": false,
   "separateMultipleMajor": false,
-  "prConcurrentLimit": 6,
-  "prHourlyLimit": 3,
   "rebaseWhen": "conflicted",
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["before 3am"],
+    "schedule": [
+      "before 3am"
+    ],
     "automerge": true,
     "automergeType": "pr"
   },
   "packageRules": [
     {
       "description": "Keep OpenTelemetry on 0.32 until sqlx-otel supports 0.33",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp"],
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "opentelemetry",
+        "opentelemetry_sdk",
+        "opentelemetry-otlp"
+      ],
       "allowedVersions": "<0.33"
     },
     {
       "description": "Keep tracing-opentelemetry paired with OpenTelemetry 0.32",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["tracing-opentelemetry"],
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "tracing-opentelemetry"
+      ],
       "allowedVersions": "<0.34"
     },
     {
-      "description": "Group ordinary compatible stable updates after CI",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
-      "matchCurrentVersion": "!/^0/",
-      "groupName": "routine stable Rust dependencies",
-      "automerge": true,
-      "automergeType": "pr"
-    },
-    {
       "description": "Cargo lockfile maintenance is age-gated by repository CI",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["lockFileMaintenance"],
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
       "minimumReleaseAge": null,
       "automerge": true,
       "automergeType": "pr"
-    },
-    {
-      "description": "Potentially breaking pre-1.0 updates are reviewed individually",
-      "matchManagers": ["cargo"],
-      "matchCurrentVersion": "/^0\\./",
-      "automerge": false
-    },
-    {
-      "description": "Latest major Rust dependency updates are attempted individually",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["major"],
-      "automerge": false
-    },
-    {
-      "description": "Package replacements stay open for review",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["replacement"],
-      "minimumReleaseAge": null,
-      "automerge": false
     }
   ]
 }
