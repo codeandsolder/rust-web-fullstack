@@ -26,7 +26,7 @@ env:
 jobs:
   strict-rust:
     name: Strict Rust
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@260a48d4b1cf65252f892b067fe41f44f05e653a # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@432dc51cb588033b4f2836008e6814d1aedf3f55 # main
 
   lockfile:
     name: Lockfile consistency
@@ -49,6 +49,10 @@ jobs:
     # silently raise the floor.
     steps:
       - uses: actions/checkout@v7
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
+        with:
+          rust-toolchain: "1.94.1"
       - name: Install patched MSRV toolchain
         run: |
           rustup toolchain install 1.94.1 --profile minimal --target wasm32-unknown-unknown
@@ -60,6 +64,9 @@ jobs:
         run: |
           cargo +1.94.1 check --locked -p live-search --target wasm32-unknown-unknown --features hydrate --lib
           cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   format:
     name: Format
@@ -67,6 +74,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
+        with:
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal --component rustfmt
@@ -109,6 +120,9 @@ jobs:
       - name: Verify formatting
         if: steps.format.outputs.changed == 'true'
         run: git diff --exit-code
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   clippy:
     name: Clippy (native)
@@ -116,26 +130,17 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
-      CARGO_INCREMENTAL: "1"
     steps:
       - uses: actions/checkout@v7
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
+        with:
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal --component clippy
           rustc +1.99.0 --version
           cargo +1.99.0 --version
-      - name: Restore Clippy build cache
-        id: clippy-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            target/debug/.fingerprint
-            target/debug/build
-            target/debug/deps
-            target/debug/examples
-          key: clippy-target-v3-${{ runner.os }}-rust-1.99.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            clippy-target-v3-${{ runner.os }}-rust-1.99.0-
       - name: Clippy
         run: |
           lint_args=(-D warnings -D clippy::pedantic -D clippy::nursery)
@@ -144,22 +149,12 @@ jobs:
           cargo +1.99.0 clippy --locked -p live-search --features ssr,otel --all-targets -- "${lint_args[@]}"
           cargo +1.99.0 clippy --locked -p gateway-example --features otel --all-targets -- "${lint_args[@]}"
           cargo +1.99.0 clippy --locked -p i18n-demo --features ssr --all-targets -- "${lint_args[@]}"
-      - name: Save Clippy build cache
-        if: >-
-          success() &&
-          github.event_name != 'pull_request' &&
-          steps.clippy-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            target/debug/.fingerprint
-            target/debug/build
-            target/debug/deps
-            target/debug/examples
-          key: ${{ steps.clippy-cache.outputs.cache-primary-key }}
       - name: Report Clippy cache footprint
         if: always()
         run: du -sh target/debug 2>/dev/null || true
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
@@ -174,6 +169,10 @@ jobs:
           - i18n-demo
     steps:
       - uses: actions/checkout@v7
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
+        with:
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
@@ -183,6 +182,9 @@ jobs:
       # --allow-undefined implicitly, so only a real link exercises that policy.
       - name: Link hydration build
         run: cargo +1.99.0 build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   unit-tests:
     name: Unit tests
@@ -191,22 +193,12 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache/unit-tests
-      SCCACHE_CACHE_SIZE: "256M"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
         with:
-          version: "v0.19.0"
-      - name: Restore unit-test compiler cache
-        uses: actions/cache@v6
-        with:
-          path: .sccache/unit-tests
-          key: sccache-unit-v3-${{ runner.os }}-rust-1.99.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            sccache-unit-v3-${{ runner.os }}-rust-1.99.0-
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal
@@ -217,13 +209,16 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   unit-tests-shared-cache:
     name: Unit tests (GHA sccache)
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@b2414c5358d1061e9b442656298506e98c9d13e7 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@be66a1ada16209be5b75d39724ef7383892d92cc # main
     with:
       command: cargo +1.99.0 test --locked --workspace --lib
       rust-toolchain: "1.99.0"
@@ -236,6 +231,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
+        with:
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal
@@ -252,29 +251,21 @@ jobs:
         run: cargo +1.99.0 install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   leptos-build:
     name: Leptos production builds
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
-    env:
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache/leptos-build
-      SCCACHE_CACHE_SIZE: "2G"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
         with:
-          version: "v0.19.0"
-      - name: Restore production compiler cache
-        uses: actions/cache@v6
-        with:
-          path: .sccache/leptos-build
-          key: sccache-leptos-v2-${{ runner.os }}-rust-1.99.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            sccache-leptos-v2-${{ runner.os }}-rust-1.99.0-
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
@@ -306,6 +297,9 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -346,23 +340,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-26.04
     timeout-minutes: 60
-    env:
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache/e2e
-      SCCACHE_CACHE_SIZE: "2G"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v7
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
         with:
-          version: "v0.19.0"
-      - name: Restore E2E compiler cache
-        uses: actions/cache@v6
-        with:
-          path: .sccache/e2e
-          key: sccache-e2e-v2-${{ runner.os }}-rust-1.99.0-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            sccache-e2e-v2-${{ runner.os }}-rust-1.99.0-
+          rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.99.0 --profile minimal --target wasm32-unknown-unknown
@@ -402,3 +385,6 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@be66a1ada16209be5b75d39724ef7383892d92cc # main
