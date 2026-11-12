@@ -1,7 +1,7 @@
 # Pinned by digest for reproducible builds.
 #
 # Multi-stage build for the i18n-demo Leptos crate.
-FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS chef
+FROM rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS chef
 # Keep the reproducible Bookworm base pinned by digest, then install the
 # repository's current stable compiler explicitly so Docker image publication
 # lag cannot leave production builds on an older Rust release.
