@@ -38,7 +38,7 @@ RUN cargo build --locked --release -p i18n-demo --lib \
       /build/target/wasm32-unknown-unknown/release/i18n_demo.wasm
 RUN cargo build --locked --release -p i18n-demo --features ssr
 
-FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN groupadd -r app && \
     useradd -r -g app -d /app -s /usr/sbin/nologin app && \
     mkdir -p /app && chown -R app:app /app

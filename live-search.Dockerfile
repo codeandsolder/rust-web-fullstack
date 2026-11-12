@@ -50,7 +50,7 @@ RUN cargo build --locked --release -p live-search --lib \
     test -s /build/site/pkg/live-search.css
 RUN cargo build --locked --release -p live-search --features ssr
 
-FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN groupadd -r app && \
     useradd -r -g app -d /app -s /usr/sbin/nologin app && \
     mkdir -p /app && chown -R app:app /app
