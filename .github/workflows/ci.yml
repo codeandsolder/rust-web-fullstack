@@ -26,7 +26,7 @@ env:
 jobs:
   strict-rust:
     name: Strict Rust
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@16c9a26e94f40c8f0d706fa6d9a4d207c1e2e78a # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@a85199b5f3ff3a76c035b4412130038d8e831b45 # main
 
   lockfile:
     name: Lockfile consistency
