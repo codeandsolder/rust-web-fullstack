@@ -26,7 +26,7 @@ env:
 jobs:
   strict-rust:
     name: Strict Rust
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@ad9cb37d6c4d93864321717c303d966fdfb01831 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@1d6db6661fd23b5c58879d9188bbc64c19759c22 # main
 
   lockfile:
     name: Lockfile consistency
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.94.1"
       - name: Install patched MSRV toolchain
@@ -66,7 +66,7 @@ jobs:
           cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   format:
     name: Format
@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -122,7 +122,7 @@ jobs:
         run: git diff --exit-code
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   clippy:
     name: Clippy (native)
@@ -133,7 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -154,7 +154,7 @@ jobs:
         run: du -sh target/debug 2>/dev/null || true
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
@@ -170,7 +170,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -184,7 +184,7 @@ jobs:
         run: cargo +1.99.0 build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   unit-tests:
     name: Unit tests
@@ -196,7 +196,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -211,14 +211,14 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   unit-tests-shared-cache:
     name: Unit tests (GHA sccache)
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@47a06568cde470da42ae67a93c8e63966cce1fce # main
     with:
       command: cargo +1.99.0 test --locked --workspace --lib
       rust-toolchain: "1.99.0"
@@ -232,7 +232,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -253,7 +253,7 @@ jobs:
         run: cargo audit
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   leptos-build:
     name: Leptos production builds
@@ -263,7 +263,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -299,7 +299,7 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -343,7 +343,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
         with:
           rust-toolchain: "1.99.0"
       - name: Install current Rust toolchain
@@ -387,4 +387,4 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@47a06568cde470da42ae67a93c8e63966cce1fce # main
