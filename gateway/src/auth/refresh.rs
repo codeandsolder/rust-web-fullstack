@@ -46,8 +46,7 @@ impl std::fmt::Debug for PreparedRotation {
 }
 
 impl PreparedRotation {
-    #[must_use]
-    pub fn subject(&self) -> UserId {
+    pub const fn subject(&self) -> UserId {
         self.subject
     }
 
