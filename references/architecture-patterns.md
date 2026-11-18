@@ -37,6 +37,12 @@ variables override nested fields with `RWF_*` + `__` separators.
 Secrets and deployment credentials remain explicit environment values.
 The gateway's `Settings` owns both signed token TTLs after applying typed
 configuration; neither `GatewayState` nor router constructors duplicate them.
+JWT signing and refresh-token issuance/rotation share the checked expiration
+helper in `gateway/src/auth/expiry.rs`. Even positive TTLs fitting `i64` can
+exceed Chrono's duration/date range, so never construct a `TimeDelta` with
+`seconds()` or add it unchecked on credential paths. Router construction also
+validates both TTLs using this helper; a configured duration that cannot produce
+an expiration is a startup error, not a failing auth request.
 
 Do not load the same setting independently in two configuration systems and then
 pass both copies through state. That creates split-brain behavior where logs,
