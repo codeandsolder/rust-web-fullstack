@@ -4,11 +4,13 @@
 //! focused submodules:
 //!
 //! * [`error`] — [`AppError`] enum with HTTP response mapping
+//! * [`expiry`] — shared checked token lifetime arithmetic
 //! * [`jwt`] — `EdDSA` JWT creation and validation via `jsonwebtoken`
 //! * [`middleware`] — axum middleware for Bearer token validation
 //! * [`handlers`] — login, refresh, logout, and protected route handlers
 
 pub mod error;
+pub mod expiry;
 pub mod handlers;
 pub mod jwt;
 pub mod middleware;

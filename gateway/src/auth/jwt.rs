@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::error::AppError;
+use super::expiry;
 
 /// JWT claims payload.
 ///
@@ -57,15 +58,17 @@ fn unix_seconds(t: chrono::DateTime<Utc>) -> Result<u64, AppError> {
 ///
 /// # Errors
 ///
-/// Returns [`AppError::Internal`] if encoding fails or `ttl_secs` overflows
-/// the i64 range.
+/// Returns [`AppError::Internal`] if encoding fails or the TTL cannot be
+/// represented as a valid future timestamp.
 pub fn create_jwt(
     user_id: &UserId,
     encoding_key: &EncodingKey,
     ttl_secs: i64,
 ) -> Result<String, AppError> {
     let now = Utc::now();
-    let exp = unix_seconds(now + chrono::Duration::seconds(ttl_secs))?;
+    let expiration = expiry::expires_at(now, ttl_secs)
+        .map_err(|error| AppError::internal("JWT expiration", error))?;
+    let exp = unix_seconds(expiration)?;
 
     let claims = Claims {
         sub: *user_id,

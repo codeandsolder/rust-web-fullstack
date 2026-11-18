@@ -10,6 +10,8 @@ use sqlx::types::chrono::{DateTime, Utc};
 use thiserror::Error;
 use uuid::Uuid;
 
+use super::expiry::{self, TokenExpiryError};
+
 #[derive(Debug, Clone)]
 pub struct RotationResult {
     pub new_raw_token: String,
@@ -26,8 +28,8 @@ pub enum RefreshError {
     Sqlx(#[from] sqlx::Error),
     #[error("invalid subject UUID in database")]
     UserId(#[from] rwf_domain::UserIdError),
-    #[error("refresh-token TTL must be positive")]
-    InvalidTtl,
+    #[error(transparent)]
+    Expiry(#[from] TokenExpiryError),
 }
 
 /// Generate a fresh 256-bit opaque refresh token and its database JTI.
@@ -57,17 +59,15 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
 /// its replacement; the new row carries the same family id.
 ///
 /// # Errors
-/// Returns a DB/RNG/subject error or [`RefreshError::InvalidTtl`].
+/// Returns a DB/RNG/subject error or [`RefreshError::Expiry`] when the TTL
+/// cannot yield a representable future date.
 pub async fn rotate(
     pool: &PgPool,
     raw_token: &str,
     now: DateTime<Utc>,
     ttl_secs: i64,
 ) -> Result<Option<RotationResult>, RefreshError> {
-    if ttl_secs <= 0 {
-        return Err(RefreshError::InvalidTtl);
-    }
-
+    let new_expires_at = expiry::expires_at(now, ttl_secs)?;
     let hashed = hash_refresh_token(raw_token);
     let mut tx = pool.begin().await?;
 
@@ -115,7 +115,6 @@ pub async fn rotate(
     // Generate the replacement before updating the old row so the chain is
     // persisted atomically. If RNG fails the transaction is rolled back.
     let (new_raw, new_jti) = generate_raw_refresh_token()?;
-    let new_expires_at = now + chrono::Duration::seconds(ttl_secs);
     let new_hashed = hash_refresh_token(&new_raw).to_vec();
 
     sqlx::query(

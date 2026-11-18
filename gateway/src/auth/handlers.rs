@@ -124,7 +124,8 @@ pub async fn login_handler(
         .map_err(|e| AppError::internal("refresh token generation", e))?;
 
     let now = chrono::Utc::now();
-    let expires_at = now + chrono::Duration::seconds(state.settings.refresh_token_ttl_secs);
+    let expires_at = super::expiry::expires_at(now, state.settings.refresh_token_ttl_secs)
+        .map_err(|error| AppError::internal("refresh-token expiration", error))?;
     let hashed = hash_refresh_token(&raw_refresh).to_vec();
 
     sqlx::query(
