@@ -191,7 +191,9 @@ RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50
 
 The loader rejects zero channel capacities, invalid pool bounds, empty required
 URLs, zero timeouts, and token TTLs that cannot fit the signed duration used by
-the gateway.
+the gateway. Gateway router construction also validates that both positive TTLs
+can produce a representable expiration under the current clock, failing startup
+rather than letting token issuance fail after the service is live.
 
 Security booleans must be parsed explicitly. Do not make an unrecognized string
 silently mean `false`.

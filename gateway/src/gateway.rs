@@ -114,9 +114,14 @@ fn gateway_state(
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
 ) -> Result<(GatewayState, Router<GatewayState>), anyhow::Error> {
-    if settings.refresh_token_ttl_secs <= 0 || settings.access_token_ttl_secs <= 0 {
-        anyhow::bail!("gateway token TTLs must be positive");
-    }
+    // Check token lifetimes when assembling the gateway, not only when issuing
+    // a credential. Configuration that can never produce a valid expiration
+    // must fail startup instead of returning 500 on every auth request.
+    let now = chrono::Utc::now();
+    auth::expiry::expires_at(now, settings.access_token_ttl_secs)
+        .context("gateway access-token TTL cannot produce a valid expiration")?;
+    auth::expiry::expires_at(now, settings.refresh_token_ttl_secs)
+        .context("gateway refresh-token TTL cannot produce a valid expiration")?;
     if settings.sse_broadcast_buffer == 0 {
         anyhow::bail!("gateway SSE broadcast buffer must be greater than zero");
     }
@@ -392,6 +397,25 @@ mod tests {
         let mut invalid_refresh = settings;
         invalid_refresh.refresh_token_ttl_secs = -1;
         assert!(gateway_state(vec![], invalid_refresh, String::new(), None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_overflowing_token_ttls_before_gateway_startup() -> anyhow::Result<()> {
+        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let mut invalid_access = settings.clone();
+        invalid_access.access_token_ttl_secs = i64::MAX;
+        let access_error = gateway_state(vec![], invalid_access, String::new(), None)
+            .err()
+            .context("gateway should reject unrepresentable access-token TTL")?;
+        assert!(access_error.to_string().contains("access-token TTL"));
+
+        let mut invalid_refresh = settings;
+        invalid_refresh.refresh_token_ttl_secs = i64::MAX;
+        let refresh_error = gateway_state(vec![], invalid_refresh, String::new(), None)
+            .err()
+            .context("gateway should reject unrepresentable refresh-token TTL")?;
+        assert!(refresh_error.to_string().contains("refresh-token TTL"));
         Ok(())
     }
 
