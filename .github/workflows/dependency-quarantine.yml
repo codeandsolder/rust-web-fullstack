@@ -6,6 +6,11 @@ on:
       - "**/Cargo.lock"
       - "Cargo.lock"
 
+# A later PR lockfile commit supersedes the earlier quarantine result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
