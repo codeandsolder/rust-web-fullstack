@@ -1798,12 +1798,10 @@ dependencies = [
  "criterion",
  "futures",
  "jsonwebtoken",
- "opentelemetry 0.32.0",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "reqwest",
  "rwf-config",
  "rwf-domain",
+ "rwf-telemetry",
  "serde",
  "serde_json",
  "sqlx",
@@ -1817,7 +1815,6 @@ dependencies = [
  "tower-sessions",
  "tower_governor",
  "tracing",
- "tracing-opentelemetry 0.33.0",
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
@@ -3357,13 +3354,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptos-utils"
-version = "0.1.0"
-dependencies = [
- "leptos_axum",
-]
-
-[[package]]
 name = "leptos_axum"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3701,11 +3691,9 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "moka",
- "opentelemetry 0.32.0",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "rwf-config",
  "rwf-domain",
+ "rwf-telemetry",
  "serde",
  "serde_json",
  "sqlx",
@@ -3717,7 +3705,6 @@ dependencies = [
  "tokio-util",
  "tower-http 0.7.1",
  "tracing",
- "tracing-opentelemetry 0.33.0",
  "tracing-subscriber",
  "uuid",
  "wasm-bindgen",
@@ -5137,6 +5124,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "rwf-telemetry"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry 0.32.0",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "thiserror 2.0.21",
+ "tracing-opentelemetry 0.33.0",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -7760,11 +7759,3 @@ dependencies = [
  "log",
  "simd-adler32",
 ]
-
-[[patch.unused]]
-name = "manyhow"
-version = "0.11.4"
-
-[[patch.unused]]
-name = "proc-macro-error2"
-version = "2.0.1"

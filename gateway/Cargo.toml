@@ -9,11 +9,8 @@ workspace = true
 [features]
 default = []
 otel = [
-    "dep:opentelemetry",
-    "dep:opentelemetry_sdk",
-    "dep:opentelemetry-otlp",
-    "dep:tracing-opentelemetry",
     "dep:axum-tracing-opentelemetry",
+    "dep:rwf-telemetry",
 ]
 dev-tools = ["dep:console-subscriber"]
 
@@ -50,11 +47,8 @@ validator = { workspace = true }
 sqlx = { workspace = true }
 
 # Optional — OTel telemetry (behind `otel` feature)
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-tracing-opentelemetry = { workspace = true, optional = true }
 axum-tracing-opentelemetry = { workspace = true, optional = true }
+rwf-telemetry = { path = "../crates/telemetry", optional = true }
 
 # Optional — tokio-console (behind `dev-tools` feature; requires RUSTFLAGS="--cfg tokio_unstable")
 console-subscriber = { workspace = true, optional = true }

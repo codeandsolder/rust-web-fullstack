@@ -16,13 +16,15 @@ Docker builds, and real browser E2E tests.
 | `e2e-tests/` | isolated Postgres via testcontainers plus chromiumoxide browser tests |
 | `crates/config/` | validated TOML + `RWF_*` environment configuration |
 | `crates/domain/` | framework-free domain types and invariants |
+| `crates/telemetry/` | shared server-side OTLP/HTTP tracing bootstrap |
 | `migrations/` | the **single** SQLx migration history used by every service sharing the database |
 
 The workspace uses Edition 2024 with Cargo resolver 3. Rust **1.94** remains the
 supported compatibility floor/MSRV, tested on the patched **1.94.1** toolchain.
-Normal development, CI, and production builds use patched current stable
-**Rust 1.98.1** through `rust-toolchain.toml`. This keeps the compatibility
-contract separate from the compiler version used to develop and ship the examples.
+The repository default toolchain and production Docker builds use
+**Rust 1.100.0**; native format/lint CI jobs are still pinned to **1.99.0**.
+This keeps the compatibility contract separate from the compiler version used
+to develop and ship the examples.
 
 ## Quick start
 
@@ -171,6 +173,7 @@ every endpoint should use both at once.
 The optional `otel` features export traces over OTLP/HTTP. If
 `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, the examples default to
 `http://127.0.0.1:4318`.
+The exporter and subscriber setup is centralized in `crates/telemetry`; each server keeps its own service identity and tracing filter directives.
 
 Both Axum routers install OpenTelemetry middleware that extracts incoming W3C
 `traceparent`/`tracestate`; setting a global propagator alone would not do that.
@@ -209,7 +212,7 @@ shutdown wiring for active connections.
 
 ## Build and validation
 
-Basic static/test pass on the default Rust 1.99.0 toolchain:
+Basic static/test pass on the default Rust 1.100.0 toolchain:
 
 ```bash
 cargo check --workspace --all-targets
@@ -258,22 +261,25 @@ skipping the coverage CI claims to provide.
 
 ## CI
 
-`.github/workflows/ci.yml` is the executable CI reference. It runs on pull
-requests and pushes to `main` and covers lockfile consistency, Rust and Leptos
-formatting, native Clippy feature combinations, real WASM hydration linking,
-workspace library tests, `cargo audit`, production Leptos builds, all three
-Docker images, and real Chromium-backed E2E tests.
+`.github/workflows/ci.yml` is the executable CI reference. Routine pull
+requests and pushes to `main` validate lockfile consistency, Rust and Leptos
+formatting, native Clippy feature combinations, and workspace library tests.
+The release-tag matrix additionally covers MSRV, real WASM hydration linking,
+`cargo audit`, production Leptos builds, all three Docker images, and real
+Chromium-backed E2E tests.
 
-Current-stable jobs use Rust **1.99.0**. A separate **1.94.1 MSRV** lane checks
-both the native workspace and hydration crates, so adopting new stable APIs does
-not silently raise the advertised compatibility floor. Cargo resolver 3 makes
-new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s
+The native format/lint CI jobs use Rust **1.99.0**; the repository default
+toolchain and production Docker builds use **1.100.0**. A release-only
+**1.94.1 MSRV** lane checks both the native workspace and hydration crates, so
+adopting new stable APIs does not silently raise the advertised compatibility
+floor. Cargo resolver 3 makes new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s
 `CARGO_BUILD_WARNINGS=deny` rather than changing `RUSTFLAGS`, and WASM validation
 performs an actual link so Rust 1.96+'s stricter undefined-symbol behavior is
 covered.
 
-Expensive Rust jobs reuse compiler state through `actions/cache`, while Docker
-builds use per-image BuildKit GitHub Actions layer caches. Keep CI feature
+Rust compilation uses the shared mandatory sccache setup/finalization actions.
+`actions/cache` is reserved for pinned CI helper tools; Docker builds use
+per-image BuildKit GitHub Actions layer caches. Keep CI feature
 coverage and cache keys in sync whenever supported features, the Rust toolchain,
 or build tooling change.
 

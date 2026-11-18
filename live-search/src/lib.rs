@@ -37,9 +37,6 @@ pub mod bootstrap;
 #[cfg(feature = "ssr")]
 pub mod shutdown;
 
-#[cfg(feature = "otel")]
-pub mod otel;
-
 // ---------------------------------------------------------------------------
 // Hydrate entry point – called by Leptos HydrationScripts after WASM init.
 // ---------------------------------------------------------------------------

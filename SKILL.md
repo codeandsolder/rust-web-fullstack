@@ -18,14 +18,16 @@ fix this document in the same change.
 | `i18n-demo/` | `leptos_i18n` locale switching and a small WebSocket example |
 | `crates/config/` | typed TOML + `RWF_*` config and validation |
 | `crates/domain/` | framework-free domain types and invariants |
+| `crates/telemetry/` | shared OTLP/HTTP tracing initialization |
 | `e2e-tests/` | testcontainers HTTP integration and chromiumoxide browser E2E |
 | `migrations/` | the single SQLx migration history for the shared database |
 | `.github/workflows/ci.yml` | format/check/clippy/build/Docker/browser CI |
 
 The workspace uses Edition 2024 with resolver 3. Rust **1.94** remains the
-compatibility floor/MSRV and is tested on patched **1.94.1**. Normal development,
-current-stable CI, and production builds use **Rust 1.99.0**. Newer
-stable Rust versions do not by themselves justify raising the MSRV; the oldest
+compatibility floor/MSRV and is tested on patched **1.94.1**. The repository
+default toolchain and production Docker builds use **Rust 1.100.0**; native
+format/lint CI jobs are still pinned to **1.99.0**. Newer stable Rust versions
+do not by themselves justify raising the MSRV; the oldest
 supported compiler and the preferred compiler for shipping builds are separate
 policies.
 
@@ -323,6 +325,7 @@ because it serves plain localhost HTTP. Production defaults secure.
 
 The `otel` features use OTLP/HTTP. `OTEL_EXPORTER_OTLP_ENDPOINT` defaults to
 `http://127.0.0.1:4318` when unset. Axum OTel middleware is required to extract
+Both servers call `rwf-telemetry` for the exporter, propagator, provider and subscriber; only their service name and filter directives are service-specific.
 incoming W3C `traceparent`/`tracestate`; configuring a global propagator alone
 does not parent request spans.
 
