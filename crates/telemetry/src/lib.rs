@@ -16,9 +16,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub struct TelemetryConfig {
     /// Exported resource name and tracer instrumentation name.
     pub service_name: &'static str,
-    /// Filter to use when RUST_LOG is absent or invalid.
+    /// Filter to use when `RUST_LOG` is absent or invalid.
     pub default_filter: &'static str,
-    /// Additional directives that take precedence over RUST_LOG.
+    /// Additional directives that take precedence over `RUST_LOG`.
     pub directives: &'static [&'static str],
 }
 
@@ -45,7 +45,7 @@ fn build_filter(config: TelemetryConfig) -> Result<EnvFilter, TelemetryError> {
 
 /// Install a compact tracing subscriber and an OTLP/HTTP span exporter.
 ///
-/// Honors OTEL_EXPORTER_OTLP_ENDPOINT, defaulting to the standard HTTP
+/// Honors `OTEL_EXPORTER_OTLP_ENDPOINT`, defaulting to the standard HTTP
 /// endpoint on port 4318. W3C propagation and the global tracer provider
 /// are only installed after the subscriber successfully registers.
 ///
