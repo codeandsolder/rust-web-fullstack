@@ -217,17 +217,25 @@ to that request; it does not enumerate other server-side sessions for the same
 subject. Already-issued access tokens remain valid until their `exp` unless a
 separate access-token revocation mechanism is added. `/session/logout` only
 flushes the current cookie session and does not revoke refresh-token state. Do
-not claim `jti` alone provides revocation.
+not claim `jti` alone provides revocation. JWT verification explicitly sets
+`Validation::leeway = 0` instead of inheriting `jsonwebtoken`'s default 60-second
+grace period, so the access-token lifetime matches its published `exp`.
 
 ### 13. Refresh-token rotation is transactional
 
 Raw refresh tokens are random opaque secrets; only their digest is stored. The
 rotation transaction locks the presented active row, creates a replacement,
 sets `replaced_by`, revokes the old row, and inserts the replacement atomically.
+The gateway first calls `prepare_rotation`, then signs the replacement access
+JWT, then calls `PreparedRotation::commit`. If signing fails, the uncommitted
+transaction is dropped and automatically rolled back; the client must not lose
+its still-valid refresh token because a replacement JWT could not be issued.
 A replay of an already-used token revokes the whole token family.
 
 `hashed_token` is database-unique so one presented credential cannot map to
-multiple rows.
+multiple rows. Public request/response DTOs containing credentials implement
+redacted `Debug` explicitly; never derive `Debug` on password, JWT, or refresh
+token holders, including internal rotation results.
 
 Strict family revocation means two simultaneous legitimate refresh attempts can
 invalidate the family. That is a deliberate security/UX tradeoff and should be
