@@ -267,6 +267,12 @@ subscribes to every event name it handles. A slow receiver may receive a
 Durable reconnect is provided at the PostgreSQL listener layer, not per-browser
 `Last-Event-ID` replay.
 
+The browser SSE reader is an abortable future owned by the live-feed route.
+`on_cleanup` aborts it immediately (including on a silent stream), dropping its
+EventSource subscriptions. Normal disconnect/reconnect explicitly closes the
+browser EventSource before retrying. Avoid relying on a flag observed only
+between events to shut down an idle stream.
+
 If browser-level resume across client disconnects becomes required, expose the
 durable event sequence as an SSE id and implement `Last-Event-ID` semantics.
 
