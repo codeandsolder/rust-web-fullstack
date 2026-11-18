@@ -217,7 +217,9 @@ to that request; it does not enumerate other server-side sessions for the same
 subject. Already-issued access tokens remain valid until their `exp` unless a
 separate access-token revocation mechanism is added. `/session/logout` only
 flushes the current cookie session and does not revoke refresh-token state. Do
-not claim `jti` alone provides revocation.
+not claim `jti` alone provides revocation. JWT verification explicitly sets
+`Validation::leeway = 0` instead of inheriting `jsonwebtoken`'s default 60-second
+grace period, so the access-token lifetime matches its published `exp`.
 
 ### 13. Refresh-token rotation is transactional
 

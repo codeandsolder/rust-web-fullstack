@@ -94,6 +94,9 @@ pub fn validate_jwt(token: &str, decoding_key: &DecodingKey) -> Result<Claims, A
     use jsonwebtoken::errors::ErrorKind;
 
     let mut validation = Validation::new(Algorithm::EdDSA);
+    // The library defaults to 60 seconds of grace, which contradicts the
+    // documented access-token expiry contract. Require expiration at `exp`.
+    validation.leeway = 0;
     validation.set_issuer(&[JWT_ISS]);
     validation.set_audience(&[JWT_AUD]);
 
@@ -170,6 +173,28 @@ mod tests {
         let decoding_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
         let result = validate_jwt("this.is.not.a.jwt", &decoding_key);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_recently_expired_token_without_library_default_leeway() -> anyhow::Result<()> {
+        let (private_pem, public_pem) = dev_keypair_pems()?;
+        let now = u64::try_from(Utc::now().timestamp())?;
+        let claims = Claims {
+            sub: UserId::try_from(Uuid::new_v4())?,
+            exp: now - 30,
+            iat: now - 90,
+            aud: JWT_AUD.to_string(),
+            iss: JWT_ISS.to_string(),
+            jti: Uuid::new_v4(),
+        };
+        let signing_key = EncodingKey::from_ed_pem(private_pem.as_bytes())?;
+        let token = encode(&Header::new(Algorithm::EdDSA), &claims, &signing_key)?;
+        let verification_key = DecodingKey::from_ed_pem(public_pem.as_bytes())?;
+        assert!(matches!(
+            validate_jwt(&token, &verification_key),
+            Err(AppError::TokenExpired(_))
+        ));
         Ok(())
     }
 

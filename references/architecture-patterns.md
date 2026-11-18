@@ -185,7 +185,8 @@ transaction while the replacement JWT is signed, and `commit` publishes the
 rotation only after issuance succeeds. A dropped preparation rolls back the old
 token revocation and new-token insert. Avoid `Debug` derivation on any auth DTO
 holding passwords, JWTs, or refresh credentials; their implementations must
-redact those values.
+redact those values. JWT verification explicitly sets the expiration leeway to
+zero, overriding `jsonwebtoken`'s 60-second default so tokens expire at `exp`.
 
 ## Reverse proxies
 
