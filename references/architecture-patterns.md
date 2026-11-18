@@ -180,6 +180,13 @@ behind a real user store.
 Refresh-token lineage is durable DB state. Access JWTs are stateless and remain
 valid until expiry unless an application adds explicit access-token revocation.
 
+Token refresh has a two-stage commit contract: `prepare_rotation` holds the SQL
+transaction while the replacement JWT is signed, and `commit` publishes the
+rotation only after issuance succeeds. A dropped preparation rolls back the old
+token revocation and new-token insert. Avoid `Debug` derivation on any auth DTO
+holding passwords, JWTs, or refresh credentials; their implementations must
+redact those values.
+
 ## Reverse proxies
 
 Peer-IP rate limiting is safe for direct connections but collapses clients behind

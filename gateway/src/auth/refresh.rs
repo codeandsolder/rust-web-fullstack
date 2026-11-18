@@ -5,20 +5,69 @@
 //! `replaced_by`, allowing replay detection to revoke the active family.
 
 use rwf_domain::UserId;
-use sqlx::PgPool;
 use sqlx::types::chrono::{DateTime, Utc};
+use sqlx::{PgPool, Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
 use super::expiry::{self, TokenExpiryError};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RotationResult {
     pub new_raw_token: String,
     pub subject: UserId,
 }
 
-pub const REFRESH_TOKEN_TTL_SECONDS: i64 = 60 * 60 * 24 * 30;
+impl std::fmt::Debug for RotationResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RotationResult")
+            .field("new_raw_token", &"<redacted>")
+            .field("subject", &self.subject)
+            .finish()
+    }
+}
+
+/// A rotation whose database writes are not yet committed. Dropping this
+/// value rolls them back (including the previous token's revocation).
+#[must_use = "commit only after the access token is successfully issued"]
+pub struct PreparedRotation {
+    tx: Transaction<'static, Postgres>,
+    new_raw_token: String,
+    subject: UserId,
+}
+
+impl std::fmt::Debug for PreparedRotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedRotation")
+            .field("new_raw_token", &"<redacted>")
+            .field("subject", &self.subject)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedRotation {
+    #[must_use]
+    pub fn subject(&self) -> UserId {
+        self.subject
+    }
+
+    /// Persist the rotation once the replacement access credential is ready.
+    ///
+    /// # Errors
+    /// Returns a database error if the transaction cannot be committed.
+    pub async fn commit(self) -> Result<RotationResult, sqlx::Error> {
+        let Self {
+            tx,
+            new_raw_token,
+            subject,
+        } = self;
+        tx.commit().await?;
+        Ok(RotationResult {
+            new_raw_token,
+            subject,
+        })
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum RefreshError {
@@ -52,21 +101,22 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
     out
 }
 
-/// Rotate a refresh token inside one transaction.
+/// Prepare a refresh-token rotation inside an open database transaction.
 ///
-/// Replaying any known inactive token revokes the rest of its family. On a
-/// successful rotation the old row records both `revoked_at` and the JTI of
-/// its replacement; the new row carries the same family id.
+/// The caller must create the replacement access token before calling
+/// [`PreparedRotation::commit`]. Dropping a prepared rotation on an issuance
+/// failure rolls back both the previous token's revocation and the new insert.
+/// Replaying any known inactive token still commits revocation of its family.
 ///
 /// # Errors
 /// Returns a DB/RNG/subject error or [`RefreshError::Expiry`] when the TTL
 /// cannot yield a representable future date.
-pub async fn rotate(
+pub async fn prepare_rotation(
     pool: &PgPool,
     raw_token: &str,
     now: DateTime<Utc>,
     ttl_secs: i64,
-) -> Result<Option<RotationResult>, RefreshError> {
+) -> Result<Option<PreparedRotation>, RefreshError> {
     let new_expires_at = expiry::expires_at(now, ttl_secs)?;
     let hashed = hash_refresh_token(raw_token);
     let mut tx = pool.begin().await?;
@@ -142,8 +192,8 @@ pub async fn rotate(
     .execute(&mut *tx)
     .await?;
 
-    tx.commit().await?;
-    Ok(Some(RotationResult {
+    Ok(Some(PreparedRotation {
+        tx,
         new_raw_token: new_raw,
         subject,
     }))
@@ -152,6 +202,18 @@ pub async fn rotate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_result_debug_redacts_refresh_secret() -> Result<(), rwf_domain::UserIdError> {
+        let result = RotationResult {
+            new_raw_token: "unique-refresh-credential-secret".into(),
+            subject: UserId::try_from(Uuid::new_v4())?,
+        };
+        let printed = format!("{result:?}");
+        assert!(printed.contains("<redacted>"));
+        assert!(!printed.contains("unique-refresh-credential-secret"));
+        Ok(())
+    }
 
     #[test]
     fn hash_is_deterministic_and_unique() {

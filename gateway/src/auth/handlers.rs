@@ -9,6 +9,7 @@
 //! * Secrets (passwords, tokens) are never included in log output.
 //! * Public auth request payloads are typed and validated with `validator`.
 
+use std::fmt;
 use std::str::FromStr;
 
 use axum::extract::{Extension, State};
@@ -26,7 +27,7 @@ use super::error::AppError;
 use super::jwt::{Claims, create_jwt};
 use super::refresh::{generate_raw_refresh_token, hash_refresh_token};
 
-#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[derive(Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
     /// User identifier. In this demo it must equal configured `ADMIN_USER_ID`.
@@ -36,7 +37,7 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[derive(Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
     /// Opaque refresh token returned by login or the previous refresh.
@@ -44,18 +45,59 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 pub struct LoginResponse {
     pub token: String,
     pub refresh_token: String,
     pub user_id: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 pub struct RefreshResponse {
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
+}
+
+// Never expose request credentials or newly issued capabilities through Debug;
+// these types may be included in diagnostic logs during error handling.
+impl fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginRequest")
+            .field("user_id", &self.user_id)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for RefreshRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefreshRequest")
+            .field("refresh_token", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for LoginResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginResponse")
+            .field("token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("user_id", &self.user_id)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RefreshResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefreshResponse")
+            .field("token", &"<redacted>")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -236,7 +278,7 @@ pub async fn refresh_handler(
     })?;
 
     let now = chrono::Utc::now();
-    let rotation = super::refresh::rotate(
+    let prepared = super::refresh::prepare_rotation(
         pool,
         &refresh_token,
         now,
@@ -247,10 +289,16 @@ pub async fn refresh_handler(
     .ok_or(AppError::AuthError)?;
 
     let token = create_jwt(
-        &rotation.subject,
+        &prepared.subject(),
         &state.settings.encoding_key,
         state.settings.access_token_ttl_secs,
     )?;
+    // Only consume the old refresh capability after JWT signing succeeded.
+    // On any error above, dropping `prepared` rolls back its transaction.
+    let rotation = prepared
+        .commit()
+        .await
+        .map_err(|error| AppError::internal("refresh-token commit", error))?;
 
     Ok(Json(RefreshResponse {
         token,
@@ -320,4 +368,42 @@ pub async fn protected_handler(Extension(_claims): Extension<Claims>) -> Json<Pr
         status: "ok".to_string(),
         protected: true,
     })
+}
+
+#[cfg(test)]
+mod credential_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_includes_authentication_secrets() {
+        let request = LoginRequest {
+            user_id: "example-admin".into(),
+            password: "unique-login-password-secret".into(),
+        };
+        let refresh_request = RefreshRequest {
+            refresh_token: "unique-incoming-refresh-secret".into(),
+        };
+        let response = LoginResponse {
+            token: "unique-access-secret".into(),
+            refresh_token: "unique-outgoing-refresh-secret".into(),
+            user_id: "example-admin".into(),
+        };
+        let refreshed = RefreshResponse {
+            token: "unique-new-access-secret".into(),
+            refresh_token: Some("unique-new-refresh-secret".into()),
+        };
+        let all_debug = format!("{request:?} {refresh_request:?} {response:?} {refreshed:?}");
+        assert!(all_debug.contains("<redacted>"));
+        assert!(all_debug.contains("example-admin"));
+        for secret in [
+            "unique-login-password-secret",
+            "unique-incoming-refresh-secret",
+            "unique-access-secret",
+            "unique-outgoing-refresh-secret",
+            "unique-new-access-secret",
+            "unique-new-refresh-secret",
+        ] {
+            assert!(!all_debug.contains(secret), "Debug leaked {secret}");
+        }
+    }
 }
