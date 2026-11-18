@@ -244,9 +244,11 @@ mod tests {
 
     #[test]
     fn runtime_config_applies_both_token_ttls() -> anyhow::Result<()> {
-        let mut config = rwf_config::GatewayConfig::default();
-        config.access_token_ttl_secs = 120;
-        config.refresh_token_ttl_secs = 43_200;
+        let config = rwf_config::GatewayConfig {
+            access_token_ttl_secs: 120,
+            refresh_token_ttl_secs: 43_200,
+            ..rwf_config::GatewayConfig::default()
+        };
         let settings = Settings::load_dev_keys("test-password")?.apply_runtime_config(&config)?;
 
         assert_eq!(settings.access_token_ttl_secs, 120);
