@@ -35,6 +35,8 @@ origins, session cookie security, SSE capacity, and token TTLs. Environment
 variables override nested fields with `RWF_*` + `__` separators.
 
 Secrets and deployment credentials remain explicit environment values.
+The gateway's `Settings` owns both signed token TTLs after applying typed
+configuration; neither `GatewayState` nor router constructors duplicate them.
 
 Do not load the same setting independently in two configuration systems and then
 pass both copies through state. That creates split-brain behavior where logs,

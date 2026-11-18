@@ -16,6 +16,14 @@ pub const JWT_ISS: &str = "gateway-example";
 pub const JWT_AUD: &str = "gateway-example-api";
 pub const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 
+fn token_ttls(config: &rwf_config::GatewayConfig) -> Result<(i64, i64), anyhow::Error> {
+    let access = i64::try_from(config.access_token_ttl_secs)
+        .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
+    let refresh = i64::try_from(config.refresh_token_ttl_secs)
+        .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
+    Ok((access, refresh))
+}
+
 #[must_use]
 fn short_fingerprint(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -50,6 +58,7 @@ pub struct Settings {
     pub encoding_key: Arc<EncodingKey>,
     pub decoding_key: Arc<DecodingKey>,
     pub access_token_ttl_secs: i64,
+    pub refresh_token_ttl_secs: i64,
     pub admin_user_id: UserId,
     pub default_admin_password: Arc<str>,
     pub allowed_origins: Arc<str>,
@@ -65,6 +74,7 @@ impl std::fmt::Debug for Settings {
             .field("encoding_key", &"<redacted>")
             .field("decoding_key", &"<redacted>")
             .field("access_token_ttl_secs", &self.access_token_ttl_secs)
+            .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
             .field("admin_user_id", &self.admin_user_id)
             .field("default_admin_password", &"<redacted>")
             .field("allowed_origins", &self.allowed_origins)
@@ -84,8 +94,7 @@ impl Settings {
         mut self,
         config: &rwf_config::GatewayConfig,
     ) -> Result<Self, anyhow::Error> {
-        self.access_token_ttl_secs = i64::try_from(config.access_token_ttl_secs)
-            .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
+        (self.access_token_ttl_secs, self.refresh_token_ttl_secs) = token_ttls(config)?;
         self.allowed_origins = Arc::from(config.cors.allowed_origins.as_str());
         self.sse_broadcast_buffer = config.sse_broadcast_buffer;
         self.session.cookie_secure = config.session.cookie_secure;
@@ -136,12 +145,16 @@ impl Settings {
             ..SessionSettings::default()
         };
 
+        let (access_token_ttl_secs, refresh_token_ttl_secs) =
+            token_ttls(&rwf_config::GatewayConfig::default())?;
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
             jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
             encoding_key,
             decoding_key,
-            access_token_ttl_secs: 15 * 60,
+            access_token_ttl_secs,
+            refresh_token_ttl_secs,
             admin_user_id,
             default_admin_password: Arc::from(default_admin_password.as_str()),
             allowed_origins: Arc::from(
@@ -190,12 +203,16 @@ impl Settings {
         let admin_user_id = UserId::from_str(DEFAULT_ADMIN_USER_ID)
             .context("built-in development admin user id is invalid")?;
 
+        let (access_token_ttl_secs, refresh_token_ttl_secs) =
+            token_ttls(&rwf_config::GatewayConfig::default())?;
+
         Ok(Self {
             jwt_private_key_pem: Arc::from(private_pem.as_str()),
             jwt_public_key_pem: Arc::from(public_pem.as_str()),
             encoding_key,
             decoding_key,
-            access_token_ttl_secs: 15 * 60,
+            access_token_ttl_secs,
+            refresh_token_ttl_secs,
             admin_user_id,
             default_admin_password: Arc::from(admin_password),
             allowed_origins: Arc::from(
@@ -218,5 +235,22 @@ impl Settings {
         let admin_password = std::env::var("ADMIN_PASSWORD")
             .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;
         Self::load_dev_keys(&admin_password)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_config_applies_both_token_ttls() -> anyhow::Result<()> {
+        let mut config = rwf_config::GatewayConfig::default();
+        config.access_token_ttl_secs = 120;
+        config.refresh_token_ttl_secs = 43_200;
+        let settings = Settings::load_dev_keys("test-password")?.apply_runtime_config(&config)?;
+
+        assert_eq!(settings.access_token_ttl_secs, 120);
+        assert_eq!(settings.refresh_token_ttl_secs, 43_200);
+        Ok(())
     }
 }

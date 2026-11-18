@@ -22,8 +22,6 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::load().context("failed to load workspace config")?;
     let port = cfg.gateway.port;
     let proxy_upstream_url = cfg.gateway.proxy_upstream_url.clone();
-    let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
-        .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
 
     #[cfg(feature = "otel")]
     let provider = rwf_telemetry::init_telemetry(rwf_telemetry::TelemetryConfig {
@@ -48,7 +46,6 @@ async fn main() -> anyhow::Result<()> {
         gateway_example::settings::Settings::load()?
     }
     .apply_runtime_config(&cfg.gateway)?;
-    let access_token_ttl_secs = settings.access_token_ttl_secs;
 
     let db_pool = create_db_pool().await?;
     run_migrations(&db_pool)
@@ -66,8 +63,6 @@ async fn main() -> anyhow::Result<()> {
         settings,
         proxy_upstream_url,
         Some(db_pool),
-        refresh_token_ttl_secs,
-        access_token_ttl_secs,
     )?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

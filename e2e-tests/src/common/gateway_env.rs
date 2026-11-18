@@ -50,8 +50,6 @@ impl GatewayEnv {
             settings,
             "https://ipapi.co".to_string(),
             Some(db.pool().clone()),
-            60 * 60 * 24 * 30,
-            15 * 60,
         )
         .context("failed to build gateway router")?;
 
