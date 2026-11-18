@@ -116,6 +116,14 @@ Do not set a Connected UI state immediately after `EventSource::new`; that only
 means the browser object was constructed. The canonical live-search client waits
 for the named server `connected` event.
 
+Tie the SSE reader task to the component owner with a `futures::future::AbortHandle`
+called from `on_cleanup`, not a stop flag checked only after receiving an event:
+a quiet stream would otherwise keep the task and browser connection alive until
+some unrelated event arrived. Abortable cancellation drops all named event
+subscriptions immediately, which also closes the underlying EventSource with
+`gloo-net` 0.8. Keep an explicit `event_source.close()` on ordinary reconnect
+paths so they release the connection before the retry delay.
+
 ## Search results and pending requests
 
 Because asynchronous requests can overlap, a production search UI should avoid

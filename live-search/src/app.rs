@@ -348,7 +348,6 @@ async fn consume_event_source(
     event_source: &mut gloo_net::eventsource::futures::EventSource,
     results: RwSignal<VecDeque<LiveResult>>,
     connected: RwSignal<bool>,
-    stop: RwSignal<bool>,
 ) {
     use futures::{StreamExt, stream};
     use gloo_net::eventsource::State;
@@ -366,11 +365,8 @@ async fn consume_event_source(
         return;
     };
 
-    while event_source.state() == State::Connecting && !stop.get() {
+    while event_source.state() == State::Connecting {
         sleep(Duration::from_millis(25)).await;
-    }
-    if stop.get() {
-        return;
     }
     if event_source.state() != State::Open {
         logging::warn!("SSE connection closed before opening");
@@ -380,9 +376,6 @@ async fn consume_event_source(
     let data_events = stream::select(result_events, lagged_events);
     let mut all_events = stream::select(connected_events, data_events);
     while let Some(result) = all_events.next().await {
-        if stop.get() {
-            return;
-        }
         match result {
             Ok((_event_type, msg)) => {
                 let Some(data) = msg.data().as_string() else {
@@ -403,44 +396,37 @@ async fn consume_event_source(
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn run_live_feed(
-    results: RwSignal<VecDeque<LiveResult>>,
-    connected: RwSignal<bool>,
-    stop: RwSignal<bool>,
-) {
+async fn run_live_feed(results: RwSignal<VecDeque<LiveResult>>, connected: RwSignal<bool>) {
     use gloo_net::eventsource::futures::EventSource;
     use gloo_timers::future::sleep;
     use leptos::logging;
     use std::time::Duration;
 
     loop {
-        if stop.get() {
-            logging::log!("SSE live feed stopped");
-            return;
-        }
-
         match EventSource::new("/api/events") {
             Ok(mut event_source) => {
-                consume_event_source(&mut event_source, results, connected, stop).await;
+                consume_event_source(&mut event_source, results, connected).await;
                 connected.set(false);
                 event_source.close();
             }
             Err(error) => logging::warn!("Failed to create EventSource: {error}"),
         }
 
-        if stop.get() {
-            return;
-        }
         sleep(Duration::from_secs(2)).await;
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn start_live_feed(results: RwSignal<VecDeque<LiveResult>>, connected: RwSignal<bool>) {
-    let stop = RwSignal::new(false);
-    let stop_cleanup = stop;
-    on_cleanup(move || stop_cleanup.set(true));
-    leptos::task::spawn_local(run_live_feed(results, connected, stop));
+    let (abort, registration) = futures::future::AbortHandle::new_pair();
+    // A quiet SSE stream may never produce another event. Aborting the task
+    // wakes it immediately when the route unmounts, dropping its subscriptions
+    // (and closing the underlying EventSource) instead of waiting for data.
+    on_cleanup(move || abort.abort());
+    leptos::task::spawn_local(async move {
+        let _result =
+            futures::future::Abortable::new(run_live_feed(results, connected), registration).await;
+    });
 }
 
 #[must_use]
