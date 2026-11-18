@@ -7,6 +7,7 @@ boundaries that make failure ownership obvious.
 
 - `crates/domain`: pure domain values and invariants; no Axum/Leptos/sqlx.
 - `crates/config`: typed non-secret runtime configuration and validation.
+- `crates/telemetry`: shared OTLP/HTTP exporter, W3C propagation and tracing subscriber initialization; each server supplies its service name and filter.
 - `live-search`: one full-stack Leptos application.
 - `gateway`: one Axum service gateway/auth example.
 - `i18n-demo`: one independent Leptos example.

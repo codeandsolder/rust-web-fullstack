@@ -26,8 +26,12 @@ async fn main() -> anyhow::Result<()> {
         .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
 
     #[cfg(feature = "otel")]
-    let provider =
-        gateway_example::otel::init_telemetry().context("failed to initialize OTel telemetry")?;
+    let provider = rwf_telemetry::init_telemetry(rwf_telemetry::TelemetryConfig {
+        service_name: "gateway-example",
+        default_filter: "gateway_example=info,tower_http=debug",
+        directives: &[],
+    })
+    .context("failed to initialize OTel telemetry")?;
 
     #[cfg(not(feature = "otel"))]
     tracing_subscriber::fmt()

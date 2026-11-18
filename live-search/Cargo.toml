@@ -61,11 +61,8 @@ moka = { workspace = true }
 base64 = { workspace = true }
 rwf-config = { path = "../crates/config" }
 # OTel stack — gated behind `otel` feature.
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-tracing-opentelemetry = { workspace = true, optional = true }
 axum-tracing-opentelemetry = { workspace = true, optional = true }
+rwf-telemetry = { path = "../crates/telemetry", optional = true }
 sqlx-otel = { workspace = true, optional = true }
 # Dev tools — gated behind `dev-tools` feature
 console-subscriber = { workspace = true, optional = true }
@@ -85,11 +82,8 @@ hydrate = ["leptos/hydrate"]
 test-seams = []
 otel = [
     "dep:axum-prometheus",
-    "dep:opentelemetry",
-    "dep:opentelemetry_sdk",
-    "dep:opentelemetry-otlp",
-    "dep:tracing-opentelemetry",
     "dep:axum-tracing-opentelemetry",
+    "dep:rwf-telemetry",
     "dep:sqlx-otel",
 ]
 dev-tools = ["dep:console-subscriber"]

@@ -42,18 +42,22 @@ pub struct ServerHandle {
 }
 
 #[cfg(feature = "otel")]
-static PROVIDER: OnceLock<opentelemetry_sdk::trace::SdkTracerProvider> = OnceLock::new();
+static PROVIDER: OnceLock<rwf_telemetry::SdkTracerProvider> = OnceLock::new();
 
 #[cfg(feature = "otel")]
 #[must_use]
-pub fn get_tracer_provider() -> Option<&'static opentelemetry_sdk::trace::SdkTracerProvider> {
+pub fn get_tracer_provider() -> Option<&'static rwf_telemetry::SdkTracerProvider> {
     PROVIDER.get()
 }
 
 fn init_tracing() {
     #[cfg(feature = "otel")]
     {
-        match crate::otel::init_telemetry() {
+        match rwf_telemetry::init_telemetry(rwf_telemetry::TelemetryConfig {
+            service_name: "live-search",
+            default_filter: "info,live_search=debug,tower_http=debug",
+            directives: &["h2=warn", "primp_h2=warn", "http2=info"],
+        }) {
             Ok(provider) => {
                 let _ = PROVIDER.set(provider);
                 return;

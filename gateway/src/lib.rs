@@ -21,7 +21,7 @@
 //!   and `--dev-keys` ephemeral keypair generation
 //! * [`sse`] — Server-Sent Events via [`tokio::sync::broadcast::Sender`]
 //! * [`openapi`] — `OpenAPI` schema generation via `utoipa`
-//! * `otel` — OpenTelemetry tracing setup (behind `otel` feature,
+//! * `rwf-telemetry` — shared OpenTelemetry tracing setup (behind `otel` feature,
 //!   only present when the feature is enabled — see [`cfg(feature = "otel")`])
 
 pub mod auth;
@@ -35,6 +35,3 @@ pub mod services;
 pub mod session;
 pub mod settings;
 pub mod sse;
-
-#[cfg(feature = "otel")]
-pub mod otel;

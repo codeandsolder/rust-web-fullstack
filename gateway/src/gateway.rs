@@ -67,14 +67,8 @@ pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, any
     let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
     let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
         .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
-    let access_token_ttl_secs = i64::try_from(cfg.gateway.access_token_ttl_secs)
-        .context("gateway.access_token_ttl_secs exceeds i64::MAX")?;
-
-    let mut runtime_settings = settings::Settings::load()?;
-    runtime_settings.access_token_ttl_secs = access_token_ttl_secs;
-    runtime_settings.allowed_origins = Arc::from(cfg.gateway.cors.allowed_origins.as_str());
-    runtime_settings.sse_broadcast_buffer = cfg.gateway.sse_broadcast_buffer;
-    runtime_settings.session.cookie_secure = cfg.gateway.session.cookie_secure;
+    let runtime_settings = settings::Settings::load()?.apply_runtime_config(&cfg.gateway)?;
+    let access_token_ttl_secs = runtime_settings.access_token_ttl_secs;
 
     build_gateway_with_settings(
         modules,
