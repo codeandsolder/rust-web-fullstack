@@ -124,7 +124,7 @@ pub async fn login_handler(
         .map_err(|e| AppError::internal("refresh token generation", e))?;
 
     let now = chrono::Utc::now();
-    let expires_at = now + chrono::Duration::seconds(state.refresh_token_ttl_secs);
+    let expires_at = now + chrono::Duration::seconds(state.settings.refresh_token_ttl_secs);
     let hashed = hash_refresh_token(&raw_refresh).to_vec();
 
     sqlx::query(
@@ -235,10 +235,15 @@ pub async fn refresh_handler(
     })?;
 
     let now = chrono::Utc::now();
-    let rotation = super::refresh::rotate(pool, &refresh_token, now, state.refresh_token_ttl_secs)
-        .await
-        .map_err(|e| AppError::internal("refresh-token rotation", e))?
-        .ok_or(AppError::AuthError)?;
+    let rotation = super::refresh::rotate(
+        pool,
+        &refresh_token,
+        now,
+        state.settings.refresh_token_ttl_secs,
+    )
+    .await
+    .map_err(|e| AppError::internal("refresh-token rotation", e))?
+    .ok_or(AppError::AuthError)?;
 
     let token = create_jwt(
         &rotation.subject,

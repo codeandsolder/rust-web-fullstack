@@ -33,8 +33,6 @@ pub struct GatewayState {
     pub settings: settings::Settings,
     pub proxy_upstream_url: Arc<str>,
     pub db_pool: Option<sqlx::PgPool>,
-    pub refresh_token_ttl_secs: i64,
-    pub access_token_ttl_secs: i64,
     pub http_client: reqwest::Client,
 }
 
@@ -47,8 +45,6 @@ impl std::fmt::Debug for GatewayState {
             .field("settings", &self.settings)
             .field("proxy_upstream_url", &self.proxy_upstream_url)
             .field("db_pool", &self.db_pool.as_ref().map(|_| "PgPool { .. }"))
-            .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
-            .field("access_token_ttl_secs", &self.access_token_ttl_secs)
             .field("http_client", &format_args!("reqwest::Client {{ .. }}"))
             .finish()
     }
@@ -65,18 +61,12 @@ impl std::fmt::Debug for GatewayState {
 #[instrument(skip(modules))]
 pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
     let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
-    let refresh_token_ttl_secs = i64::try_from(cfg.gateway.refresh_token_ttl_secs)
-        .context("gateway.refresh_token_ttl_secs exceeds i64::MAX")?;
     let runtime_settings = settings::Settings::load()?.apply_runtime_config(&cfg.gateway)?;
-    let access_token_ttl_secs = runtime_settings.access_token_ttl_secs;
-
     build_gateway_with_settings(
         modules,
         runtime_settings,
         cfg.gateway.proxy_upstream_url,
         None,
-        refresh_token_ttl_secs,
-        access_token_ttl_secs,
     )
 }
 
@@ -120,19 +110,16 @@ async fn csrf_token_handler(
 
 fn gateway_state(
     modules: Vec<Arc<dyn ServiceModule>>,
-    mut settings: settings::Settings,
+    settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
-    refresh_token_ttl_secs: i64,
-    access_token_ttl_secs: i64,
 ) -> Result<(GatewayState, Router<GatewayState>), anyhow::Error> {
-    if refresh_token_ttl_secs <= 0 || access_token_ttl_secs <= 0 {
+    if settings.refresh_token_ttl_secs <= 0 || settings.access_token_ttl_secs <= 0 {
         anyhow::bail!("gateway token TTLs must be positive");
     }
     if settings.sse_broadcast_buffer == 0 {
         anyhow::bail!("gateway SSE broadcast buffer must be greater than zero");
     }
-    settings.access_token_ttl_secs = access_token_ttl_secs;
 
     let (tx, _rx) = broadcast::channel(settings.sse_broadcast_buffer);
     let services = service_infos(&modules);
@@ -150,8 +137,6 @@ fn gateway_state(
             settings,
             proxy_upstream_url: proxy_upstream_url.into(),
             db_pool,
-            refresh_token_ttl_secs,
-            access_token_ttl_secs,
             http_client,
         },
         service_router,
@@ -169,17 +154,8 @@ pub fn build_gateway_with_settings(
     settings: settings::Settings,
     proxy_upstream_url: String,
     db_pool: Option<sqlx::PgPool>,
-    refresh_token_ttl_secs: i64,
-    access_token_ttl_secs: i64,
 ) -> Result<Router, anyhow::Error> {
-    let (state, service_router) = gateway_state(
-        modules,
-        settings,
-        proxy_upstream_url,
-        db_pool,
-        refresh_token_ttl_secs,
-        access_token_ttl_secs,
-    )?;
+    let (state, service_router) = gateway_state(modules, settings, proxy_upstream_url, db_pool)?;
 
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
@@ -406,6 +382,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rejects_nonpositive_token_ttls_from_settings() -> anyhow::Result<()> {
+        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let mut invalid_access = settings.clone();
+        invalid_access.access_token_ttl_secs = 0;
+        assert!(gateway_state(vec![], invalid_access, String::new(), None).is_err());
+
+        let mut invalid_refresh = settings;
+        invalid_refresh.refresh_token_ttl_secs = -1;
+        assert!(gateway_state(vec![], invalid_refresh, String::new(), None).is_err());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn health_endpoint_returns_503_when_service_or_database_unhealthy() -> anyhow::Result<()>
     {
@@ -423,8 +412,6 @@ mod tests {
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
             db_pool: None,
-            refresh_token_ttl_secs: 60 * 60 * 24 * 30,
-            access_token_ttl_secs: 15 * 60,
             http_client,
         };
 

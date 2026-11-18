@@ -99,8 +99,6 @@ mod tests {
             modules: vec![],
             settings,
             proxy_upstream_url: Arc::from("https://ipapi.co"),
-            refresh_token_ttl_secs: 60 * 60 * 24 * 30,
-            access_token_ttl_secs: 15 * 60,
             http_client,
         };
 
