@@ -3241,13 +3241,18 @@ dependencies = [
 
 [[package]]
 name = "leptos-struct-table"
-version = "0.19.1"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ee9d70a4693d5f44b51db0936aec5f3e7b357cd75a9e90b4b9efd6bf935b25c"
+checksum = "7b2fed78832f63bf07a7848533ff1271d245808b20d0b7fd055fdc4a2b810697"
 dependencies = [
  "leptos",
  "leptos-struct-table-macro",
- "leptos-use 0.19.3",
+ "leptos-use-element",
+ "leptos-use-element-size",
+ "leptos-use-event-listener",
+ "leptos-use-fn-debounce-throttle",
+ "leptos-use-option-local-signal",
+ "leptos-use-scroll",
  "serde",
  "wasm-bindgen",
  "web-sys",
@@ -3255,9 +3260,9 @@ dependencies = [
 
 [[package]]
 name = "leptos-struct-table-macro"
-version = "0.15.2"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37c5dfa39e789f9d5c282037eb87ea47001b4e82d3bf176f776b7895f36ad4dd"
+checksum = "1f7883f34fd1ec04a07d1f56aa19b64027cae0b3ef1cb5a12732fbdd2512c8ef"
 dependencies = [
  "darling 0.24.1",
  "heck",
@@ -3288,21 +3293,64 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptos-use"
-version = "0.19.3"
+name = "leptos-use-core"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f46f177638302858755e7f10b36f440ab4f49101fdf0c53d37e79582ca090840"
+checksum = "e6377405eeb7755e1b6f3278a6c3fb62cd9824c3825656c542f77462c7fd314c"
+dependencies = [
+ "leptos",
+]
+
+[[package]]
+name = "leptos-use-element"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55d61181b426d46ab8be6ebce743cf62df7fc5dc02f08cc733cbf01fca802c47"
 dependencies = [
  "cfg-if",
  "default-struct-builder",
  "js-sys",
- "lazy_static",
  "leptos",
- "paste",
+ "leptos-use-supported",
  "send_wrapper",
- "thiserror 2.0.21",
+ "sendwrap-fn",
+ "time",
  "wasm-bindgen",
- "wasm-bindgen-futures",
+ "wasm-js-macros",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos-use-element-size"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ac42e5d95b932eee8a9c261b3615f31c23cdc03a5ad7d8b37cd46adc9c0171"
+dependencies = [
+ "cfg-if",
+ "default-struct-builder",
+ "leptos",
+ "leptos-use-core",
+ "leptos-use-element",
+ "leptos-use-resize-observer",
+ "leptos-use-watch-with-options",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos-use-event-listener"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6f1c777465a9495e341d6fd0870d68f525dc2f936ad99488246f7482b079e00"
+dependencies = [
+ "cfg-if",
+ "default-struct-builder",
+ "leptos",
+ "leptos-use-element",
+ "leptos-use-watch-with-options",
+ "send_wrapper",
+ "sendwrap-fn",
+ "wasm-bindgen",
  "web-sys",
 ]
 
@@ -3321,6 +3369,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "leptos-use-fn-debounce-throttle"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afc5d3f02cbc211e47f8f5bc822c54fb0f16d6206051233c4647c3d49bb555b3"
+dependencies = [
+ "leptos",
+ "leptos-use-filters",
+]
+
+[[package]]
 name = "leptos-use-now"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3328,6 +3386,63 @@ checksum = "62000a58720fa5b434a0927673f1fc3611393fc0c5ccec220b62a9d52bb3c2bb"
 dependencies = [
  "cfg-if",
  "js-sys",
+ "leptos",
+]
+
+[[package]]
+name = "leptos-use-option-local-signal"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1e3f8340e37a9e3fe0318e41afdb5747d3dc6f4ac9e71420577c7b76e299c81"
+dependencies = [
+ "leptos",
+]
+
+[[package]]
+name = "leptos-use-resize-observer"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3333f0424d36f59eabacf8ad218f2c8f0b62608afd71acdd3c2fe549e8205301"
+dependencies = [
+ "cfg-if",
+ "default-struct-builder",
+ "js-sys",
+ "leptos",
+ "leptos-use-element",
+ "leptos-use-supported",
+ "send_wrapper",
+ "sendwrap-fn",
+ "wasm-bindgen",
+ "wasm-js-macros",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos-use-scroll"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08fe1cd381ab8ad2b4e4d7e472a96bb58a705f29694f73d0a18493520725bca4"
+dependencies = [
+ "cfg-if",
+ "default-struct-builder",
+ "leptos",
+ "leptos-use-core",
+ "leptos-use-element",
+ "leptos-use-event-listener",
+ "leptos-use-filters",
+ "leptos-use-fn-debounce-throttle",
+ "send_wrapper",
+ "sendwrap-fn",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "leptos-use-supported"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "401de4cd9f81b0c5edb149e58c109a2e23ba001a58b73e04378236b40de3933c"
+dependencies = [
  "leptos",
 ]
 
@@ -3439,7 +3554,7 @@ dependencies = [
  "icu_plurals",
  "js-sys",
  "leptos",
- "leptos-use 0.18.3",
+ "leptos-use",
  "leptos_i18n_macro",
  "leptos_meta",
  "serde",
@@ -4069,6 +4184,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "num_threads"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cabcc654086861f9e1bc5115258de62ef92c79b20f4615a1b0cc57c4e82027d4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -6176,7 +6300,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
+ "js-sys",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",
@@ -7159,6 +7286,17 @@ checksum = "0b883a26aea02eaabe2d2c3fba7eb039ef5cdcb5d5201ae5551e73d5e251a81f"
 dependencies = [
  "leb128fmt",
  "wasmparser 0.263.0",
+]
+
+[[package]]
+name = "wasm-js-macros"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f716bc76bc4b10334b4c17cfd4790e7464975e4ac1097aa3086fb7556371fa2"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
