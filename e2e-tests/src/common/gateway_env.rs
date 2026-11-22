@@ -150,6 +150,7 @@ impl std::fmt::Debug for GatewayEnv {
         f.debug_struct("GatewayEnv")
             .field("addr", &self.addr)
             .field("shutdown", &"<cancellation token>")
+            .field("server", &self.server)
             .field("db", &self.db)
             .finish()
     }
