@@ -88,7 +88,10 @@ mod tests {
 
     #[tokio::test]
     async fn dashboard_redirects_to_health() -> anyhow::Result<()> {
-        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let settings = crate::settings::Settings::generate_dev_keys(
+            "test-admin-password",
+            &rwf_config::GatewayConfig::default(),
+        )?;
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()?;

@@ -30,8 +30,15 @@ impl GatewayEnv {
     /// Returns an error if Postgres, migrations, key generation, binding, or
     /// readiness checks fail.
     pub async fn start() -> Result<Self> {
-        let settings = gateway_example::settings::Settings::load_dev_keys(TEST_ADMIN_PASSWORD)
-            .context("failed to load dev keys for gateway")?;
+        let config = rwf_config::GatewayConfig {
+            session: rwf_config::SessionConfig {
+                cookie_secure: false,
+            },
+            ..rwf_config::GatewayConfig::default()
+        };
+        let settings =
+            gateway_example::settings::Settings::generate_dev_keys(TEST_ADMIN_PASSWORD, &config)
+                .context("failed to load dev keys for gateway")?;
 
         // This now applies search + gateway migrations in one SQLx history; no
         // raw-DDL bypass of `_sqlx_migrations` is necessary or desirable.

@@ -67,10 +67,8 @@ criterion = { version = "0.8", features = ["html_reports"] }
 insta = "1"
 proptest = "1"
 testcontainers = "0.28"
-# Layered config: TOML file + RWF_* environment variable overrides.
-# The `config` crate gives us typed deserialization + per-source priority
-# without needing unsafe or hand-rolled merge logic.
-config = { version = "0.15", default-features = false, features = ["toml"] }
+# Typed TOML configuration at executable startup.
+toml = "1.2"
 
 # Shared domain types (no framework dependencies).
 rwf-domain = { path = "crates/domain" }

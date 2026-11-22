@@ -82,6 +82,7 @@ proptest = { workspace = true }
 
 # Shared domain types (SearchResult, etc.)
 rwf-domain = { workspace = true }
+rwf-config = { path = "../crates/config" }
 
 # Import the real SearchResult type and SSR modules for in-process server
 live-search = { path = "../live-search", features = ["ssr", "test-seams"] }

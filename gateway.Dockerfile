@@ -40,6 +40,6 @@ COPY --from=builder /build/target/release/gateway-example /app/
 USER app
 EXPOSE 3001
 # Production: pass JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM / ADMIN_PASSWORD /
-# ADMIN_USER_ID / DATABASE_URL via the deployment platform. Use --dev-keys only
-# with ALLOW_DEV_KEYS=1.
+# DATABASE_URL via the deployment platform. --dev-keys requires an explicit
+# config file permitting development keys.
 CMD ["/app/gateway-example"]

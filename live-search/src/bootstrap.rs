@@ -121,27 +121,14 @@ fn spawn_pg_listener(
     );
 }
 
-fn listener_addr(default_port: u16) -> SocketAddr {
-    let port = std::env::var("PORT")
-        .or_else(|_| std::env::var("LIVE_SEARCH_PORT"))
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default_port);
-    SocketAddr::from(([0, 0, 0, 0], port))
-}
-
-fn database_settings(config: &rwf_config::Config) -> (String, db::PoolTunables) {
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .unwrap_or_else(|| config.live_search.database_url.clone());
-    let pool_tunables = db::PoolTunables {
-        max_connections: config.live_search.pool_max_connections,
-        min_connections: config.live_search.pool_min_connections,
-        acquire_timeout_secs: config.live_search.pool_acquire_timeout_secs,
-        idle_timeout_secs: config.live_search.pool_idle_timeout_secs,
-        max_lifetime_secs: config.live_search.pool_max_lifetime_secs,
-    };
-    (database_url, pool_tunables)
+fn pool_tunables(config: &rwf_config::LiveSearchConfig) -> db::PoolTunables {
+    db::PoolTunables {
+        max_connections: config.pool_max_connections,
+        min_connections: config.pool_min_connections,
+        acquire_timeout_secs: config.pool_acquire_timeout_secs,
+        idle_timeout_secs: config.pool_idle_timeout_secs,
+        max_lifetime_secs: config.pool_max_lifetime_secs,
+    }
 }
 
 /// Bootstraps all subsystems and starts the HTTP server.
@@ -149,14 +136,16 @@ fn database_settings(config: &rwf_config::Config) -> (String, db::PoolTunables) 
 /// # Errors
 /// Returns an error if configuration, database setup/migrations, or listener
 /// binding fails.
-pub async fn run() -> anyhow::Result<ServerHandle> {
+pub async fn run(
+    config: &rwf_config::LiveSearchConfig,
+    database_url: &str,
+) -> anyhow::Result<ServerHandle> {
     init_tracing();
 
-    let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
-    let (database_url, pool_tunables) = database_settings(&cfg);
-    tracing::info!("{}", cfg.live_search.connection_budget_summary());
+    let pool_tunables = pool_tunables(config);
+    tracing::info!("{}", config.connection_budget_summary());
 
-    let raw_pool = db::create_pool(&database_url, &pool_tunables)
+    let raw_pool = db::create_pool(database_url, &pool_tunables)
         .await
         .context("failed to create database pool")?;
 
@@ -172,7 +161,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
     let app_pool = state::app_pool_from_raw(raw_pool.clone());
 
     let cache_handle = CacheHandle::default();
-    let (tx, _rx) = broadcast::channel::<SseEvent>(cfg.live_search.sse_broadcast_buffer);
+    let (tx, _rx) = broadcast::channel::<SseEvent>(config.sse_broadcast_buffer);
 
     let ctx = Arc::new(state::AppContext::new(
         app_pool,
@@ -247,7 +236,7 @@ pub async fn run() -> anyhow::Result<ServerHandle> {
 
     let router: Router<()> = router.with_state(leptos_options);
 
-    let addr = listener_addr(cfg.live_search.port);
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     tracing::info!("Live search server listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)

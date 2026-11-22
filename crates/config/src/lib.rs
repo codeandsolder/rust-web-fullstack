@@ -1,7 +1,7 @@
-//! Typed workspace configuration loaded from `config.toml` plus `RWF_*`
-//! environment overrides.
+//! Typed workspace configuration from explicit TOML or checked defaults.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -9,24 +9,24 @@ use thiserror::Error;
 const MAX_I64_AS_U64: u64 = 9_223_372_036_854_775_807;
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
-    #[serde(default)]
     pub gateway: GatewayConfig,
-    #[serde(default)]
     pub live_search: LiveSearchConfig,
+    pub i18n_demo: I18nConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct GatewayConfig {
     pub port: u16,
     pub proxy_upstream_url: String,
     pub cors: CorsConfig,
     pub session: SessionConfig,
-    #[serde(default = "default_gateway_sse_broadcast_buffer")]
+    pub admin_user_id: String,
+    pub allow_dev_keys: bool,
     pub sse_broadcast_buffer: usize,
-    #[serde(default = "default_gateway_refresh_token_ttl_secs")]
     pub refresh_token_ttl_secs: u64,
-    #[serde(default = "default_gateway_access_token_ttl_secs")]
     pub access_token_ttl_secs: u64,
 }
 
@@ -37,24 +37,17 @@ impl Default for GatewayConfig {
             proxy_upstream_url: "https://ipapi.co".to_string(),
             cors: CorsConfig::default(),
             session: SessionConfig::default(),
-            sse_broadcast_buffer: default_gateway_sse_broadcast_buffer(),
-            refresh_token_ttl_secs: default_gateway_refresh_token_ttl_secs(),
-            access_token_ttl_secs: default_gateway_access_token_ttl_secs(),
+            admin_user_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            allow_dev_keys: false,
+            sse_broadcast_buffer: 256,
+            refresh_token_ttl_secs: 60 * 60 * 24 * 30,
+            access_token_ttl_secs: 15 * 60,
         }
     }
 }
 
-const fn default_gateway_sse_broadcast_buffer() -> usize {
-    256
-}
-const fn default_gateway_refresh_token_ttl_secs() -> u64 {
-    60 * 60 * 24 * 30
-}
-const fn default_gateway_access_token_ttl_secs() -> u64 {
-    15 * 60
-}
-
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct CorsConfig {
     pub allowed_origins: String,
 }
@@ -69,6 +62,7 @@ impl Default for CorsConfig {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionConfig {
     pub cookie_secure: bool,
 }
@@ -82,20 +76,14 @@ impl Default for SessionConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LiveSearchConfig {
     pub port: u16,
-    pub database_url: String,
-    #[serde(default = "default_pool_max_connections")]
     pub pool_max_connections: u32,
-    #[serde(default = "default_pool_min_connections")]
     pub pool_min_connections: u32,
-    #[serde(default = "default_pool_acquire_timeout_secs")]
     pub pool_acquire_timeout_secs: u64,
-    #[serde(default = "default_pool_idle_timeout_secs")]
     pub pool_idle_timeout_secs: u64,
-    #[serde(default = "default_pool_max_lifetime_secs")]
     pub pool_max_lifetime_secs: u64,
-    #[serde(default = "default_live_search_sse_broadcast_buffer")]
     pub sse_broadcast_buffer: usize,
 }
 
@@ -103,13 +91,12 @@ impl Default for LiveSearchConfig {
     fn default() -> Self {
         Self {
             port: 3000,
-            database_url: "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo".to_string(),
-            pool_max_connections: default_pool_max_connections(),
-            pool_min_connections: default_pool_min_connections(),
-            pool_acquire_timeout_secs: default_pool_acquire_timeout_secs(),
-            pool_idle_timeout_secs: default_pool_idle_timeout_secs(),
-            pool_max_lifetime_secs: default_pool_max_lifetime_secs(),
-            sse_broadcast_buffer: default_live_search_sse_broadcast_buffer(),
+            pool_max_connections: 20,
+            pool_min_connections: 2,
+            pool_acquire_timeout_secs: 5,
+            pool_idle_timeout_secs: 600,
+            pool_max_lifetime_secs: 1800,
+            sse_broadcast_buffer: 256,
         }
     }
 }
@@ -128,156 +115,120 @@ impl LiveSearchConfig {
     }
 }
 
-const fn default_pool_max_connections() -> u32 {
-    20
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct I18nConfig {
+    pub port: u16,
 }
-const fn default_pool_min_connections() -> u32 {
-    2
-}
-const fn default_pool_acquire_timeout_secs() -> u64 {
-    5
-}
-const fn default_pool_idle_timeout_secs() -> u64 {
-    600
-}
-const fn default_pool_max_lifetime_secs() -> u64 {
-    1800
-}
-const fn default_live_search_sse_broadcast_buffer() -> usize {
-    256
+
+impl Default for I18nConfig {
+    fn default() -> Self {
+        Self { port: 3002 }
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("config load failed: {0}")]
-    Load(#[from] config::ConfigError),
-    #[error("RWF_CONFIG path {0} does not exist")]
-    ConfigPathNotFound(String),
+    #[error("cannot read configuration {path:?}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid TOML configuration: {0}")]
+    Parse(#[from] toml::de::Error),
     #[error("invalid configuration: {0}")]
     Invalid(String),
+    #[error("invalid startup argument: {0}")]
+    Argument(String),
 }
 
-fn i64_default<T>(value: T, name: &str) -> Result<i64, ConfigError>
-where
-    i64: TryFrom<T>,
-{
-    i64::try_from(value)
-        .map_err(|_| ConfigError::Invalid(format!("{name} default does not fit in i64")))
+/// Selects the application-specific startup argument grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Server {
+    Gateway,
+    LiveSearch,
+    I18nDemo,
+}
+
+/// Explicit executable arguments; independent of the process environment.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct StartupOptions {
+    pub config_path: Option<PathBuf>,
+    pub dev_keys: bool,
+}
+
+impl StartupOptions {
+    /// Parse arguments after the executable name.
+    ///
+    /// # Errors
+    /// Rejects unknown, duplicate, or missing arguments; development keys
+    /// are a gateway-only option.
+    pub fn parse(
+        server: Server,
+        args: impl IntoIterator<Item = OsString>,
+    ) -> Result<Self, ConfigError> {
+        let mut options = Self::default();
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            match arg.to_str() {
+                Some("--config") if options.config_path.is_none() => {
+                    let path = args
+                        .next()
+                        .filter(|value| {
+                            !value.is_empty() && !value.as_encoded_bytes().starts_with(b"--")
+                        })
+                        .ok_or_else(|| {
+                            ConfigError::Argument("--config requires a path".to_owned())
+                        })?;
+                    options.config_path = Some(path.into());
+                }
+                Some("--dev-keys") if server == Server::Gateway && !options.dev_keys => {
+                    options.dev_keys = true;
+                }
+                _ => {
+                    return Err(ConfigError::Argument(format!(
+                        "unexpected argument {arg:?}"
+                    )));
+                }
+            }
+        }
+        Ok(options)
+    }
 }
 
 impl Config {
-    /// Load defaults, an optional TOML file, then `RWF_*` environment
-    /// overrides (`__` separates nested keys), and validate cross-field
-    /// invariants before returning.
-    ///
-    /// Example: `RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50`.
+    /// Load typed defaults or a specific TOML file, with no ambient overrides.
     ///
     /// # Errors
-    /// Returns [`ConfigError`] for missing explicit files, parse/deserialization
-    /// failures, or invalid values/invariants.
-    pub fn load() -> Result<Self, ConfigError> {
-        let config_path = std::env::var("RWF_CONFIG").ok();
-        Self::load_from(config_path.as_deref(), None)
+    /// Returns a configuration error for unreadable/invalid files or invalid
+    /// cross-field invariants.
+    pub fn load(path: Option<&Path>) -> Result<Self, ConfigError> {
+        match path {
+            Some(path) => {
+                let input = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+                Self::from_toml(&input)
+            }
+            None => {
+                let config = Self::default();
+                config.validate()?;
+                Ok(config)
+            }
+        }
     }
 
-    fn load_from(
-        config_path: Option<&str>,
-        environment_source: Option<config::Map<String, String>>,
-    ) -> Result<Self, ConfigError> {
-        if let Some(path) = config_path
-            && !Path::new(path).exists()
-        {
-            return Err(ConfigError::ConfigPathNotFound(path.to_string()));
-        }
-
-        let environment = config::Environment::with_prefix("RWF")
-            .prefix_separator("_")
-            .separator("__")
-            .try_parsing(true)
-            .source(environment_source);
-
-        let builder = config::Config::builder()
-            .set_default("gateway.port", 3001_i64)?
-            .set_default("gateway.proxy_upstream_url", "https://ipapi.co")?
-            .set_default(
-                "gateway.cors.allowed_origins",
-                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
-            )?
-            .set_default("gateway.session.cookie_secure", true)?
-            .set_default(
-                "gateway.sse_broadcast_buffer",
-                i64_default(
-                    default_gateway_sse_broadcast_buffer(),
-                    "gateway.sse_broadcast_buffer",
-                )?,
-            )?
-            .set_default(
-                "gateway.refresh_token_ttl_secs",
-                i64_default(
-                    default_gateway_refresh_token_ttl_secs(),
-                    "gateway.refresh_token_ttl_secs",
-                )?,
-            )?
-            .set_default(
-                "gateway.access_token_ttl_secs",
-                i64_default(
-                    default_gateway_access_token_ttl_secs(),
-                    "gateway.access_token_ttl_secs",
-                )?,
-            )?
-            .set_default("live_search.port", 3000_i64)?
-            .set_default(
-                "live_search.database_url",
-                "postgres://rwf:rwf_dev_password@localhost:5432/rwf_demo",
-            )?
-            .set_default(
-                "live_search.pool_max_connections",
-                i64::from(default_pool_max_connections()),
-            )?
-            .set_default(
-                "live_search.pool_min_connections",
-                i64::from(default_pool_min_connections()),
-            )?
-            .set_default(
-                "live_search.pool_acquire_timeout_secs",
-                i64_default(
-                    default_pool_acquire_timeout_secs(),
-                    "live_search.pool_acquire_timeout_secs",
-                )?,
-            )?
-            .set_default(
-                "live_search.pool_idle_timeout_secs",
-                i64_default(
-                    default_pool_idle_timeout_secs(),
-                    "live_search.pool_idle_timeout_secs",
-                )?,
-            )?
-            .set_default(
-                "live_search.pool_max_lifetime_secs",
-                i64_default(
-                    default_pool_max_lifetime_secs(),
-                    "live_search.pool_max_lifetime_secs",
-                )?,
-            )?
-            .set_default(
-                "live_search.sse_broadcast_buffer",
-                i64_default(
-                    default_live_search_sse_broadcast_buffer(),
-                    "live_search.sse_broadcast_buffer",
-                )?,
-            )?
-            .add_source(
-                config::File::new(
-                    config_path.unwrap_or("config.toml"),
-                    config::FileFormat::Toml,
-                )
-                .required(false),
-            )
-            .add_source(environment);
-
-        let cfg: Self = builder.build()?.try_deserialize()?;
-        cfg.validate()?;
-        Ok(cfg)
+    /// Parse an explicit TOML document, using the same defaults as startup.
+    ///
+    /// # Errors
+    /// Returns a configuration error for invalid syntax, unknown fields, or
+    /// invalid cross-field invariants.
+    pub fn from_toml(input: &str) -> Result<Self, ConfigError> {
+        let config: Self = toml::from_str(input)?;
+        config.validate()?;
+        Ok(config)
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -300,9 +251,6 @@ impl Config {
             return invalid("gateway.access_token_ttl_secs must fit in positive i64");
         }
 
-        if self.live_search.database_url.trim().is_empty() {
-            return invalid("live_search.database_url must not be empty");
-        }
         if self.live_search.pool_max_connections == 0 {
             return invalid("live_search.pool_max_connections must be greater than zero");
         }
@@ -332,50 +280,108 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn empty_environment() -> config::Map<String, String> {
-        config::Map::new()
-    }
-
-    fn environment(entries: &[(&str, &str)]) -> config::Map<String, String> {
-        entries
-            .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-            .collect()
-    }
-
     #[test]
     fn defaults_match_documented_values() -> Result<(), ConfigError> {
-        let cfg = Config::load_from(None, Some(empty_environment()))?;
+        let cfg = Config::load(None)?;
         assert_eq!(cfg.gateway.port, 3001);
         assert_eq!(cfg.live_search.port, 3000);
+        assert_eq!(cfg.i18n_demo.port, 3002);
         assert_eq!(cfg.live_search.pool_max_connections, 20);
         assert_eq!(cfg.live_search.pool_min_connections, 2);
         assert_eq!(cfg.live_search.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.sse_broadcast_buffer, 256);
         assert_eq!(cfg.gateway.refresh_token_ttl_secs, 60 * 60 * 24 * 30);
         assert_eq!(cfg.gateway.access_token_ttl_secs, 15 * 60);
+        assert!(cfg.gateway.session.cookie_secure);
+        assert!(!cfg.gateway.allow_dev_keys);
         Ok(())
     }
 
     #[test]
-    fn rwf_config_missing_path_errors() {
-        let result = Config::load_from(
-            Some("/this/path/does/not/exist.toml"),
-            Some(empty_environment()),
-        );
-        assert!(matches!(result, Err(ConfigError::ConfigPathNotFound(_))));
+    fn explicit_missing_path_errors() {
+        let result = Config::load(Some(Path::new("/this/path/does/not/exist.toml")));
+        assert!(matches!(result, Err(ConfigError::Read { .. })));
+    }
+
+    #[test]
+    fn partial_nested_config_preserves_typed_defaults() -> Result<(), ConfigError> {
+        let cfg = Config::from_toml(
+            "[gateway.session]\ncookie_secure = false\n[live_search]\npool_max_connections = 50",
+        )?;
+        assert!(!cfg.gateway.session.cookie_secure);
+        assert_eq!(cfg.gateway.port, 3001);
+        assert_eq!(cfg.gateway.sse_broadcast_buffer, 256);
+        assert_eq!(cfg.live_search.pool_max_connections, 50);
+        assert_eq!(cfg.live_search.pool_min_connections, 2);
+        assert_eq!(cfg.i18n_demo.port, 3002);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_in_config_examples_have_expected_policy() -> Result<(), ConfigError> {
+        let production = Config::from_toml(include_str!("../../../config.toml"))?;
+        let development = Config::from_toml(include_str!("../../../config.dev.toml"))?;
+        assert!(!production.gateway.allow_dev_keys);
+        assert!(production.gateway.session.cookie_secure);
+        assert!(development.gateway.allow_dev_keys);
+        assert!(!development.gateway.session.cookie_secure);
+        Ok(())
     }
 
     #[test]
     fn invalid_zero_sse_buffer_is_rejected() {
-        let result = Config::load_from(
-            None,
-            Some(environment(&[(
-                "RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER",
-                "0",
-            )])),
+        assert!(matches!(
+            Config::from_toml("[live_search]\nsse_broadcast_buffer = 0"),
+            Err(ConfigError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn unknown_fields_and_malformed_booleans_are_rejected() {
+        for input in [
+            "[gateway.session]\ncookie_secure = 'false'",
+            "[gateway]\nports = 4000",
+            "[unknown]\nport = 4000",
+            "[live_search]\ndatabase_url = 'removed'",
+            "[i18n_demo]\nport = 65536",
+        ] {
+            assert!(
+                matches!(Config::from_toml(input), Err(ConfigError::Parse(_))),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_parser_is_explicit_and_rejects_invalid_modes() -> Result<(), ConfigError> {
+        let options = StartupOptions::parse(
+            Server::Gateway,
+            ["--dev-keys", "--config", "demo.toml"].map(Into::into),
+        )?;
+        assert_eq!(options.config_path, Some("demo.toml".into()));
+        assert!(options.dev_keys);
+        assert_eq!(
+            StartupOptions::parse(Server::LiveSearch, [])?,
+            StartupOptions::default()
         );
-        assert!(matches!(result, Err(ConfigError::Invalid(_))));
+        for (server, args) in [
+            (Server::LiveSearch, &["--dev-keys"][..]),
+            (Server::I18nDemo, &["--dev-keys"][..]),
+            (Server::Gateway, &["--dev-keys", "--dev-keys"][..]),
+            (Server::Gateway, &["--config"][..]),
+            (Server::Gateway, &["--config", "--dev-keys"][..]),
+            (
+                Server::Gateway,
+                &["--config", "one.toml", "--config", "two.toml"][..],
+            ),
+            (Server::Gateway, &["--unknown"][..]),
+        ] {
+            assert!(
+                StartupOptions::parse(server, args.iter().copied().map(OsString::from)).is_err(),
+                "{args:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

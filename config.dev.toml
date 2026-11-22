@@ -1,0 +1,6 @@
+# Explicit local-only configuration; never use for production.
+[gateway]
+allow_dev_keys = true
+
+[gateway.session]
+cookie_secure = false
