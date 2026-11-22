@@ -17,8 +17,10 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+COPY Cargo.lock ./
+COPY scripts/wasm-bindgen-version.sh scripts/wasm-bindgen-version.sh
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.128 --locked && \
+    cargo install wasm-bindgen-cli --version "=$(sh scripts/wasm-bindgen-version.sh)" --locked && \
     cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
 # The workspace patches crates.io dependencies to local sources. Those path

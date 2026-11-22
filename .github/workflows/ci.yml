@@ -37,6 +37,7 @@ jobs:
       postgres-only: ${{ steps.scope.outputs.postgres-only }}
       compose: ${{ steps.scope.outputs.compose }}
       compiler-changed: ${{ steps.scope.outputs.compiler-changed }}
+      browser-toolchain-changed: ${{ steps.scope.outputs.browser-toolchain-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -226,7 +227,7 @@ jobs:
   wasm-check:
     name: WASM link (${{ matrix.package }})
     needs: scope
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true'
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true' || needs.scope.outputs.browser-toolchain-changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
@@ -335,7 +336,7 @@ jobs:
   leptos-build:
     name: Leptos production builds
     needs: scope
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true'
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true' || needs.scope.outputs.browser-toolchain-changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -386,7 +387,7 @@ jobs:
   docker-build:
     name: Docker image (${{ matrix.image }})
     needs: scope
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true'
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true' || needs.scope.outputs.browser-toolchain-changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
@@ -421,7 +422,7 @@ jobs:
   e2e-tests:
     name: Browser + integration E2E
     needs: scope
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true'
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.extended) || needs.scope.outputs.compiler-changed == 'true' || needs.scope.outputs.browser-toolchain-changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
@@ -439,6 +440,9 @@ jobs:
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
         with:
           rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - name: Resolve locked wasm-bindgen schema
+        id: bindgen
+        run: echo "version=$(sh scripts/wasm-bindgen-version.sh)" >> "$GITHUB_OUTPUT"
       - name: Restore E2E build tools
         id: e2e-tools-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -446,11 +450,11 @@ jobs:
           path: |
             ~/.cargo/bin/wasm-bindgen
             ~/.cargo/bin/stylance
-          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-0.2.128-stylance-0.8.4-rust-${{ steps.compiler.outputs.channel }}
+          key: ci-tools-${{ runner.os }}-wasm-bindgen-cli-${{ steps.bindgen.outputs.version }}-stylance-0.8.4-rust-${{ steps.compiler.outputs.channel }}
       - name: Install E2E build tools
         if: steps.e2e-tools-cache.outputs.cache-hit != 'true'
         run: |
-          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          cargo install wasm-bindgen-cli --version "=${{ steps.bindgen.outputs.version }}" --locked
           cargo install stylance-cli --version 0.8.4 --locked
       - name: Configure Chrome
         shell: bash
