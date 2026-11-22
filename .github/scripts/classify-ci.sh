@@ -16,8 +16,8 @@ if [[ -n "$base" ]]; then
   done
   image='^    image: postgres:[^[:space:]]+$'
   if [[ "${#changed[@]}" == 1 && "${changed[0]}" == docker-compose.yml ]] &&
-     [[ "$(git show "$base:docker-compose.yml" | rg -c "$image")" == 1 ]] &&
-     [[ "$(rg -c "$image" docker-compose.yml)" == 1 ]] &&
+     [[ "$(git show "$base:docker-compose.yml" | sed -En "/$image/p" | wc -l)" == 1 ]] &&
+     [[ "$(sed -En "/$image/p" docker-compose.yml | wc -l)" == 1 ]] &&
      cmp -s <(git show "$base:docker-compose.yml" | sed -E "s/$image/    image: postgres:CI_IMAGE/")             <(sed -E "s/$image/    image: postgres:CI_IMAGE/" docker-compose.yml); then
     postgres_only=true
   fi
