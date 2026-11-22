@@ -28,7 +28,7 @@ use super::expiry;
 /// `aud` (audience), `iss` (issuer), `jti` (JWT ID).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[non_exhaustive]
-#[must_use]
+#[must_use = "the returned claims describe the authenticated token subject and validity"]
 pub struct Claims {
     pub sub: UserId,
     pub exp: u64,

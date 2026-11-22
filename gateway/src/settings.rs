@@ -22,7 +22,7 @@ fn token_ttls(config: &rwf_config::GatewayConfig) -> Result<(i64, i64), anyhow::
     Ok((access, refresh))
 }
 
-#[must_use]
+#[must_use = "the returned fingerprint identifies the configuration value"]
 fn short_fingerprint(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in bytes {

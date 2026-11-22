@@ -102,7 +102,7 @@ impl Default for LiveSearchConfig {
 }
 
 impl LiveSearchConfig {
-    #[must_use]
+    #[must_use = "the returned summary describes the database connection budget"]
     pub fn connection_budget_summary(&self) -> String {
         format!(
             "pool max_connections={}, min_connections={}, acquire_timeout={}s, idle_timeout={}s, max_lifetime={}s",

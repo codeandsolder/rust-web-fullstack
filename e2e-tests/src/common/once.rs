@@ -54,7 +54,7 @@ impl<T: Send + Sync + 'static> SharedServer<T> {
     /// Create a new uninitialised server holder.
     ///
     /// This is `const`-callable so it can be used in a `static` initialiser.
-    #[must_use]
+    #[must_use = "the returned initializer owns its one-time setup state"]
     pub const fn new() -> Self {
         Self {
             cell: OnceCell::const_new(),

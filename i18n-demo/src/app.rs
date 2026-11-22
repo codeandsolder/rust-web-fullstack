@@ -13,7 +13,7 @@ use leptos_router::path;
 
 /// HTML shell rendered by the server during SSR. English is the initial locale;
 /// the hydrated client updates the root `lang` attribute when locale changes.
-#[must_use]
+#[must_use = "the returned view renders the application document"]
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>
@@ -48,7 +48,7 @@ fn set_document_lang(lang: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 const fn set_document_lang(_lang: &str) {}
 
-#[must_use]
+#[must_use = "the returned view renders the application component"]
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] generates a wrapper that nightly Clippy evaluates separately"
@@ -73,7 +73,7 @@ pub fn App() -> impl IntoView {
     }
 }
 
-#[must_use]
+#[must_use = "the returned view renders the page component"]
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] generates a wrapper that nightly Clippy evaluates separately"

@@ -15,7 +15,7 @@ pub mod common;
 /// When `override_url` is `Some`, that value is used directly instead of
 /// consulting the environment.  This is useful in unit tests to avoid unsafe
 /// `env::set_var` / `env::remove_var` calls.
-#[must_use]
+#[must_use = "the returned URL selects the test server endpoint"]
 pub fn base_url(override_url: Option<&str>) -> String {
     override_url
         .map(String::from)
@@ -25,7 +25,7 @@ pub fn base_url(override_url: Option<&str>) -> String {
 
 /// Build a URL from a base and a path segment.  Handles leading slashes on
 /// `path` and trailing slashes on `base`.
-#[must_use]
+#[must_use = "the returned URL combines the base and requested path"]
 pub fn join_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let path = path.trim_start_matches('/');

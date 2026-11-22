@@ -77,7 +77,7 @@ impl CacheHandle {
     /// age them out of every subsequent read.
     ///
     /// The query is used as-is (the caller should normalise before calling).
-    #[must_use]
+    #[must_use = "the returned result contains the current cached matches when available"]
     pub async fn get(&self, query: &str) -> Option<Arc<Vec<SearchResult>>> {
         let entry = self.cache.get(query).await?;
         if entry.version != self.version.load(Ordering::Acquire) {
@@ -111,7 +111,7 @@ impl CacheHandle {
     }
 
     /// Read the current cache version. Exposed for tests and observability.
-    #[must_use]
+    #[must_use = "the returned version identifies the current cache generation"]
     pub fn current_version(&self) -> u64 {
         self.version.load(Ordering::Acquire)
     }

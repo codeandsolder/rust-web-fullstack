@@ -258,12 +258,12 @@ impl LiveSearchEnv {
         })
     }
 
-    #[must_use]
+    #[must_use = "the returned URL identifies the test search service"]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    #[must_use]
+    #[must_use = "the returned test environment owns the corresponding database container"]
     pub const fn db(&self) -> &super::db::TestEnv {
         &self.db_container
     }

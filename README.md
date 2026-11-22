@@ -21,8 +21,9 @@ Docker builds, and real browser E2E tests.
 
 The workspace uses Edition 2024 with Cargo resolver 3. Rust **1.94** remains the
 supported compatibility floor/MSRV, tested on the patched **1.94.1** toolchain.
-The repository default toolchain and production Docker builds use
-**Rust 1.100.0**; native format/lint CI jobs are still pinned to **1.99.0**.
+The native root `rust-toolchain.toml` selects a dated nightly for CI, local
+builds and production Docker builds. Shared Renovate updates the pin weekly
+after the compiler-age gate and successful CI.
 This keeps the compatibility contract separate from the compiler version used
 to develop and ship the examples.
 
@@ -236,7 +237,7 @@ shutdown wiring for active connections.
 
 ## Build and validation
 
-Basic static/test pass on the default Rust 1.100.0 toolchain:
+Basic static/test pass on the native pinned toolchain:
 
 ```bash
 cargo fmt --all
@@ -295,8 +296,7 @@ The release-tag matrix additionally covers MSRV, real WASM hydration linking,
 `cargo audit`, production Leptos builds, all three Docker images, and real
 Chromium-backed E2E tests.
 
-The native format/lint CI jobs use Rust **1.99.0**; the repository default
-toolchain and production Docker builds use **1.100.0**. A release-only
+All routine format, lint and build jobs use the native pinned nightly. A release-only
 **1.94.1 MSRV** lane checks both the native workspace and hydration crates, so
 adopting new stable APIs does not silently raise the advertised compatibility
 floor. Cargo resolver 3 makes new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s

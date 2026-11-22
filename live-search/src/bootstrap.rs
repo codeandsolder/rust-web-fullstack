@@ -34,7 +34,7 @@ use crate::{db, sse, state};
 
 /// Handle returned by [`run`] for cooperative shutdown and task draining.
 #[derive(Debug)]
-#[must_use]
+#[must_use = "the returned handle owns the server tasks, shutdown token and database pool"]
 pub struct ServerHandle {
     pub shutdown: CancellationToken,
     pub tasks: JoinSet<anyhow::Result<()>>,
@@ -45,7 +45,7 @@ pub struct ServerHandle {
 static PROVIDER: OnceLock<rwf_telemetry::SdkTracerProvider> = OnceLock::new();
 
 #[cfg(feature = "otel")]
-#[must_use]
+#[must_use = "the returned provider identifies the initialized tracing pipeline when available"]
 pub fn get_tracer_provider() -> Option<&'static rwf_telemetry::SdkTracerProvider> {
     PROVIDER.get()
 }
