@@ -7,7 +7,8 @@
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread::JoinHandle;
+use std::time::Duration;
+use tokio::task::JoinHandle;
 
 use tokio_util::sync::CancellationToken;
 
@@ -20,6 +21,7 @@ pub const TEST_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 pub struct GatewayEnv {
     addr: SocketAddr,
     shutdown: CancellationToken,
+    server: JoinHandle<Result<()>>,
     db: super::db::TestEnv,
 }
 
@@ -31,6 +33,7 @@ impl GatewayEnv {
     /// readiness checks fail.
     pub async fn start() -> Result<Self> {
         let config = rwf_config::GatewayConfig {
+            admin_user_id: TEST_ADMIN_USER_ID.to_owned(),
             session: rwf_config::SessionConfig {
                 cookie_secure: false,
             },
@@ -55,92 +58,61 @@ impl GatewayEnv {
         let app = gateway::build_gateway_with_settings(
             modules,
             settings,
-            "https://ipapi.co".to_string(),
+            config.proxy_upstream_url,
             Some(db.pool().clone()),
         )
         .context("failed to build gateway router")?;
 
+        // SharedServer already owns a long-lived Tokio runtime. Bind before
+        // spawning, so startup neither needs another runtime nor polls a mutex.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .context("failed to bind gateway listener")?;
+        let addr = listener
+            .local_addr()
+            .context("failed to get gateway address")?;
         let shutdown = CancellationToken::new();
         let serve_token = shutdown.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(serve_token.cancelled_owned())
+            .await
+            .context("gateway axum server exited with error")
+        });
 
-        let bound_addr: SocketAddr = {
-            let addr_lock = Arc::new(std::sync::Mutex::new(None::<SocketAddr>));
-            let addr_clone = Arc::clone(&addr_lock);
-
-            let thread: JoinHandle<Result<()>> = std::thread::Builder::new()
-                .name("gateway-server".into())
-                .spawn(move || -> Result<()> {
-                    let rt = tokio::runtime::Runtime::new()
-                        .context("failed to create gateway server runtime")?;
-                    rt.block_on(async move {
-                        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                            .await
-                            .context("Failed to bind gateway listener")?;
-                        let bound = listener
-                            .local_addr()
-                            .context("Failed to get bound address")?;
-                        addr_clone
-                            .lock()
-                            .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?
-                            .replace(bound);
-                        axum::serve(
-                            listener,
-                            app.into_make_service_with_connect_info::<SocketAddr>(),
-                        )
-                        .with_graceful_shutdown(async move {
-                            serve_token.cancelled().await;
-                        })
-                        .await
-                        .context("gateway axum server exited with error")?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                })
-                .context("Failed to spawn gateway server thread")?;
-
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            let addr = loop {
-                {
-                    let guard = addr_lock
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("addr lock poisoned: {e}"))?;
-                    if let Some(addr) = *guard {
-                        break addr;
-                    }
-                }
-                if std::time::Instant::now() >= deadline {
-                    return Err(anyhow::anyhow!("Gateway server did not bind within 15s"));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            };
-            drop(thread);
-            addr
+        let env = Self {
+            addr,
+            shutdown,
+            server,
+            db,
         };
+        env.wait_ready().await?;
+        Ok(env)
+    }
 
-        let health_url = format!("http://{bound_addr}/health");
+    async fn wait_ready(&self) -> Result<()> {
+        let health_url = format!("{}/health", self.base_url());
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(Duration::from_secs(2))
             .build()
-            .context("Failed to build health check client")?;
-        let health_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            .context("failed to build health check client")?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
             if let Ok(resp) = client.get(&health_url).send().await
                 && resp.status().is_success()
             {
-                break;
+                return Ok(());
             }
-            if std::time::Instant::now() >= health_deadline {
-                return Err(anyhow::anyhow!(
-                    "Gateway server at {bound_addr} did not become ready within 15s"
-                ));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            anyhow::ensure!(
+                !self.server.is_finished() && tokio::time::Instant::now() < deadline,
+                "gateway at {} did not become ready within 15s",
+                self.addr
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-
-        Ok(Self {
-            addr: bound_addr,
-            shutdown,
-            db,
-        })
     }
 
     #[must_use]
@@ -153,15 +125,23 @@ impl GatewayEnv {
         self.addr
     }
 
-    pub async fn shutdown(self) {
+    /// Stop accepting requests and wait for the actual server task to exit.
+    ///
+    /// # Errors
+    /// Returns an error if shutdown times out or the server task fails.
+    pub async fn shutdown(mut self) -> Result<()> {
         self.shutdown.cancel();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::timeout(Duration::from_secs(5), &mut self.server)
+            .await
+            .context("gateway graceful shutdown timed out")?
+            .context("gateway server task failed")?
     }
 }
 
 impl Drop for GatewayEnv {
     fn drop(&mut self) {
         self.shutdown.cancel();
+        self.server.abort();
     }
 }
 
