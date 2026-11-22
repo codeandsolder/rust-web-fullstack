@@ -47,6 +47,17 @@ PostgreSQL 18+ uses the volume root `/var/lib/postgresql`. Existing demo volumes
 from older major versions need a proper database migration or an explicitly
 chosen fresh volume; the Compose setup does not migrate or delete old data.
 
+To insert the sample search results after the services have migrated the database:
+
+```bash
+docker compose exec -T postgres psql -U rwf -d rwf_demo -v ON_ERROR_STOP=1 < scripts/seed-db.sql
+```
+
+The seed is idempotent and requires the migrated schema; it never truncates data.
+Use `docker compose logs -f` to inspect services and `docker compose down` to
+stop them while retaining database volumes. Removing volumes requires the explicit
+`docker compose down -v` command.
+
 The dev gateway uses ephemeral Ed25519 keys and is deliberately guarded by
 `ALLOW_DEV_KEYS=1`. It also disables the session cookie's `Secure` flag because
 the Compose dev endpoint is plain localhost HTTP. Do not copy those two settings
@@ -219,9 +230,12 @@ shutdown wiring for active connections.
 Basic static/test pass on the default Rust 1.100.0 toolchain:
 
 ```bash
+cargo fmt --all
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p live-search --features ssr --all-targets -- -D warnings
 cargo test --workspace --lib
+cargo build --release --workspace
 ```
 
 SSR/hydration production builds:
