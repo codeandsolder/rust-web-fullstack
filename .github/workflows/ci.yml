@@ -56,7 +56,7 @@ jobs:
           rustup run 1.94.1 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.94.1"
       - name: Check native workspace at MSRV
@@ -67,7 +67,7 @@ jobs:
           cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   format:
     name: Format
@@ -82,7 +82,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Restore leptosfmt
@@ -124,7 +124,7 @@ jobs:
         run: git diff --exit-code
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   clippy:
     name: Clippy (native)
@@ -141,7 +141,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Clippy
@@ -157,7 +157,7 @@ jobs:
         run: du -sh target/debug 2>/dev/null || true
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
@@ -181,7 +181,7 @@ jobs:
       # --allow-undefined implicitly, so only a real link exercises that policy.
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
           cache-scope: ${{ format('{0}:{1}:{2}', github.workflow, github.job, toJSON(matrix)) }}
@@ -189,7 +189,7 @@ jobs:
         run: cargo +1.99.0 build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   unit-tests:
     name: Unit tests
@@ -207,7 +207,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Run library tests
@@ -217,14 +217,14 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   unit-tests-shared-cache:
     name: Unit tests (GHA sccache)
     if: github.event_name != 'pull_request'
     permissions:
       contents: read
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@097cc824fc551bce6708700117f796c746689faa # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@d168449633a47de6c0166f0c0cff903e96983820 # main
     with:
       command: cargo +1.99.0 test --locked --workspace --lib
       rust-toolchain: "1.99.0"
@@ -244,7 +244,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Restore cargo-audit
@@ -260,7 +260,7 @@ jobs:
         run: cargo audit
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   leptos-build:
     name: Leptos production builds
@@ -276,7 +276,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Restore Leptos build tools
@@ -307,7 +307,7 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -357,7 +357,7 @@ jobs:
           rustup run 1.99.0 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.99.0"
       - name: Restore E2E build tools
@@ -396,4 +396,4 @@ jobs:
         run: ${SCCACHE_PATH} --show-stats
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@097cc824fc551bce6708700117f796c746689faa # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
