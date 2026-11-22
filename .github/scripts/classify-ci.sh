@@ -5,6 +5,7 @@ base=${1:-}
 repo=${2:-.}
 postgres_only=false
 compose=true
+compiler_changed=false
 if [[ -n "$base" ]]; then
   git -C "$repo" cat-file -e "$base^{commit}"
   changes=$(mktemp)
@@ -14,6 +15,7 @@ if [[ -n "$base" ]]; then
   compose=false
   for path in "${changed[@]}"; do
     if [[ "$path" == docker-compose.yml ]]; then compose=true; fi
+    if [[ "$path" == rust-toolchain.toml ]]; then compiler_changed=true; fi
   done
   image='^    image: postgres:[^[:space:]]+$'
   if [[ "${#changed[@]}" == 1 && "${changed[0]}" == docker-compose.yml ]] &&
@@ -23,4 +25,5 @@ if [[ -n "$base" ]]; then
     postgres_only=true
   fi
 fi
-printf 'postgres-only=%s\ncompose=%s\n' "$postgres_only" "$compose" >> "$GITHUB_OUTPUT"
+printf 'postgres-only=%s\ncompose=%s\ncompiler-changed=%s\n' \
+  "$postgres_only" "$compose" "$compiler_changed" >> "$GITHUB_OUTPUT"

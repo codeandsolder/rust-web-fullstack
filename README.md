@@ -296,7 +296,7 @@ The release-tag matrix additionally covers MSRV, real WASM hydration linking,
 `cargo audit`, production Leptos builds, all three Docker images, and real
 Chromium-backed E2E tests.
 
-All routine format, lint and build jobs use the native pinned nightly. A release-only
+All routine format, lint and build jobs use the native pinned nightly. Compiler-pin changes also run the native feature matrix, actual WASM links, production builds and containers, and browser/integration E2E tests before merging. Ordinary dependency updates retain the smaller routine suite. A release-only
 **1.94.1 MSRV** lane checks both the native workspace and hydration crates, so
 adopting new stable APIs does not silently raise the advertised compatibility
 floor. Cargo resolver 3 makes new dependency resolution MSRV-aware. CI also uses Cargo 1.97+'s
