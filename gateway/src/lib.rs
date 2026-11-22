@@ -9,7 +9,7 @@
 //! # Architecture
 //!
 //! * [`crate::gateway`] — [`crate::gateway::GatewayState`],
-//!   [`crate::gateway::build_gateway`], health / root handlers
+//!   [`crate::gateway::build_gateway_with_settings`], health / root handlers
 //! * [`auth`] — JWT creation / validation (`EdDSA`), auth middleware,
 //!   login / refresh / logout / protected handlers
 //! * [`module`] — [`crate::module::ServiceModule`] trait,

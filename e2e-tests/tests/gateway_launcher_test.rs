@@ -69,7 +69,8 @@ async fn gateway_launcher_creates_reachable_server() -> anyhow::Result<()> {
     println!("Gateway health check returned gateway=ok");
 
     // ── 5. Clean shutdown ────────────────────────────────────────────
-    gw.shutdown().await;
+    gw.shutdown().await?;
+    assert!(tokio::net::TcpStream::connect(addr).await.is_err());
 
     Ok(())
 }

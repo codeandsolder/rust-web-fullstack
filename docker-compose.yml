@@ -45,7 +45,6 @@ services:
       dockerfile: i18n-demo.Dockerfile
     container_name: rwf-i18n-demo
     environment:
-      PORT: 3002
       RUST_LOG: info
     ports:
       - "3002:3002"
@@ -64,10 +63,9 @@ services:
       - "3001:3001"
     environment:
       DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
-      JWT_PRIVATE_KEY_PEM: "${JWT_PRIVATE_KEY_PEM:?JWT_PRIVATE_KEY_PEM must be set}"
-      JWT_PUBLIC_KEY_PEM: "${JWT_PUBLIC_KEY_PEM:?JWT_PUBLIC_KEY_PEM must be set}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}"
-      ADMIN_USER_ID: "${ADMIN_USER_ID:-00000000-0000-0000-0000-000000000001}"
+      JWT_PRIVATE_KEY_PEM:
+      JWT_PUBLIC_KEY_PEM:
+      ADMIN_PASSWORD:
       RUST_LOG: info
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
@@ -93,11 +91,11 @@ services:
       - "3001:3001"
     environment:
       DATABASE_URL: postgres://rwf:rwf_dev_password@postgres:5432/rwf_demo
-      ALLOW_DEV_KEYS: "1"
       ADMIN_PASSWORD: "synthetic-gateway-test-password"
-      RWF_GATEWAY__SESSION__COOKIE_SECURE: "false"
       RUST_LOG: info
-    command: ["/app/gateway-example", "--dev-keys"]
+    volumes:
+      - ./config.dev.toml:/app/config.dev.toml:ro
+    command: ["/app/gateway-example", "--config", "/app/config.dev.toml", "--dev-keys"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
       interval: 10s

@@ -16,7 +16,7 @@ fix this document in the same change.
 | `live-search/` | Leptos SSR/hydration, PostgreSQL search, cache, SSE, PgListener |
 | `gateway/` | Axum gateway, JWT + rotating refresh tokens, sessions/CSRF, OpenAPI |
 | `i18n-demo/` | `leptos_i18n` locale switching and a small WebSocket example |
-| `crates/config/` | typed TOML + `RWF_*` config and validation |
+| `crates/config/` | typed explicit TOML config and validation |
 | `crates/domain/` | framework-free domain types and invariants |
 | `crates/telemetry/` | shared OTLP/HTTP tracing initialization |
 | `e2e-tests/` | testcontainers HTTP integration and chromiumoxide browser E2E |
@@ -178,15 +178,19 @@ what healthy means instead of inheriting unconditional green status.
 
 ### 11. Validate configuration at startup
 
-`crates/config` loads defaults, optional TOML, then `RWF_*` environment
-overrides. Nested keys use a double underscore:
+All three executables accept `--config <path>`; absent that option the typed
+defaults are used. A partial TOML file overrides only its explicit keys.
+No project-specific environment-variable configuration layer is supported.
 
-```text
-RWF_GATEWAY__PORT=4000
-RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://example.com
-RWF_GATEWAY__SESSION__COOKIE_SECURE=true
-RWF_GATEWAY__SSE_BROADCAST_BUFFER=512
-RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50
+```toml
+[gateway]
+port = 4000
+
+[gateway.session]
+cookie_secure = true
+
+[live_search]
+pool_max_connections = 50
 ```
 
 The loader rejects zero channel capacities, invalid pool bounds, empty required
@@ -204,7 +208,7 @@ Secrets remain deployment environment variables (`JWT_PRIVATE_KEY_PEM`,
 ### 12. Demo authentication must not allow caller-chosen subjects
 
 The gateway's deliberately tiny password demo binds `ADMIN_PASSWORD` to one
-configured `ADMIN_USER_ID`. Knowing the password is not permission to mint a JWT
+configured `gateway.admin_user_id`. Knowing the password is not permission to mint a JWT
 for an arbitrary syntactically valid UUID.
 
 A production application should replace this demo pair with a real user store
@@ -417,8 +421,8 @@ Runtime images are non-root and explicitly create `/app`; do not rely on distro
 
 The production gateway Compose service requires JWT key material and the admin
 password from the host environment and has database-backed refresh storage. For
-local exploration, use the `gateway-dev` profile, which requires
-`ALLOW_DEV_KEYS=1` and generates ephemeral Ed25519 keys.
+local exploration, use the `gateway-dev` profile, which mounts
+`config.dev.toml` with `gateway.allow_dev_keys = true` and passes `--dev-keys`.
 
 Example local stack:
 

@@ -31,8 +31,9 @@ Typed configuration is loaded once at process startup and validated before
 expensive resources are created.
 
 `crates/config` owns non-secret runtime settings such as ports, pool sizes, CORS
-origins, session cookie security, SSE capacity, and token TTLs. Environment
-variables override nested fields with `RWF_*` + `__` separators.
+origins, session cookie security, SSE capacity, and token TTLs. The executable
+selects an explicit TOML file with `--config`; absent a file, use the typed
+defaults. The configuration loader never reads the process environment.
 
 Secrets and deployment credentials remain explicit environment values.
 The gateway's `Settings` owns both signed token TTLs after applying typed

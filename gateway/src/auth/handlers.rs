@@ -30,7 +30,7 @@ use super::refresh::{generate_raw_refresh_token, hash_refresh_token};
 #[derive(Deserialize, Validate, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
-    /// User identifier. In this demo it must equal configured `ADMIN_USER_ID`.
+    /// User identifier. In this demo it must equal configured `gateway.admin_user_id`.
     #[validate(length(min = 1, max = 255))]
     pub user_id: String,
     #[validate(length(min = 12, max = 1024))]

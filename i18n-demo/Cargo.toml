@@ -24,6 +24,7 @@ serde = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 anyhow = { workspace = true }
+rwf-config = { path = "../crates/config", optional = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
@@ -45,7 +46,7 @@ proc-macro2 = "1"
 
 [features]
 default = []
-ssr = ["dep:leptos_axum", "dep:tower-http", "dep:tracing-subscriber", "leptos/ssr", "leptos_i18n/ssr"]
+ssr = ["dep:rwf-config", "dep:leptos_axum", "dep:tower-http", "dep:tracing-subscriber", "leptos/ssr", "leptos_i18n/ssr"]
 hydrate = ["leptos/hydrate", "leptos_i18n/hydrate"]
 csr = ["leptos/csr", "leptos_i18n/csr"]
 

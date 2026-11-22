@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 use crate::auth::AppError;
-use crate::settings::SessionSettings;
+use rwf_config::SessionConfig;
 
 /// Session cookie name.
 pub const SESSION_COOKIE_NAME: &str = "rwf_session";
@@ -37,9 +37,9 @@ pub struct SessionUser {
 /// `MemoryStore` is intentionally suitable for this single-process example,
 /// not as shared session state for a horizontally scaled deployment.
 #[must_use]
-pub fn session_layer(config: &SessionSettings) -> SessionManagerLayer<MemoryStore> {
+pub fn session_layer(config: SessionConfig) -> SessionManagerLayer<MemoryStore> {
     SessionManagerLayer::new(MemoryStore::default())
-        .with_name(config.cookie_name.clone())
+        .with_name(SESSION_COOKIE_NAME.to_owned())
         .with_secure(config.cookie_secure)
         .with_http_only(true)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)

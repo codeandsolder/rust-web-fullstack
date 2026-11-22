@@ -20,6 +20,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 use i18n_demo::app;
+use rwf_config::{Config, Server, StartupOptions};
 
 async fn fallback_handler(uri: Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, format!("Not found: {uri}"))
@@ -54,6 +55,9 @@ fn spawn_signal_handler(shutdown: CancellationToken) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let options = StartupOptions::parse(Server::I18nDemo, std::env::args_os().skip(1))?;
+    let cfg =
+        Config::load(options.config_path.as_deref()).context("failed to load workspace config")?;
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -87,11 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
     let axum_app: Router<()> = axum_app.with_state(leptos_options);
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3002);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.i18n_demo.port));
     tracing::info!("i18n-demo server listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)

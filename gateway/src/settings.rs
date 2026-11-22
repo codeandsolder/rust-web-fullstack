@@ -1,7 +1,6 @@
 //! Shared gateway settings.
 //!
-//! Secret/auth material comes from deployment environment variables. Non-secret
-//! runtime settings are applied explicitly from `rwf_config::GatewayConfig`.
+//! Credentials and typed runtime settings are supplied by the executable or caller.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,7 +13,6 @@ use crate::pem::{ed25519_spki_der, pem_encode};
 
 pub const JWT_ISS: &str = "gateway-example";
 pub const JWT_AUD: &str = "gateway-example-api";
-pub const DEFAULT_ADMIN_USER_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 fn token_ttls(config: &rwf_config::GatewayConfig) -> Result<(i64, i64), anyhow::Error> {
     let access = i64::try_from(config.access_token_ttl_secs)
@@ -34,23 +32,6 @@ fn short_fingerprint(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionSettings {
-    pub cookie_secure: bool,
-    pub cookie_name: String,
-    pub csrf_cookie_name: String,
-}
-
-impl Default for SessionSettings {
-    fn default() -> Self {
-        Self {
-            cookie_secure: true,
-            cookie_name: "rwf_session".to_string(),
-            csrf_cookie_name: "rwf_csrf".to_string(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct Settings {
     pub jwt_private_key_pem: Arc<str>,
@@ -63,7 +44,7 @@ pub struct Settings {
     pub default_admin_password: Arc<str>,
     pub allowed_origins: Arc<str>,
     pub sse_broadcast_buffer: usize,
-    pub session: SessionSettings,
+    pub session: rwf_config::SessionConfig,
 }
 
 impl std::fmt::Debug for Settings {
@@ -85,34 +66,16 @@ impl std::fmt::Debug for Settings {
 }
 
 impl Settings {
-    /// Apply the canonical typed runtime configuration.
+    /// Construct settings from supplied key material and typed runtime configuration.
     ///
     /// # Errors
-    /// Returns an error if a validated integer cannot be represented by the
-    /// gateway's signed duration fields.
-    pub fn apply_runtime_config(
-        mut self,
+    /// Returns an error for invalid key material, credentials, user identity, or TTLs.
+    pub fn from_credentials(
+        jwt_private_key_pem: &str,
+        jwt_public_key_pem: &str,
+        default_admin_password: &str,
         config: &rwf_config::GatewayConfig,
     ) -> Result<Self, anyhow::Error> {
-        (self.access_token_ttl_secs, self.refresh_token_ttl_secs) = token_ttls(config)?;
-        self.allowed_origins = Arc::from(config.cors.allowed_origins.as_str());
-        self.sse_broadcast_buffer = config.sse_broadcast_buffer;
-        self.session.cookie_secure = config.session.cookie_secure;
-        Ok(self)
-    }
-
-    /// Load secret/auth deployment settings.
-    ///
-    /// # Errors
-    /// Returns an error for missing/invalid keys, credentials, IDs or values.
-    pub fn load() -> Result<Self, anyhow::Error> {
-        let jwt_private_key_pem = std::env::var("JWT_PRIVATE_KEY_PEM")
-            .map_err(|_| anyhow::anyhow!("JWT_PRIVATE_KEY_PEM must be set"))?;
-        let jwt_public_key_pem = std::env::var("JWT_PUBLIC_KEY_PEM")
-            .map_err(|_| anyhow::anyhow!("JWT_PUBLIC_KEY_PEM must be set"))?;
-        let default_admin_password = std::env::var("ADMIN_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set"))?;
-
         if jwt_private_key_pem.is_empty() || !jwt_private_key_pem.starts_with("-----BEGIN ") {
             anyhow::bail!("JWT_PRIVATE_KEY_PEM must contain PEM-encoded key material");
         }
@@ -132,45 +95,34 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("failed to parse EdDSA public key PEM: {e}"))?,
         );
 
-        let admin_user_id_raw =
-            std::env::var("ADMIN_USER_ID").unwrap_or_else(|_| DEFAULT_ADMIN_USER_ID.to_string());
-        let admin_user_id = UserId::from_str(&admin_user_id_raw)
-            .with_context(|| format!("invalid ADMIN_USER_ID {admin_user_id_raw:?}"))?;
-
-        let session = SessionSettings {
-            cookie_name: std::env::var("SESSION_COOKIE_NAME")
-                .unwrap_or_else(|_| "rwf_session".to_string()),
-            csrf_cookie_name: std::env::var("CSRF_COOKIE_NAME")
-                .unwrap_or_else(|_| "rwf_csrf".to_string()),
-            ..SessionSettings::default()
-        };
-
-        let (access_token_ttl_secs, refresh_token_ttl_secs) =
-            token_ttls(&rwf_config::GatewayConfig::default())?;
+        let admin_user_id =
+            UserId::from_str(&config.admin_user_id).context("invalid gateway.admin_user_id")?;
+        let (access_token_ttl_secs, refresh_token_ttl_secs) = token_ttls(config)?;
 
         Ok(Self {
-            jwt_private_key_pem: Arc::from(jwt_private_key_pem.as_str()),
-            jwt_public_key_pem: Arc::from(jwt_public_key_pem.as_str()),
+            jwt_private_key_pem: Arc::from(jwt_private_key_pem),
+            jwt_public_key_pem: Arc::from(jwt_public_key_pem),
             encoding_key,
             decoding_key,
             access_token_ttl_secs,
             refresh_token_ttl_secs,
             admin_user_id,
-            default_admin_password: Arc::from(default_admin_password.as_str()),
-            allowed_origins: Arc::from(
-                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
-            ),
-            sse_broadcast_buffer: 256,
-            session,
+            default_admin_password: Arc::from(default_admin_password),
+            allowed_origins: Arc::from(config.cors.allowed_origins.as_str()),
+            sse_broadcast_buffer: config.sse_broadcast_buffer,
+            session: config.session,
         })
     }
 
-    /// Development settings with an ephemeral keypair and HTTP-friendly
-    /// session cookie. Intended only for local/test use.
+    /// Development settings with an ephemeral keypair. Intended only for local/test use.
+    /// Session policy still comes from the explicit configuration.
     ///
     /// # Errors
-    /// Returns an error when key generation/encoding fails or password is empty.
-    pub fn load_dev_keys(admin_password: &str) -> Result<Self, anyhow::Error> {
+    /// Returns an error when key generation/encoding fails or credentials/configuration are invalid.
+    pub fn generate_dev_keys(
+        admin_password: &str,
+        config: &rwf_config::GatewayConfig,
+    ) -> Result<Self, anyhow::Error> {
         use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
 
         if admin_password.is_empty() {
@@ -192,49 +144,7 @@ impl Settings {
             "DEV KEYPAIR active (ephemeral; do not use in production)"
         );
 
-        let encoding_key = Arc::new(
-            EncodingKey::from_ed_pem(private_pem.as_bytes())
-                .map_err(|e| anyhow::anyhow!("failed to parse dev EdDSA private key PEM: {e}"))?,
-        );
-        let decoding_key = Arc::new(
-            DecodingKey::from_ed_pem(public_pem.as_bytes())
-                .map_err(|e| anyhow::anyhow!("failed to parse dev EdDSA public key PEM: {e}"))?,
-        );
-        let admin_user_id = UserId::from_str(DEFAULT_ADMIN_USER_ID)
-            .context("built-in development admin user id is invalid")?;
-
-        let (access_token_ttl_secs, refresh_token_ttl_secs) =
-            token_ttls(&rwf_config::GatewayConfig::default())?;
-
-        Ok(Self {
-            jwt_private_key_pem: Arc::from(private_pem.as_str()),
-            jwt_public_key_pem: Arc::from(public_pem.as_str()),
-            encoding_key,
-            decoding_key,
-            access_token_ttl_secs,
-            refresh_token_ttl_secs,
-            admin_user_id,
-            default_admin_password: Arc::from(admin_password),
-            allowed_origins: Arc::from(
-                "http://localhost:3000,http://localhost:3001,http://localhost:3002",
-            ),
-            sse_broadcast_buffer: 256,
-            session: SessionSettings {
-                cookie_secure: false,
-                ..SessionSettings::default()
-            },
-        })
-    }
-
-    /// Load development settings using `ADMIN_PASSWORD` from the environment.
-    ///
-    /// # Errors
-    /// Returns an error if `ADMIN_PASSWORD` is missing or development key
-    /// generation/encoding fails.
-    pub fn load_dev_keys_from_env() -> Result<Self, anyhow::Error> {
-        let admin_password = std::env::var("ADMIN_PASSWORD")
-            .map_err(|_| anyhow::anyhow!("ADMIN_PASSWORD must be set when --dev-keys is used"))?;
-        Self::load_dev_keys(&admin_password)
+        Self::from_credentials(&private_pem, &public_pem, admin_password, config)
     }
 }
 
@@ -243,13 +153,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn both_key_modes_share_explicit_runtime_settings() -> anyhow::Result<()> {
+        let config = rwf_config::GatewayConfig {
+            admin_user_id: "00000000-0000-0000-0000-000000000002".to_owned(),
+            session: rwf_config::SessionConfig {
+                cookie_secure: false,
+            },
+            cors: rwf_config::CorsConfig {
+                allowed_origins: "https://example.test".to_owned(),
+            },
+            sse_broadcast_buffer: 42,
+            ..rwf_config::GatewayConfig::default()
+        };
+        let dev = Settings::generate_dev_keys("test-password", &config)?;
+        let supplied = Settings::from_credentials(
+            &dev.jwt_private_key_pem,
+            &dev.jwt_public_key_pem,
+            "another-password",
+            &config,
+        )?;
+        for settings in [dev, supplied] {
+            assert_eq!(settings.admin_user_id.to_string(), config.admin_user_id);
+            assert!(!settings.session.cookie_secure);
+            assert_eq!(settings.sse_broadcast_buffer, 42);
+            assert_eq!(&*settings.allowed_origins, "https://example.test");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn runtime_config_applies_both_token_ttls() -> anyhow::Result<()> {
         let config = rwf_config::GatewayConfig {
             access_token_ttl_secs: 120,
             refresh_token_ttl_secs: 43_200,
             ..rwf_config::GatewayConfig::default()
         };
-        let settings = Settings::load_dev_keys("test-password")?.apply_runtime_config(&config)?;
+        let settings = Settings::generate_dev_keys("test-password", &config)?;
 
         assert_eq!(settings.access_token_ttl_secs, 120);
         assert_eq!(settings.refresh_token_ttl_secs, 43_200);

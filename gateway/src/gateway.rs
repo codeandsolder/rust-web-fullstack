@@ -50,26 +50,6 @@ impl std::fmt::Debug for GatewayState {
     }
 }
 
-/// Convenience constructor for non-production callers.
-///
-/// This synchronous wrapper cannot create a DB pool, so DB-backed auth routes
-/// fail closed and `/health` reports the database as not configured. Production
-/// startup uses [`build_gateway_with_settings`] after connecting to Postgres.
-///
-/// # Errors
-/// Returns an error for invalid settings/configuration or router setup.
-#[instrument(skip(modules))]
-pub fn build_gateway(modules: Vec<Arc<dyn ServiceModule>>) -> Result<Router, anyhow::Error> {
-    let cfg = rwf_config::Config::load().context("failed to load workspace config")?;
-    let runtime_settings = settings::Settings::load()?.apply_runtime_config(&cfg.gateway)?;
-    build_gateway_with_settings(
-        modules,
-        runtime_settings,
-        cfg.gateway.proxy_upstream_url,
-        None,
-    )
-}
-
 fn service_infos(modules: &[Arc<dyn ServiceModule>]) -> Vec<ServiceInfo> {
     modules
         .iter()
@@ -197,7 +177,7 @@ pub fn build_gateway_with_settings(
     let general_governor = GovernorLayer::new(general_governor_cfg);
 
     let cors = crate::cors::cors_layer(state.settings.allowed_origins.as_ref());
-    let session_layer = crate::session::session_layer(&state.settings.session);
+    let session_layer = crate::session::session_layer(state.settings.session);
     let csrf_middleware = axum::middleware::from_fn(crate::csrf::CsrfMiddleware::middleware);
 
     let login_router = Router::new()
@@ -389,7 +369,10 @@ mod tests {
 
     #[test]
     fn rejects_nonpositive_token_ttls_from_settings() -> anyhow::Result<()> {
-        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let settings = crate::settings::Settings::generate_dev_keys(
+            "test-admin-password",
+            &rwf_config::GatewayConfig::default(),
+        )?;
         let mut invalid_access = settings.clone();
         invalid_access.access_token_ttl_secs = 0;
         assert!(gateway_state(vec![], invalid_access, String::new(), None).is_err());
@@ -402,7 +385,10 @@ mod tests {
 
     #[test]
     fn rejects_overflowing_token_ttls_before_gateway_startup() -> anyhow::Result<()> {
-        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let settings = crate::settings::Settings::generate_dev_keys(
+            "test-admin-password",
+            &rwf_config::GatewayConfig::default(),
+        )?;
         let mut invalid_access = settings.clone();
         invalid_access.access_token_ttl_secs = i64::MAX;
         let access_error = gateway_state(vec![], invalid_access, String::new(), None)
@@ -423,7 +409,10 @@ mod tests {
     async fn health_endpoint_returns_503_when_service_or_database_unhealthy() -> anyhow::Result<()>
     {
         let (tx, _rx) = tokio::sync::broadcast::channel(100);
-        let settings = crate::settings::Settings::load_dev_keys("test-admin-password")?;
+        let settings = crate::settings::Settings::generate_dev_keys(
+            "test-admin-password",
+            &rwf_config::GatewayConfig::default(),
+        )?;
         let modules: Vec<Arc<dyn crate::module::ServiceModule>> = vec![Arc::new(FailingService)];
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))

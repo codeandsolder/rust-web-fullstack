@@ -1431,6 +1431,7 @@ dependencies = [
  "opentelemetry_sdk",
  "proptest",
  "reqwest",
+ "rwf-config",
  "rwf-domain",
  "serde",
  "serde_json",
@@ -2338,6 +2339,7 @@ dependencies = [
  "leptos_meta",
  "leptos_router",
  "proc-macro2",
+ "rwf-config",
  "serde",
  "serde_json",
  "tokio",
@@ -5128,9 +5130,9 @@ dependencies = [
 name = "rwf-config"
 version = "0.1.0"
 dependencies = [
- "config",
  "serde",
  "thiserror 2.0.21",
+ "toml 1.2.0+spec-1.1.0",
 ]
 
 [[package]]

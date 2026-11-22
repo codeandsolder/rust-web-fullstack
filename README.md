@@ -14,7 +14,7 @@ Docker builds, and real browser E2E tests.
 | `gateway/` | composable Axum services, Ed25519 JWTs, rotating refresh tokens, sessions/CSRF/CORS/CSP, OpenAPI |
 | `i18n-demo/` | compile-time-checked EN/DE translations and a hardened minimal WebSocket hub |
 | `e2e-tests/` | isolated Postgres via testcontainers plus chromiumoxide browser tests |
-| `crates/config/` | validated TOML + `RWF_*` environment configuration |
+| `crates/config/` | validated explicit TOML configuration |
 | `crates/domain/` | framework-free domain types and invariants |
 | `crates/telemetry/` | shared server-side OTLP/HTTP tracing bootstrap |
 | `migrations/` | the **single** SQLx migration history used by every service sharing the database |
@@ -58,10 +58,10 @@ Use `docker compose logs -f` to inspect services and `docker compose down` to
 stop them while retaining database volumes. Removing volumes requires the explicit
 `docker compose down -v` command.
 
-The dev gateway uses ephemeral Ed25519 keys and is deliberately guarded by
-`ALLOW_DEV_KEYS=1`. It also disables the session cookie's `Secure` flag because
-the Compose dev endpoint is plain localhost HTTP. Do not copy those two settings
-into production.
+The dev gateway uses ephemeral Ed25519 keys only when the explicit
+`config.dev.toml` permits them and the `--dev-keys` flag is passed. The same
+configuration disables the session cookie's `Secure` flag for localhost HTTP.
+Do not use that file in production.
 
 ## Production gateway configuration
 
@@ -72,12 +72,11 @@ provided:
 export JWT_PRIVATE_KEY_PEM='-----BEGIN PRIVATE KEY----- ...'
 export JWT_PUBLIC_KEY_PEM='-----BEGIN PUBLIC KEY----- ...'
 export ADMIN_PASSWORD='a-long-demo-password'
-export ADMIN_USER_ID='00000000-0000-0000-0000-000000000001' # optional override
 
 docker compose up --build postgres live-search gateway
 ```
 
-The password demo is intentionally bound to exactly one `ADMIN_USER_ID`. Knowing
+The password demo is intentionally bound to exactly one configured `gateway.admin_user_id`. Knowing
 the demo password is **not** permission to choose an arbitrary UUID as a JWT
 subject. A real application should replace this credential pair with a user
 store and password hashing.
@@ -94,29 +93,39 @@ session and does not revoke refresh-token state.
 
 ## Configuration
 
-`crates/config` loads:
-
-1. built-in defaults,
-2. `config.toml` (or `RWF_CONFIG`),
-3. `RWF_*` environment overrides.
-
-Nested keys use `__`:
+All three servers accept `--config <path>`. With no argument, they use
+the typed defaults; no implicit working-directory file or environment overrides
+are loaded. `config.toml` is a complete example:
 
 ```bash
-RWF_GATEWAY__PORT=4000
-RWF_GATEWAY__CORS__ALLOWED_ORIGINS=https://example.com
-RWF_GATEWAY__SESSION__COOKIE_SECURE=true
-RWF_GATEWAY__SSE_BROADCAST_BUFFER=512
-RWF_LIVE_SEARCH__POOL_MAX_CONNECTIONS=50
-RWF_LIVE_SEARCH__SSE_BROADCAST_BUFFER=512
+cargo run --locked -p live-search --features ssr -- --config config.toml
+cargo run --locked -p gateway-example -- --config config.toml
+cargo run --locked -p i18n-demo --features ssr -- --config config.toml
 ```
+
+Partial TOML files use the same typed defaults for every omitted field.
+For instance, this file changes only the gateway port and pool size:
+
+```toml
+[gateway]
+port = 4000
+
+[live_search]
+pool_max_connections = 50
+```
+
+Unknown keys and invalid values fail startup. The gateway's administrator
+identity is `gateway.admin_user_id`; cookie names are fixed by the session
+protocol. Dev mode requires explicit config permission as well as `--dev-keys`.
 
 The loader validates cross-field invariants such as nonzero broadcast capacity,
 positive timeouts/TTLs, and `pool_min_connections <= pool_max_connections`.
 Malformed security booleans fail startup instead of silently weakening a setting.
 
-Secrets such as `DATABASE_URL`, JWT keys, and the demo password remain deployment
-environment variables.
+Credentials are read once at executable startup. Both database-backed servers
+require `DATABASE_URL`; gateway also requires `ADMIN_PASSWORD` and, outside
+explicit dev mode, both JWT PEM keys. Standard logging and OTLP environment
+interfaces remain separate integration contracts.
 
 ## One migration history
 

@@ -7,19 +7,18 @@ use anyhow::Context;
 use tokio::signal;
 
 use gateway_example::{gateway, module, services};
-use rwf_config::Config;
+use rwf_config::{Config, Server, StartupOptions};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let dev_keys = std::env::args().any(|arg| arg == "--dev-keys");
-    if dev_keys && std::env::var("ALLOW_DEV_KEYS").ok().as_deref() != Some("1") {
-        anyhow::bail!("--dev-keys requires ALLOW_DEV_KEYS=1 to be set; refusing to start");
+    let options = StartupOptions::parse(Server::Gateway, std::env::args_os().skip(1))?;
+    let cfg =
+        Config::load(options.config_path.as_deref()).context("failed to load workspace config")?;
+    if options.dev_keys && !cfg.gateway.allow_dev_keys {
+        anyhow::bail!(
+            "--dev-keys requires gateway.allow_dev_keys = true in the selected configuration"
+        );
     }
-
-    // Non-secret runtime configuration has one canonical source: rwf-config.
-    // Override it with `RWF_GATEWAY__...`, not a parallel set of ad-hoc env
-    // variables. Secret key/password material remains in Settings.
-    let cfg = Config::load().context("failed to load workspace config")?;
     let port = cfg.gateway.port;
     let proxy_upstream_url = cfg.gateway.proxy_upstream_url.clone();
 
@@ -40,14 +39,25 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let settings = if dev_keys {
-        gateway_example::settings::Settings::load_dev_keys_from_env()?
+    let password = std::env::var("ADMIN_PASSWORD").context("ADMIN_PASSWORD must be set")?;
+    let settings = if options.dev_keys {
+        gateway_example::settings::Settings::generate_dev_keys(&password, &cfg.gateway)?
     } else {
-        gateway_example::settings::Settings::load()?
-    }
-    .apply_runtime_config(&cfg.gateway)?;
+        let private_key =
+            std::env::var("JWT_PRIVATE_KEY_PEM").context("JWT_PRIVATE_KEY_PEM must be set")?;
+        let public_key =
+            std::env::var("JWT_PUBLIC_KEY_PEM").context("JWT_PUBLIC_KEY_PEM must be set")?;
+        gateway_example::settings::Settings::from_credentials(
+            &private_key,
+            &public_key,
+            &password,
+            &cfg.gateway,
+        )?
+    };
 
-    let db_pool = create_db_pool().await?;
+    let database_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL must be set; refresh-token storage is required")?;
+    let db_pool = create_db_pool(&database_url).await?;
     run_migrations(&db_pool)
         .await
         .context("gateway migrations failed")?;
@@ -118,14 +128,12 @@ async fn shutdown_signal() {
     }
 }
 
-async fn create_db_pool() -> anyhow::Result<sqlx::PgPool> {
-    let url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL must be set; refresh-token storage is required")?;
+async fn create_db_pool(url: &str) -> anyhow::Result<sqlx::PgPool> {
     tracing::info!("creating PostgreSQL pool for refresh-token rotation");
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(8)
         .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect(&url)
+        .connect(url)
         .await
         .context("failed to connect to PostgreSQL")
 }
