@@ -50,6 +50,9 @@
       "automerge": true,
       "matchDatasources": [
         "!rust-version"
+      ],
+      "matchPackageNames": [
+        "!rust"
       ]
     },
     {
@@ -63,6 +66,9 @@
       "automerge": true,
       "matchDatasources": [
         "!rust-version"
+      ],
+      "matchPackageNames": [
+        "!rust"
       ]
     },
     {
@@ -96,16 +102,6 @@
       "groupSlug": "rust-toolchain-review",
       "dependencyDashboardApproval": true,
       "automerge": false
-    },
-    {
-      "description": "Compiler changes remain explicitly reviewed and separate",
-      "groupName": "Rust toolchain review",
-      "groupSlug": "rust-toolchain-review",
-      "dependencyDashboardApproval": true,
-      "automerge": false,
-      "matchManagers": [
-        "rust-toolchain"
-      ]
     }
   ],
   "timezone": "Etc/UTC",
