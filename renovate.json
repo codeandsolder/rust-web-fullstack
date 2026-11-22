@@ -3,13 +3,13 @@
   "extends": [
     "github>codeandsolder/ci-workflows:renovate-fleet"
   ],
-  "separateMajorMinor": false,
+  "separateMajorMinor": true,
   "separateMultipleMajor": false,
   "rebaseWhen": "conflicted",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
-      "before 3am"
+      "* 3 * * 1"
     ],
     "automerge": true,
     "automergeType": "pr"
@@ -36,6 +36,82 @@
         "tracing-opentelemetry"
       ],
       "allowedVersions": "<0.34"
+    },
+    {
+      "description": "One daily compatible update batch across Cargo, Docker and CI producers",
+      "matchUpdateTypes": [
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "groupName": "Daily compatible dependencies",
+      "groupSlug": "daily-compatible-dependencies",
+      "automerge": true,
+      "matchDatasources": [
+        "!rust-version"
+      ],
+      "matchPackageNames": [
+        "!rust"
+      ]
+    },
+    {
+      "description": "Include stable minor updates in the same daily batch",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchCurrentVersion": "!/^0\\./",
+      "groupName": "Daily compatible dependencies",
+      "groupSlug": "daily-compatible-dependencies",
+      "automerge": true,
+      "matchDatasources": [
+        "!rust-version"
+      ],
+      "matchPackageNames": [
+        "!rust"
+      ]
+    },
+    {
+      "description": "Do not let potentially breaking upgrades occupy the daily batch; request them from the dashboard",
+      "matchUpdateTypes": [
+        "major",
+        "replacement"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false,
+      "groupName": "Breaking dependencies review",
+      "groupSlug": "breaking-dependencies-review"
+    },
+    {
+      "description": "Review 0.x minor upgrades on demand",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchCurrentVersion": "/^0\\./",
+      "dependencyDashboardApproval": true,
+      "automerge": false,
+      "groupName": "Breaking dependencies review",
+      "groupSlug": "breaking-dependencies-review"
+    },
+    {
+      "description": "Compiler changes remain explicitly reviewed and separate",
+      "matchDatasources": [
+        "rust-version"
+      ],
+      "groupName": "Rust toolchain review",
+      "groupSlug": "rust-toolchain-review",
+      "dependencyDashboardApproval": true,
+      "automerge": false
     }
-  ]
+  ],
+  "timezone": "Etc/UTC",
+  "schedule": [
+    "* 3 * * 0,2-6"
+  ],
+  "automergeSchedule": [
+    "* 0-2,4-23 * * *"
+  ],
+  "updateNotScheduled": false,
+  "prConcurrentLimit": 1,
+  "branchConcurrentLimit": 1
 }
