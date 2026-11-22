@@ -43,6 +43,10 @@ Services:
 - i18n-demo: <http://localhost:3002>
 - PostgreSQL: `localhost:5432`, database `rwf_demo`
 
+PostgreSQL 18+ uses the volume root `/var/lib/postgresql`. Existing demo volumes
+from older major versions need a proper database migration or an explicitly
+chosen fresh volume; the Compose setup does not migrate or delete old data.
+
 The dev gateway uses ephemeral Ed25519 keys and is deliberately guarded by
 `ALLOW_DEV_KEYS=1`. It also disables the session cookie's `Secure` flag because
 the Compose dev endpoint is plain localhost HTTP. Do not copy those two settings
