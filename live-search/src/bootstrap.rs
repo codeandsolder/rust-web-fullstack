@@ -121,7 +121,7 @@ fn spawn_pg_listener(
     );
 }
 
-fn pool_tunables(config: &rwf_config::LiveSearchConfig) -> db::PoolTunables {
+const fn pool_tunables(config: &rwf_config::LiveSearchConfig) -> db::PoolTunables {
     db::PoolTunables {
         max_connections: config.pool_max_connections,
         min_connections: config.pool_min_connections,
