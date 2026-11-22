@@ -188,7 +188,8 @@ impl StartupOptions {
                 }
                 _ => {
                     return Err(ConfigError::Argument(format!(
-                        "unexpected argument {arg:?}"
+                        "unexpected argument {}",
+                        arg.to_string_lossy()
                     )));
                 }
             }
@@ -204,19 +205,16 @@ impl Config {
     /// Returns a configuration error for unreadable/invalid files or invalid
     /// cross-field invariants.
     pub fn load(path: Option<&Path>) -> Result<Self, ConfigError> {
-        match path {
-            Some(path) => {
-                let input = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-                Self::from_toml(&input)
-            }
-            None => {
-                let config = Self::default();
-                config.validate()?;
-                Ok(config)
-            }
+        if let Some(path) = path {
+            let input = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            Self::from_toml(&input)
+        } else {
+            let config = Self::default();
+            config.validate()?;
+            Ok(config)
         }
     }
 
