@@ -109,7 +109,8 @@ jobs:
         run: |
           cargo +1.94.1 check --locked -p live-search --target wasm32-unknown-unknown --features hydrate --lib
           cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
-      - name: Finalize mandatory sccache
+      - &finalize-rust-cache
+        name: Finalize mandatory sccache
         if: always()
         uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
 
@@ -127,7 +128,8 @@ jobs:
           rustup run 1.100.0 rustc --version
           rustup run 1.100.0 cargo --version
 
-      - name: Setup mandatory sccache
+      - &setup-stable-cache
+        name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
         with:
           rust-toolchain: "1.100.0"
@@ -170,9 +172,7 @@ jobs:
       - name: Verify formatting
         if: steps.format.outputs.changed == 'true'
         run: git diff --exit-code
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   clippy:
     name: Clippy (native feature matrix)
@@ -197,10 +197,7 @@ jobs:
           rustup run 1.100.0 rustc --version
           rustup run 1.100.0 cargo --version
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
-        with:
-          rust-toolchain: "1.100.0"
+      - *setup-stable-cache
       - name: Clippy
         run: |
           lint_args=(-D warnings -D clippy::pedantic -D clippy::nursery)
@@ -212,9 +209,7 @@ jobs:
       - name: Report Clippy cache footprint
         if: always()
         run: du -sh target/debug 2>/dev/null || true
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
@@ -229,7 +224,8 @@ jobs:
           - i18n-demo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install current Rust toolchain
+      - &install-stable-wasm
+        name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
           rustup run 1.100.0 rustc --version
@@ -244,9 +240,7 @@ jobs:
           cache-scope: ${{ format('{0}:{1}:{2}', github.workflow, github.job, toJSON(matrix)) }}
       - name: Link hydration build
         run: cargo +1.100.0 build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   unit-tests:
     name: Unit tests
@@ -264,24 +258,20 @@ jobs:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install current Rust toolchain
+      - &install-stable-native
+        name: Install current Rust toolchain
         run: |
           rustup toolchain install 1.100.0 --profile minimal
           rustup run 1.100.0 rustc --version
           rustup run 1.100.0 cargo --version
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
-        with:
-          rust-toolchain: "1.100.0"
+      - *setup-stable-cache
       - name: Run library tests
         run: cargo +1.100.0 test --locked --workspace --lib
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   audit:
     name: Dependency audit
@@ -290,16 +280,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install current Rust toolchain
-        run: |
-          rustup toolchain install 1.100.0 --profile minimal
-          rustup run 1.100.0 rustc --version
-          rustup run 1.100.0 cargo --version
+      - *install-stable-native
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
-        with:
-          rust-toolchain: "1.100.0"
+      - *setup-stable-cache
       - name: Restore cargo-audit
         id: cargo-audit-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -311,9 +294,7 @@ jobs:
         run: cargo +1.100.0 install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   leptos-build:
     name: Leptos production builds
@@ -322,16 +303,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install current Rust toolchain
-        run: |
-          rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
-          rustup run 1.100.0 rustc --version
-          rustup run 1.100.0 cargo --version
+      - *install-stable-wasm
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
-        with:
-          rust-toolchain: "1.100.0"
+      - *setup-stable-cache
       - name: Restore Leptos build tools
         id: leptos-tools-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -358,9 +332,7 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -403,16 +375,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install current Rust toolchain
-        run: |
-          rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
-          rustup run 1.100.0 rustc --version
-          rustup run 1.100.0 cargo --version
+      - *install-stable-wasm
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
-        with:
-          rust-toolchain: "1.100.0"
+      - *setup-stable-cache
       - name: Restore E2E build tools
         id: e2e-tools-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -447,6 +412,4 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+      - *finalize-rust-cache
