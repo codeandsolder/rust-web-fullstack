@@ -53,13 +53,13 @@ jobs:
 
   duplicates:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
 
   strict-rust:
     name: Strict Rust
     needs: scope
     if: needs.scope.outputs.postgres-only != 'true'
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@55ac92efe89656b085a0210b8cec4f1431d96406 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@7d0552029497cf094787c3593f804d5bce137c4b # main
 
   compose-smoke:
     name: PostgreSQL compose smoke
@@ -102,7 +102,7 @@ jobs:
           rustup run 1.94.1 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
           rust-toolchain: "1.94.1"
       - name: Check native workspace at MSRV
@@ -111,9 +111,10 @@ jobs:
         run: |
           cargo +1.94.1 check --locked -p live-search --target wasm32-unknown-unknown --features hydrate --lib
           cargo +1.94.1 check --locked -p i18n-demo --target wasm32-unknown-unknown --features hydrate --lib
-      - name: Finalize mandatory sccache
+      - &finalize-rust-cache
+        name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
 
   format:
     name: Format and lockfile consistency
@@ -123,17 +124,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
+      - &resolve-native-compiler
+        name: Resolve native quarantined Rust
         id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
+        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+      - &install-native-compiler
+        name: Install native Rust toolchain
         run: |
           rustup show
           rustc --version
           cargo --version
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - &setup-native-cache
+        name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
           rust-toolchain: "${{ steps.compiler.outputs.channel }}"
       - name: Verify lockfile is current
@@ -175,9 +179,7 @@ jobs:
       - name: Verify formatting
         if: steps.format.outputs.changed == 'true'
         run: git diff --exit-code
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   clippy:
     name: Clippy (native feature matrix)
@@ -196,19 +198,10 @@ jobs:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-        with:
-          rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - *setup-native-cache
       - name: Clippy
         run: |
           lint_args=(-D warnings -D clippy::pedantic -D clippy::nursery)
@@ -220,9 +213,7 @@ jobs:
       - name: Report Clippy cache footprint
         if: always()
         run: du -sh target/debug 2>/dev/null || true
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   wasm-check:
     name: WASM link (${{ matrix.package }})
@@ -238,27 +229,19 @@ jobs:
           - i18n-demo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
       # Use `build`, not `check`: Rust 1.96 stopped passing wasm-ld's
       # --allow-undefined implicitly, so only a real link exercises that policy.
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
           rust-toolchain: "${{ steps.compiler.outputs.channel }}"
           cache-scope: ${{ format('{0}:{1}:{2}', github.workflow, github.job, toJSON(matrix)) }}
       - name: Link hydration build
         run: cargo build --locked -p "${{ matrix.package }}" --target wasm32-unknown-unknown --features hydrate --lib
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   unit-tests:
     name: Unit tests
@@ -276,27 +259,16 @@ jobs:
       RUSTFLAGS: "-C target-cpu=x86-64-v2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-        with:
-          rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - *setup-native-cache
       - name: Run library tests
         run: cargo test --locked --workspace --lib
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   audit:
     name: Dependency audit
@@ -305,19 +277,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-        with:
-          rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - *setup-native-cache
       - name: Restore cargo-audit
         id: cargo-audit-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -329,9 +292,7 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   leptos-build:
     name: Leptos production builds
@@ -341,19 +302,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-        with:
-          rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - *setup-native-cache
       - name: Restore Leptos build tools
         id: leptos-tools-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -380,9 +332,7 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
 
   docker-build:
     name: Docker image (${{ matrix.image }})
@@ -427,19 +377,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve native quarantined Rust
-        id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-      - name: Install native Rust toolchain
-        run: |
-          rustup show
-          rustc --version
-          cargo --version
+      - *resolve-native-compiler
+      - *install-native-compiler
 
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
-        with:
-          rust-toolchain: "${{ steps.compiler.outputs.channel }}"
+      - *setup-native-cache
       - name: Resolve locked wasm-bindgen schema
         id: bindgen
         run: echo "version=$(sh scripts/wasm-bindgen-version.sh)" >> "$GITHUB_OUTPUT"
@@ -477,6 +418,4 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: ${SCCACHE_PATH} --show-stats
-      - name: Finalize mandatory sccache
-        if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@ce8f8a2849c8cc0ce221e4cb283a4bef0de4a01a # main
+      - *finalize-rust-cache
