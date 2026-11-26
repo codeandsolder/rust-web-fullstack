@@ -5,7 +5,6 @@
   ],
   "separateMajorMinor": true,
   "separateMultipleMajor": false,
-  "rebaseWhen": "conflicted",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
@@ -70,38 +69,6 @@
       "matchPackageNames": [
         "!rust"
       ]
-    },
-    {
-      "description": "Do not let potentially breaking upgrades occupy the daily batch; request them from the dashboard",
-      "matchUpdateTypes": [
-        "major",
-        "replacement"
-      ],
-      "dependencyDashboardApproval": true,
-      "automerge": false,
-      "groupName": "Breaking dependencies review",
-      "groupSlug": "breaking-dependencies-review"
-    },
-    {
-      "description": "Review 0.x minor upgrades on demand",
-      "matchUpdateTypes": [
-        "minor"
-      ],
-      "matchCurrentVersion": "/^0\\./",
-      "dependencyDashboardApproval": true,
-      "automerge": false,
-      "groupName": "Breaking dependencies review",
-      "groupSlug": "breaking-dependencies-review"
-    },
-    {
-      "description": "Compiler changes remain explicitly reviewed and separate",
-      "matchDatasources": [
-        "rust-version"
-      ],
-      "groupName": "Rust toolchain review",
-      "groupSlug": "rust-toolchain-review",
-      "dependencyDashboardApproval": true,
-      "automerge": false
     }
   ],
   "timezone": "Etc/UTC",
