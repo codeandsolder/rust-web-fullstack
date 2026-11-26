@@ -115,12 +115,12 @@ impl GatewayEnv {
         }
     }
 
-    #[must_use]
+    #[must_use = "the returned URL identifies the test gateway endpoint"]
     pub fn base_url(&self) -> String {
         format!("http://{}", self.addr)
     }
 
-    #[must_use]
+    #[must_use = "the returned address identifies the bound gateway socket"]
     pub const fn addr(&self) -> SocketAddr {
         self.addr
     }

@@ -29,7 +29,7 @@ pub struct ChatEvent {
 }
 
 impl ChatEvent {
-    #[must_use]
+    #[must_use = "the returned message contains the sender, text and generated identity"]
     pub fn new(from: Uuid, text: String) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -149,7 +149,7 @@ async fn handle_socket(socket: WebSocket) {
     info!(client = %from, "chat client disconnected");
 }
 
-#[must_use]
+#[must_use = "the returned count describes active chat subscribers"]
 pub fn subscriber_count() -> usize {
     HUB.receiver_count()
 }

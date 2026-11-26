@@ -25,9 +25,10 @@ fix this document in the same change.
 
 The workspace uses Edition 2024 with resolver 3. Rust **1.94** remains the
 compatibility floor/MSRV and is tested on patched **1.94.1**. The repository
-default toolchain and production Docker builds use **Rust 1.100.0**; native
-format/lint CI jobs are still pinned to **1.99.0**. Newer stable Rust versions
-do not by themselves justify raising the MSRV; the oldest
+default toolchain, native CI and production Docker builds use the dated nightly
+in the root `rust-toolchain.toml`, updated weekly by shared Renovate after
+quarantine and green CI. New compiler features do not by themselves justify
+raising the MSRV; the oldest
 supported compiler and the preferred compiler for shipping builds are separate
 policies.
 
@@ -435,10 +436,10 @@ docker compose --profile dev up --build \
 
 The maintained GitHub Actions workflow should cover:
 
-- a dedicated patched-MS​​RV lane for Rust 1.94.1, separate from current-stable validation,
-- native workspace/all-target Clippy plus supported native feature combinations on Rust 1.99.0,
+- a dedicated patched-MS​​RV lane for Rust 1.94.1, separate from routine nightly validation,
+- native workspace/all-target Clippy plus supported native feature combinations on the native pinned nightly,
 - SSR and hydration feature matrices,
-- a real `wasm32-unknown-unknown` link on current stable, not only `cargo check`,
+- a real `wasm32-unknown-unknown` link on the native pinned nightly, not only `cargo check`,
 - the `otel` feature compilation,
 - Rust formatting and Leptos view formatting,
 - dependency audit,

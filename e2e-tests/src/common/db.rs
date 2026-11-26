@@ -93,12 +93,12 @@ impl TestEnv {
         })
     }
 
-    #[must_use]
+    #[must_use = "the returned pool provides access to the test database"]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
     }
 
-    #[must_use]
+    #[must_use = "the returned string identifies the test database connection"]
     pub fn connection_string(&self) -> &str {
         &self.connection_string
     }

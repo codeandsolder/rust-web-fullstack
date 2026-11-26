@@ -6,21 +6,21 @@
 #   3. builder: cargo chef cook the recipe (cached dependency build),
 #      then copy source and build the binary.
 FROM rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS chef
-# Keep the reproducible Bookworm base pinned by digest, then install the
-# repository's current stable compiler explicitly so Docker image publication
-# lag cannot leave production builds on an older Rust release.
-RUN rustup toolchain install 1.99.0 --profile minimal
-ENV RUSTUP_TOOLCHAIN=1.99.0
-RUN cargo install cargo-chef --locked
+# The digest-pinned image bootstraps rustup; the native manifest selects the
+# compiler for cargo-chef, dependency cooking and final production builds.
 WORKDIR /build
+COPY rust-toolchain.toml ./
+RUN rustup show && cargo install cargo-chef --locked
 
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+COPY Cargo.lock ./
+COPY scripts/wasm-bindgen-version.sh scripts/wasm-bindgen-version.sh
 RUN rustup target add wasm32-unknown-unknown && \
-    cargo install wasm-bindgen-cli --version 0.2.128 --locked && \
+    cargo install wasm-bindgen-cli --version "=$(sh scripts/wasm-bindgen-version.sh)" --locked && \
     cargo install stylance-cli --locked
 COPY --from=planner /build/recipe.json recipe.json
 # The workspace patches crates.io dependencies to local sources. Those path

@@ -92,7 +92,7 @@ pub fn generate_raw_refresh_token() -> Result<(String, Uuid), RefreshError> {
     Ok((raw, jti))
 }
 
-#[must_use]
+#[must_use = "the returned digest identifies the refresh token without retaining its plaintext"]
 pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
     let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, raw.as_bytes());
     let mut out = [0_u8; 32];

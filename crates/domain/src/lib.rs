@@ -26,7 +26,7 @@ pub struct UserId(Uuid);
 
 impl UserId {
     /// Return the inner `Uuid` by value.
-    #[must_use]
+    #[must_use = "the returned UUID identifies the domain entity"]
     pub const fn as_uuid(&self) -> Uuid {
         self.0
     }
@@ -86,7 +86,7 @@ pub enum UserIdError {
 
 /// A search result as stored in the database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[must_use]
+#[must_use = "the returned search result contains the matched document data"]
 pub struct SearchResult {
     pub id: Uuid,
     pub title: String,

@@ -36,7 +36,7 @@ pub struct SessionUser {
 ///
 /// `MemoryStore` is intentionally suitable for this single-process example,
 /// not as shared session state for a horizontally scaled deployment.
-#[must_use]
+#[must_use = "the returned layer configures session storage and cookie policy"]
 pub fn session_layer(config: SessionConfig) -> SessionManagerLayer<MemoryStore> {
     SessionManagerLayer::new(MemoryStore::default())
         .with_name(SESSION_COOKIE_NAME.to_owned())

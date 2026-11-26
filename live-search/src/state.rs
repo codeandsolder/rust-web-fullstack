@@ -46,7 +46,7 @@ pub type AppPool = sqlx::PgPool;
 /// construction in one place ensures production and integration tests exercise
 /// the same instrumentation boundary.
 #[cfg(feature = "otel")]
-#[must_use]
+#[must_use = "the returned pool wraps the database connection pool for telemetry"]
 pub fn app_pool_from_raw(raw_pool: sqlx::PgPool) -> AppPool {
     sqlx_otel::PoolBuilder::from(raw_pool).build()
 }
@@ -54,7 +54,7 @@ pub fn app_pool_from_raw(raw_pool: sqlx::PgPool) -> AppPool {
 /// Convert the raw `SQLx` pool into the request-facing application pool when
 /// telemetry is disabled.
 #[cfg(not(feature = "otel"))]
-#[must_use]
+#[must_use = "the returned pool is the application database pool"]
 pub const fn app_pool_from_raw(raw_pool: sqlx::PgPool) -> AppPool {
     raw_pool
 }
@@ -83,7 +83,7 @@ pub struct AppContext {
 
 impl AppContext {
     /// Create a new application context from its constituent parts.
-    #[must_use]
+    #[must_use = "the returned context owns the application resources"]
     pub const fn new(
         pool: AppPool,
         broadcast: broadcast::Sender<SseEvent>,
@@ -130,7 +130,7 @@ pub fn set(ctx: Arc<AppContext>) -> Result<(), AppContextInitError> {
 ///
 /// Returns `None` if [`set`] has not been called yet (defensive — callers
 /// should check during startup and return an appropriate error).
-#[must_use]
+#[must_use = "the returned reference identifies the initialized application context when available"]
 pub fn get() -> Option<&'static Arc<AppContext>> {
     CONTEXT.get()
 }

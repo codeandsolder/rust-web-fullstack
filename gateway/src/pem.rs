@@ -9,7 +9,7 @@ use base64::Engine;
 /// Construct a PKCS#8 v1 DER-encoded Ed25519 private key from a 32-byte seed.
 ///
 /// The caller must ensure `seed` is exactly 32 bytes.
-#[must_use]
+#[must_use = "the returned DER bytes encode the private key"]
 pub fn ed25519_pkcs8_der(seed: &[u8]) -> Vec<u8> {
     let mut der = Vec::with_capacity(48);
     der.extend_from_slice(&[
@@ -27,7 +27,7 @@ pub fn ed25519_pkcs8_der(seed: &[u8]) -> Vec<u8> {
 /// Construct an SPKI DER-encoded Ed25519 public key from 32 raw bytes.
 ///
 /// The caller must ensure `public_key` is exactly 32 bytes.
-#[must_use]
+#[must_use = "the returned DER bytes encode the public key"]
 pub fn ed25519_spki_der(public_key: &[u8]) -> Vec<u8> {
     let mut der = Vec::with_capacity(44);
     der.extend_from_slice(&[
@@ -43,7 +43,7 @@ pub fn ed25519_spki_der(public_key: &[u8]) -> Vec<u8> {
 /// PEM-encode a DER blob (e.g., PKCS#8 or SPKI) with the given label.
 ///
 /// Standard labels: `"PRIVATE KEY"` for PKCS#8, `"PUBLIC KEY"` for SPKI.
-#[must_use]
+#[must_use = "the returned PEM string encodes the supplied DER data"]
 pub fn pem_encode(label: &str, der: &[u8]) -> String {
     use std::fmt::Write;
 

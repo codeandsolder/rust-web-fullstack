@@ -80,7 +80,10 @@
       "dependencyDashboardApproval": true,
       "automerge": false,
       "groupName": "Breaking dependencies review",
-      "groupSlug": "breaking-dependencies-review"
+      "groupSlug": "breaking-dependencies-review",
+      "matchDatasources": [
+        "!rust-version"
+      ]
     },
     {
       "description": "Review 0.x minor upgrades on demand",
@@ -91,17 +94,10 @@
       "dependencyDashboardApproval": true,
       "automerge": false,
       "groupName": "Breaking dependencies review",
-      "groupSlug": "breaking-dependencies-review"
-    },
-    {
-      "description": "Compiler changes remain explicitly reviewed and separate",
+      "groupSlug": "breaking-dependencies-review",
       "matchDatasources": [
-        "rust-version"
-      ],
-      "groupName": "Rust toolchain review",
-      "groupSlug": "rust-toolchain-review",
-      "dependencyDashboardApproval": true,
-      "automerge": false
+        "!rust-version"
+      ]
     }
   ],
   "timezone": "Etc/UTC",

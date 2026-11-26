@@ -96,7 +96,7 @@ pub async fn search(query: String) -> Result<Arc<Vec<SearchResult>>, ServerFnErr
     }
 }
 
-#[must_use]
+#[must_use = "the returned view renders the application document"]
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>
@@ -115,7 +115,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
     }
 }
 
-#[must_use]
+#[must_use = "the returned view renders the search application"]
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] generates a wrapper that nightly Clippy evaluates separately"
@@ -185,7 +185,7 @@ fn result_row_renderer(
     }
 }
 
-#[must_use]
+#[must_use = "the returned view renders the search interface"]
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] generates a wrapper that nightly Clippy evaluates separately"
@@ -429,7 +429,7 @@ fn start_live_feed(results: RwSignal<VecDeque<LiveResult>>, connected: RwSignal<
     });
 }
 
-#[must_use]
+#[must_use = "the returned view renders the pagination component"]
 #[expect(
     clippy::must_use_candidate,
     reason = "Leptos #[component] generates a wrapper that nightly Clippy evaluates separately"

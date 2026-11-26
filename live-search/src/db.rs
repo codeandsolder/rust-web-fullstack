@@ -18,7 +18,7 @@ pub use rwf_domain::SearchResult;
 /// columns used by search results.
 #[cfg(feature = "ssr")]
 #[derive(Debug, sqlx::FromRow)]
-#[must_use]
+#[must_use = "the returned row contains the selected search result fields"]
 #[doc(hidden)]
 pub struct SearchResultRow {
     pub id: Uuid,
@@ -88,7 +88,7 @@ mod server {
 
     /// Returns a reference to the global database pool (test seam).
     #[cfg(feature = "test-seams")]
-    #[must_use]
+    #[must_use = "the returned reference provides the initialized database pool when available"]
     pub fn get_pool() -> Option<&'static PgPool> {
         POOL.get()
     }
@@ -446,7 +446,7 @@ mod server {
     }
 
     /// Base-64-url-encode `bytes` using the URL-safe no-pad alphabet.
-    #[must_use]
+    #[must_use = "the returned string is the URL-safe encoding of the input bytes"]
     pub fn base64url_encode(input: &[u8]) -> String {
         URL_SAFE_NO_PAD.encode(input)
     }
@@ -463,7 +463,7 @@ mod server {
     }
 
     /// Encode a cursor as base64url of `"{timestamp_micros}|{uuid}"`.
-    #[must_use]
+    #[must_use = "the returned cursor identifies the pagination position"]
     pub fn encode_cursor(created_at: DateTime<Utc>, id: Uuid) -> String {
         let raw = format!("{}|{id}", created_at.timestamp_micros());
         base64url_encode(raw.as_bytes())

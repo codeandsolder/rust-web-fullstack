@@ -18,7 +18,7 @@ pub const COUNTER_BTN: &str = "counter-btn";
 pub const CLICK_COUNT: &str = "click-count";
 
 /// Returns the CSS for the i18n-demo, wrapped in a `<style>` tag at runtime.
-#[must_use]
+#[must_use = "the returned stylesheet supplies the home view styling"]
 pub const fn home_css() -> &'static str {
     include_str!("styles/home.module.css")
 }
