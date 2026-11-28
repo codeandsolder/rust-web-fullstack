@@ -51,13 +51,13 @@ jobs:
 
   duplicates:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@d168449633a47de6c0166f0c0cff903e96983820 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
 
   strict-rust:
     name: Strict Rust
     needs: scope
     if: needs.scope.outputs.postgres-only != 'true'
-    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@3e700b97d5dc72ee78c43107b8098da3b4ad3e40 # main
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@4f29271a2aa27bef1f34bd70407b0db3d39904a9 # main
 
   compose-smoke:
     name: PostgreSQL compose smoke
@@ -100,7 +100,7 @@ jobs:
           rustup run 1.94.1 cargo --version
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
         with:
           rust-toolchain: "1.94.1"
       - name: Check native workspace at MSRV
@@ -112,7 +112,7 @@ jobs:
       - &finalize-rust-cache
         name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
 
   format:
     name: Format and lockfile consistency
@@ -130,7 +130,7 @@ jobs:
 
       - &setup-stable-cache
         name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
         with:
           rust-toolchain: "1.100.0"
       - name: Verify lockfile is current
@@ -234,7 +234,7 @@ jobs:
       # --allow-undefined implicitly, so only a real link exercises that policy.
 
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@d168449633a47de6c0166f0c0cff903e96983820 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@5991b873ab28ec8fae36c2c8ef944a3f67f5f9b3 # main
         with:
           rust-toolchain: "1.100.0"
           cache-scope: ${{ format('{0}:{1}:{2}', github.workflow, github.job, toJSON(matrix)) }}
